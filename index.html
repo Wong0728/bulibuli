@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B站视频监控助手</title>
+    <link rel="stylesheet" href="css/lib/jetbrains-mono.css">
+    <link rel="stylesheet" href="css/lib/fontawesome.min.css">
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Socket.IO 客户端库 -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <!-- QRCode 库 - 使用国内镜像源更稳定 -->
+    <script src="https://lib.baomitu.com/qrcode/1.5.1/qrcode.min.js"></script>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1><i class="fas fa-satellite-dish"></i> B站视频监控助手</h1>
+        <p>手动查询下载 / 自动监控任务 / 历史记录管理 / 系统设置</p>
+    </div>
+
+    <div class="nav-tabs">
+        <div class="nav-tab active" data-tab="manual"><i class="fas fa-search"></i> 手动查询</div>
+        <div class="nav-tab" data-tab="auto"><i class="fas fa-bolt"></i> 自动任务</div>
+        <div class="nav-tab" data-tab="history" style="position: relative;">
+            <i class="fas fa-history"></i> 已下载记录
+            <span id="aria2-status-dot" class="aria2-dot disconnected" title="正在检测 Aria2 状态..."></span>
+        </div>
+        <div class="nav-tab" data-tab="settings"><i class="fas fa-cog"></i> 系统设置</div>
+    </div>
+
+    <!-- 手动查询 Tab -->
+    <div id="tab-manual" class="tab-panel active">
+        <div class="card">
+            <div class="card-title"><i class="fas fa-user-circle"></i><span>博主信息配置</span></div>
+            <div class="form-section">
+                <div class="form-full">
+                    <div class="uid-input-group">
+                        <div class="form-group">
+                            <label><i class="fas fa-id-card"></i> 博主 UID</label>
+                            <input type="text" id="manualUid" list="uidHistory" class="form-control" placeholder="输入UP主UID，如：123456789" onchange="syncConfig(this.value, 'uid')">
+                            <datalist id="uidHistory"></datalist>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <button class="btn btn-primary btn-block" onclick="doManualQuery()"><i class="fas fa-play-circle"></i> 立即查询最新视频</button>
+        </div>
+        <div id="manualResult"></div>
+    </div>
+
+    <!-- 自动任务 Tab -->
+    <div id="tab-auto" class="tab-panel">
+        <!-- 博主看板 -->
+        <div class="card">
+            <div class="card-title">
+                <i class="fas fa-users"></i>
+                <span>博主监控看板</span>
+            </div>
+            <div class="blogger-dashboard">
+                <!-- 博主列表侧边栏 -->
+                <div class="blogger-sidebar">
+                    <div class="blogger-sidebar-title">
+                        <i class="fas fa-list"></i>
+                        <span>监控列表</span>
+                    </div>
+                    <div id="bloggerSidebarList">
+                        <!-- 动态生成博主列表 -->
+                    </div>
+                    <div style="margin-top: 16px; padding-top: 16px; border-top: 2px solid var(--border-light);">
+                        <button class="btn btn-block" onclick="showAddBloggerModal()" style="margin-bottom: 8px;">
+                            <i class="fas fa-plus"></i> 添加博主
+                        </button>
+                        <button class="btn btn-block btn-primary" onclick="saveBloggers()">
+                            <i class="fas fa-save"></i> 保存配置
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 博主详情面板 -->
+                <div class="blogger-detail-panel" id="bloggerDetailPanel">
+                    <div class="blogger-empty-state" id="bloggerEmptyState">
+                        <i class="fas fa-user-clock"></i>
+                        <div>请选择一个博主查看详情</div>
+                        <div style="font-size: 14px; margin-top: 8px;">或点击左侧"添加博主"开始监控</div>
+                    </div>
+                    <div id="bloggerDetailContent" style="display: none;">
+                        <div class="blogger-detail-header">
+                            <div class="blogger-detail-title">
+                                <i class="fas fa-user-circle"></i>
+                                <span id="detailBloggerName">博主名称</span>
+                            </div>
+                            <div class="btn-row" style="margin: 0;">
+                                <button class="btn btn-blogger-start" id="detailStartBtn" onclick="startSelectedBlogger()" style="border-color:var(--success-color); color:var(--success-color);">
+                                    <i class="fas fa-play"></i> 启动
+                                </button>
+                                <button class="btn btn-blogger-stop" id="detailStopBtn" onclick="stopSelectedBlogger()" style="border-color:var(--error-color); color:var(--error-color); display:none;">
+                                    <i class="fas fa-stop"></i> 停止
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="blogger-status-display">
+                            <div class="blogger-status-row">
+                                <div class="status-item">
+                                    <span class="status-label"><i class="fas fa-circle"></i> 运行状态</span>
+                                    <span class="status-value" id="detailRunningStatus">已停止</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label"><i class="fas fa-clock"></i> 下次检查</span>
+                                    <span class="status-value" id="detailCountdown">--:--:--</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div style="margin-bottom: 12px; font-weight: 600; color: var(--text-secondary);">
+                            <i class="fas fa-terminal"></i> 博主日志
+                        </div>
+                        <div class="blogger-logs-panel" id="detailBloggerLogs">
+                            <!-- 博主专属日志 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- 历史记录 Tab -->
+    <div id="tab-history" class="tab-panel">
+        <!-- 博主下载看板 -->
+        <div class="card">
+            <div class="card-title">
+                <i class="fas fa-download"></i>
+                <span>下载管理</span>
+            </div>
+            
+            <!-- 横向导航标签 -->
+            <div class="download-nav-tabs" style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid var(--border-light); padding-bottom: 12px;">
+                <button class="download-nav-tab active" onclick="switchDownloadTab('queue')" data-tab="queue">
+                    <i class="fas fa-tasks"></i> 下载队列
+                    <span class="nav-badge" id="navQueueBadge">0</span>
+                </button>
+                <button class="download-nav-tab" onclick="switchDownloadTab('completed')" data-tab="completed">
+                    <i class="fas fa-check-circle"></i> 已完成
+                    <span class="nav-badge completed" id="navCompletedBadge">0</span>
+                </button>
+                <button class="download-nav-tab" onclick="switchDownloadTab('failed')" data-tab="failed">
+                    <i class="fas fa-exclamation-triangle"></i> 失败
+                    <span class="nav-badge failed" id="navFailedBadge">0</span>
+                </button>
+            </div>
+            
+            <!-- 下载队列面板（待下载+下载中） -->
+            <div id="download-tab-queue" class="download-tab-panel active">
+                <div class="download-stats-bar" style="display: flex; gap: 24px; margin-bottom: 20px; flex-wrap: wrap;">
+                    <div class="stat-item">
+                        <span class="stat-number" id="statPending" style="color: var(--text-muted);">0</span>
+                        <span class="stat-label">待下载</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number" id="statDownloading" style="color: var(--primary-color);">0</span>
+                        <span class="stat-label">下载中</span>
+                    </div>
+                </div>
+                <div class="download-list-container">
+                    <div id="queueList" class="download-list">
+                        <div style="text-align:center; padding:40px; color:var(--text-muted);">
+                            <i class="fas fa-inbox" style="font-size:48px; margin-bottom:16px; opacity:0.5;"></i>
+                            <div>暂无下载任务</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 已完成面板 -->
+            <div id="download-tab-completed" class="download-tab-panel">
+                <div class="download-list-container">
+                    <div id="completedList" class="download-list">
+                        <div style="text-align:center; padding:40px; color:var(--text-muted);">
+                            <i class="fas fa-check-circle" style="font-size:48px; margin-bottom:16px; opacity:0.5;"></i>
+                            <div>暂无已完成下载</div>
+                        </div>
+                    </div>
+                </div>
+                <!-- 历史记录表格 -->
+                <div style="margin-top: 24px;">
+                    <h4 style="margin-bottom: 16px; color: var(--text-secondary);"><i class="fas fa-history"></i> 下载历史记录</h4>
+                    <div class="table-container">
+                        <table id="historyTable" style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="border-bottom: 2px solid var(--border-light);">
+                                    <th style="text-align: left; padding: 12px 8px; color: var(--text-muted); font-weight: 500;">视频标题</th>
+                                    <th style="text-align: left; padding: 12px 8px; color: var(--text-muted); font-weight: 500; width: 120px;">博主UID</th>
+                                    <th style="text-align: left; padding: 12px 8px; color: var(--text-muted); font-weight: 500; width: 120px;">发布日期</th>
+                                    <th style="text-align: left; padding: 12px 8px; color: var(--text-muted); font-weight: 500; width: 120px;">下载时间</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td colspan="4" style="text-align:center; padding:40px; color:var(--text-muted);">
+                                        <i class="fas fa-inbox" style="margin-right:8px;"></i>暂无下载记录
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 失败面板 -->
+            <div id="download-tab-failed" class="download-tab-panel">
+                <div class="download-list-container">
+                    <div id="failedList" class="download-list">
+                        <div style="text-align:center; padding:40px; color:var(--text-muted);">
+                            <i class="fas fa-exclamation-circle" style="font-size:48px; margin-bottom:16px; opacity:0.5;"></i>
+                            <div>暂无失败任务</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <!-- 系统设置 Tab -->
+    <div id="tab-settings" class="tab-panel">
+        <!-- Cookies 设置 -->
+        <div class="card">
+            <div class="card-title"><i class="fas fa-key"></i><span>Cookies 设置</span></div>
+            <div class="form-section">
+                <div class="form-group form-full">
+                    <label><i class="fas fa-cookie"></i> Cookies (SESSDATA等)</label>
+                    <div style="display: flex; gap: 12px; margin-bottom: 8px; flex-wrap: wrap;">
+                        <button type="button" class="btn" onclick="loadCookiesFromFile()" style="padding: 8px 16px; font-size: 13px;">
+                            <i class="fas fa-file-import"></i> 加载已保存
+                        </button>
+                        <button type="button" class="btn" onclick="showQRCodeLogin()" style="padding: 8px 16px; font-size: 13px; background: #fb7299; color: white; border-color: #fb7299;">
+                            <i class="fas fa-qrcode"></i> B站扫码登录
+                        </button>
+                        <button type="button" class="btn" onclick="saveCookiesToFile()" style="padding: 8px 16px; font-size: 13px;">
+                            <i class="fas fa-save"></i> 保存当前
+                        </button>
+                        <button type="button" class="btn" onclick="clearCookies()" style="padding: 8px 16px; font-size: 13px; border-color: var(--error-color); color: var(--error-color);">
+                            <i class="fas fa-trash"></i> 清空
+                        </button>
+                        <button type="button" class="btn" onclick="testDownload()" style="padding: 8px 16px; font-size: 13px; background: var(--accent-color); color: white; border-color: var(--accent-color);">
+                            <i class="fas fa-bug"></i> 测试下载
+                        </button>
+                    </div>
+                    <textarea id="manualCookies" class="form-control" placeholder="在此粘贴 Cookies 字符串" onchange="syncConfig(this.value, 'cookies')" style="min-height: 120px;"></textarea>
+                    <div class="form-note">用于访问需要登录的API，获取高清资源和下载。支持自动保存和加载。</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 查询设置 -->
+        <div class="card">
+            <div class="settings-section">
+                <h4 class="settings-section-title"><i class="fas fa-search"></i> 查询设置</h4>
+                <div class="settings-grid">
+                    <div class="form-group">
+                        <label>手动查询视频数量</label>
+                        <input type="number" id="setting_manualQueryLimit" class="form-control" min="1" max="50" value="10">
+                        <div class="form-note">范围: 1-50，建议 10</div>
+                    </div>
+                    <div class="form-group">
+                        <label>自动下载视频数量</label>
+                        <input type="number" id="setting_autoQueryLimit" class="form-control" min="1" max="20" value="3">
+                        <div class="form-note">范围: 1-20，建议 3</div>
+                    </div>
+                    <div class="form-group">
+                        <label>视频质量 (qn)</label>
+                        <select id="setting_videoQuality" class="form-control">
+                            <option value="16">360P 流畅</option>
+                            <option value="32">480P 清晰</option>
+                            <option value="64">720P 高清</option>
+                            <option value="80">1080P 高清</option>
+                            <option value="112" selected>1080P+ 高码率</option>
+                            <option value="116">1080P60 帧</option>
+                            <option value="120">4K</option>
+                            <option value="125">HDR</option>
+                            <option value="126">杜比视界</option>
+                            <option value="127">8K</option>
+                        </select>
+                        <div class="form-note">需要相应会员权限</div>
+                    </div>
+                    <div class="form-group">
+                        <label>视频格式 (fnval)</label>
+                        <select id="setting_videoFormat" class="form-control">
+                            <option value="0">FLV</option>
+                            <option value="16">DASH MP4</option>
+                            <option value="4048" selected>全格式支持</option>
+                        </select>
+                        <div class="form-note">建议保持默认</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 并行下载设置 -->
+        <div class="card">
+            <div class="settings-section">
+                <h4 class="settings-section-title"><i class="fas fa-layer-group"></i> 并行下载设置</h4>
+                <div class="settings-grid">
+                    <div class="form-group">
+                        <label>最大并行下载数</label>
+                        <input type="number" id="setting_maxParallel" class="form-control" min="1" max="10" value="3">
+                        <div class="form-note">范围: 1-10，建议 3</div>
+                    </div>
+                    <div class="form-group">
+                        <label>等待槽位超时 (秒)</label>
+                        <input type="number" id="setting_waitSlotTimeout" class="form-control" min="60" max="600" value="300">
+                        <div class="form-note">范围: 60-600，建议 300</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Aria2 RPC 设置 -->
+        <div class="card">
+            <div class="settings-section">
+                <h4 class="settings-section-title"><i class="fas fa-server"></i> Aria2 连接设置</h4>
+                <div class="settings-grid">
+                    <div class="form-group">
+                        <label>连接方式</label>
+                        <select id="setting_aria2UseRpc" class="form-control" disabled style="background-color: var(--bg-color); cursor: not-allowed;">
+                            <option value="true" selected>RPC 远程连接（推荐）</option>
+                        </select>
+                        <div class="form-note">当前版本仅支持外部 Aria2 RPC 服务，下载速度更快更稳定</div>
+                    </div>
+                    <div class="form-group">
+                        <label>主机地址</label>
+                        <input type="text" id="setting_aria2Host" class="form-control" value="localhost">
+                        <div class="form-note">Aria2 RPC 主机地址（仅 RPC 模式）</div>
+                    </div>
+                    <div class="form-group">
+                        <label>RPC 端口</label>
+                        <input type="number" id="setting_aria2Port" class="form-control" min="1" max="65535" value="6800">
+                        <div class="form-note">Aria2 RPC 端口（仅 RPC 模式）</div>
+                    </div>
+                    <div class="form-group">
+                        <label>RPC 密钥</label>
+                        <input type="password" id="setting_aria2Secret" class="form-control" value="">
+                        <div class="form-note">Aria2 RPC 密钥（仅 RPC 模式，如果有）</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Aria2c 设置 -->
+        <div class="card">
+            <div class="settings-section">
+                <h4 class="settings-section-title"><i class="fas fa-rocket"></i> Aria2c 下载设置</h4>
+                <div class="settings-grid">
+                    <div class="form-group">
+                        <label>每服务器最大连接数</label>
+                        <input type="number" id="setting_maxConnPerServer" class="form-control" min="1" max="16" value="16">
+                        <div class="form-note">范围: 1-16，建议 16</div>
+                    </div>
+                    <div class="form-group">
+                        <label>分片数量</label>
+                        <input type="number" id="setting_split" class="form-control" min="1" max="16" value="16">
+                        <div class="form-note">范围: 1-16，建议与连接数相同</div>
+                    </div>
+                    <div class="form-group">
+                        <label>最小分片大小</label>
+                        <select id="setting_minSplitSize" class="form-control">
+                            <option value="1M">1 MB</option>
+                            <option value="5M">5 MB</option>
+                            <option value="10M">10 MB</option>
+                        </select>
+                        <div class="form-note">小文件可增大</div>
+                    </div>
+                    <div class="form-group">
+                        <label>最大重试次数</label>
+                        <input type="number" id="setting_maxTries" class="form-control" min="3" max="10" value="5">
+                        <div class="form-note">范围: 3-10，建议 5</div>
+                    </div>
+                    <div class="form-group">
+                        <label>重试等待时间 (秒)</label>
+                        <input type="number" id="setting_retryWait" class="form-control" min="1" max="30" value="5">
+                        <div class="form-note">范围: 1-30，建议 5</div>
+                    </div>
+                    <div class="form-group">
+                        <label>最大同时下载数</label>
+                        <input type="number" id="setting_maxConcurrentDownloads" class="form-control" min="1" max="10" value="3">
+                        <div class="form-note">范围: 1-10，建议 3</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 下载路径设置 -->
+        <div class="card">
+            <div class="settings-section">
+                <h4 class="settings-section-title"><i class="fas fa-folder-open"></i> 下载路径设置</h4>
+                <div class="settings-grid">
+                    <div class="form-group form-full">
+                        <label>自动分文件夹</label>
+                        <div class="switch-group">
+                            <span class="switch-label">按博主UID自动创建子文件夹</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="setting_autoOrganize" checked onchange="updatePathPreview()">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="form-group form-full">
+                        <label>当前下载路径预览</label>
+                        <div id="path_preview" class="path-preview-box">
+                            <i class="fas fa-file-video"></i>
+                            <span id="path_preview_text">./data/downloads/{博主UID}/{视频标题}.mp4</span>
+                        </div>
+                        <div class="form-note">下载路径固定在 data/downloads 文件夹下</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 存储设置 -->
+        <div class="card">
+            <div class="settings-section">
+                <h4 class="settings-section-title"><i class="fas fa-hdd"></i> 存储设置</h4>
+                <div class="settings-grid">
+                    <div class="form-group">
+                        <label>历史记录上限</label>
+                        <input type="number" id="setting_historyLimit" class="form-control" min="100" max="5000" value="1000">
+                        <div class="form-note">范围: 100-5000，建议 1000</div>
+                    </div>
+                    <div class="form-group">
+                        <label>UID历史上限</label>
+                        <input type="number" id="setting_uidHistoryLimit" class="form-control" min="5" max="50" value="10">
+                        <div class="form-note">范围: 5-50，建议 10</div>
+                    </div>
+                    <div class="form-group">
+                        <label>日志上限</label>
+                        <input type="number" id="setting_logLimit" class="form-control" min="50" max="500" value="100">
+                        <div class="form-note">范围: 50-500，建议 100</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 设置操作按钮 -->
+        <div class="card">
+            <div class="settings-actions">
+                <button class="btn btn-primary" onclick="saveSettings()">
+                    <i class="fas fa-save"></i> 保存所有设置
+                </button>
+                <button class="btn" onclick="resetSettings()" style="border-color:var(--error-color); color:var(--error-color);">
+                    <i class="fas fa-undo"></i> 恢复默认
+                </button>
+                <button class="btn" onclick="loadSettings()">
+                    <i class="fas fa-redo"></i> 刷新
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 添加博主模态框 -->
+<div id="addBloggerModal" class="modal-overlay">
+    <div class="modal-container">
+        <div class="modal-header">
+            <i class="fas fa-user-plus"></i>
+            <span>添加监控博主</span>
+        </div>
+        <div class="form-section">
+            <div class="form-group">
+                <label><i class="fas fa-id-card"></i> 博主 UID</label>
+                <input type="text" id="modalBloggerUid" class="form-control" placeholder="输入UP主UID，如：123456789">
+                <div class="form-note">输入要监控的B站UP主UID</div>
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-user-tag"></i> 博主备注名 (可选)</label>
+                <input type="text" id="modalBloggerName" class="form-control" placeholder="设置博主备注名称">
+                <div class="form-note">设置方便识别的名称</div>
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-sync-alt"></i> 最小检查间隔 (秒)</label>
+                <input type="number" id="modalMinInterval" class="form-control" value="60" min="30" max="3600">
+                <div class="form-note">范围: 30-3600，建议 60</div>
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-sync-alt"></i> 最大检查间隔 (秒)</label>
+                <input type="number" id="modalMaxInterval" class="form-control" value="300" min="30" max="7200">
+                <div class="form-note">范围: 30-7200，建议 300</div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn" onclick="closeAddBloggerModal()">
+                <i class="fas fa-times"></i> 取消
+            </button>
+            <button class="btn btn-primary" onclick="confirmAddBlogger()">
+                <i class="fas fa-check"></i> 确认添加
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 编辑博主模态框 -->
+<div id="editBloggerModal" class="modal-overlay">
+    <div class="modal-container">
+        <div class="modal-header">
+            <i class="fas fa-user-edit"></i>
+            <span>编辑博主配置</span>
+        </div>
+        <div class="form-section">
+            <input type="hidden" id="editBloggerId">
+            <div class="form-group">
+                <label><i class="fas fa-id-card"></i> 博主 UID</label>
+                <input type="text" id="editBloggerUid" class="form-control" disabled style="background-color: var(--bg-color); cursor: not-allowed;">
+                <div class="form-note">UID 不可修改</div>
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-user-tag"></i> 博主备注名</label>
+                <input type="text" id="editBloggerName" class="form-control" placeholder="设置博主备注名称">
+                <div class="form-note">设置方便识别的名称</div>
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-sync-alt"></i> 最小检查间隔 (秒)</label>
+                <input type="number" id="editMinInterval" class="form-control" min="30" max="3600">
+                <div class="form-note">范围: 30-3600，建议 60</div>
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-sync-alt"></i> 最大检查间隔 (秒)</label>
+                <input type="number" id="editMaxInterval" class="form-control" min="30" max="7200">
+                <div class="form-note">范围: 30-7200，建议 300</div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn" onclick="closeEditBloggerModal()">
+                <i class="fas fa-times"></i> 取消
+            </button>
+            <button class="btn btn-primary" onclick="confirmEditBlogger()">
+                <i class="fas fa-save"></i> 保存修改
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- B站扫码登录模态框 -->
+<div id="qrcodeModal" class="modal-overlay">
+    <div class="modal-container" style="max-width: 350px; text-align: center;">
+        <div class="modal-header">
+            <i class="fab fa-bilibili" style="color: #fb7299;"></i>
+            <span>B站扫码登录</span>
+        </div>
+        <div id="qrcodeContainer" style="margin: 20px 0; min-height: 200px; display: flex; align-items: center; justify-content: center; background: #f4f4f4; border-radius: 8px;">
+            <div id="qrcodeCanvas"></div>
+            <div id="qrcodeStatus" style="position: absolute; display: none; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 4px; font-weight: 600;"></div>
+        </div>
+        <div id="qrcodeHint" style="font-size: 14px; color: var(--text-secondary); margin-bottom: 20px;">
+            请使用 Bilibili 手机客户端扫码
+        </div>
+        <div class="modal-footer" style="justify-content: center; border-top: none; padding-top: 0;">
+            <button class="btn" onclick="closeQRCodeModal()">
+                <i class="fas fa-times"></i> 关闭
+            </button>
+            <button class="btn btn-primary" id="refreshQRCodeBtn" onclick="refreshQRCode()" style="display: none;">
+                <i class="fas fa-sync-alt"></i> 刷新二维码
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 右键菜单 -->
+<div id="contextMenu" class="context-menu" style="display: none;">
+    <div class="context-menu-item" onclick="handleContextMenuEdit()">
+        <i class="fas fa-edit"></i> 编辑博主
+    </div>
+    <div class="context-menu-item delete" onclick="handleContextMenuDelete()">
+        <i class="fas fa-trash-alt"></i> 删除博主
+    </div>
+</div>
+
+<div id="msgBox"></div>
+
+<script src="js/app.js"></script>
+
+</body>
+</html>
