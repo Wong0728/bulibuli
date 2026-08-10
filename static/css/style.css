@@ -5131,115 +5131,6 @@ progress.download-item-progress-fill {
     border: 0;
 }
 
-/* ── 直播录制 Tab ── */
-
-.live-query-bar {
-    display: flex;
-    gap: var(--size-2);
-    align-items: center;
-}
-
-.live-query-bar .form-control {
-    flex: 1;
-    max-width: 300px;
-}
-
-.live-room-info {
-    padding: var(--size-2) 0;
-}
-
-.live-room-detail {
-    display: flex;
-    gap: var(--size-3);
-    align-items: flex-start;
-}
-
-.live-cover {
-    width: 120px;
-    height: 68px;
-    object-fit: cover;
-    border-radius: var(--radius-sm);
-    flex-shrink: 0;
-}
-
-.live-info-text {
-    display: flex;
-    flex-direction: column;
-    gap: var(--size-1);
-}
-
-.live-title {
-    font-weight: 600;
-    font-size: var(--text-lg);
-    color: var(--text);
-}
-
-.live-meta {
-    display: flex;
-    gap: var(--size-3);
-    font-size: var(--text-sm);
-    color: var(--text-muted);
-}
-
-.live-status-on {
-    color: var(--success, #22c55e);
-    font-weight: 600;
-}
-
-.live-status-off {
-    color: var(--text-muted);
-}
-
-.live-actions {
-    margin-top: var(--size-3);
-    display: flex;
-    gap: var(--size-2);
-}
-
-.live-recording-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--size-2);
-}
-
-.live-recording-item {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--size-3);
-    padding: var(--size-2) var(--size-3);
-    border: 1px solid var(--divider);
-    border-radius: var(--radius-sm);
-}
-
-.live-recording-info {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.live-recording-room {
-    font-weight: 600;
-    font-size: var(--text-sm);
-    color: var(--text);
-}
-
-.live-recording-title {
-    font-size: var(--text-sm);
-    color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.live-recording-meta {
-    display: flex;
-    gap: var(--size-3);
-    font-size: var(--text-sm);
-    color: var(--text-muted);
-    flex-shrink: 0;
-}
 
 .empty-hint {
     color: var(--text-muted);
@@ -5331,234 +5222,455 @@ progress.download-item-progress-fill {
         animation-iteration-count: 1 !important;
     }
 }
-/* Live source dashboard and interaction archive */
-.live-health-summary {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--size-2);
-    margin-bottom: var(--size-3);
-}
-
-.live-health-summary span {
-    padding: var(--size-1) var(--size-2);
-    border: 1px solid var(--divider);
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
-    background: var(--surface);
-    font-size: var(--text-sm);
-}
-
-.live-sync-state {
-    margin-left: auto;
-    font-size: var(--text-xs, 0.75rem);
-    font-weight: 500;
-    color: var(--text-secondary);
-}
-
-.live-sync-state[data-state="error"],
-.live-sync-state[data-state="stale"] {
-    color: #e85d75;
-}
-
-.live-risk-notice {
-    margin-bottom: var(--size-3);
-    padding: var(--size-2) var(--size-3);
-    border: 1px solid #e5a83b;
-    border-radius: var(--radius-md);
-    background: rgba(229, 168, 59, 0.12);
-    color: #c18117;
-}
-
-.live-source-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: var(--size-3);
-}
-
-.live-source-card {
-    padding: var(--size-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--bg);
-    min-width: 0;
-    overflow: hidden;
-}
-
-.live-source-card.is-live {
-    border-color: rgba(251, 114, 153, 0.65);
-    box-shadow: 0 0 0 2px rgba(251, 114, 153, 0.09);
-}
-
-.live-source-head {
-    display: flex;
-    gap: var(--size-2);
-    align-items: center;
-}
-
-.live-source-head img {
-    width: 42px;
-    height: 42px;
-    object-fit: cover;
-    border-radius: 50%;
-    flex-shrink: 0;
-}
-
-.live-source-head div {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-}
-
-.live-source-head small {
-    color: var(--text-secondary);
-}
-
-.live-source-status {
-    margin-left: auto;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-.live-source-title {
-    margin: var(--size-3) 0 var(--size-2);
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.live-source-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--size-1) var(--size-3);
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-}
-
-.live-lock-note {
-    margin-top: var(--size-2);
-    padding: var(--size-1) var(--size-2);
-    border-radius: var(--radius-md);
-    background: rgba(229, 168, 59, 0.12);
-    font-size: var(--text-xs);
-    color: #c18117;
-}
-
-.live-source-actions,
-.live-recording-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--size-2);
-    margin-top: var(--size-3);
-}
-
-.live-source-saved {
-    color: #3aaf70;
-    font-size: var(--text-sm);
-}
-
-.live-interaction-card summary {
-    cursor: pointer;
-    list-style: none;
-}
-
-.live-interaction-card summary::-webkit-details-marker {
+.live-board-panel {
     display: none;
 }
 
-.live-interaction-room {
-    margin-left: auto;
+.live-board-panel.active {
+    display: block;
+}
+
+.live-history-list {
+    display: flex;
+    flex-direction: column;
+}
+
+/* ==================== 直播录制 Tab（对齐博主看板 / 下载管理看板） ==================== */
+
+.nav-tab {
+    border: 0;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    cursor: pointer;
+}
+
+.nav-tab:focus-visible,
+#tab-live button:focus-visible {
+    outline: 3px solid var(--brand);
+    outline-offset: 2px;
+}
+
+/* 顶栏三态同步提示：页面连接 / 监控 worker / B 站新鲜度，各自独立降级 */
+.live-sync-group {
+    display: flex;
+    align-items: center;
+    gap: var(--size-14);
+    flex-wrap: wrap;
+    font-size: var(--size-12);
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.live-sync-item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-6);
+    white-space: nowrap;
+}
+
+.live-sync-item .aria2-dot {
+    margin-left: 0;
+}
+
+.live-sync-item[data-state="error"] {
+    color: var(--error-text);
+}
+
+.live-sync-item[data-state="stale"] {
+    color: var(--warning-text);
+}
+
+/* 看板：侧边栏 + 详情（复刻 blogger-dashboard） */
+.live-dashboard {
+    display: grid;
+    grid-template-columns: var(--size-240) 1fr;
+    gap: var(--size-16);
+    min-height: var(--size-480);
+    max-height: calc(100vh - var(--size-220));
+}
+
+.live-sidebar {
+    background: var(--surface);
+    border: var(--size-1) solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--size-14);
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+    overflow: hidden;
+}
+
+.live-sidebar-title {
+    font-size: var(--size-14);
+    font-weight: 600;
+    margin-bottom: var(--size-12);
+    padding: var(--size-4) var(--size-4) var(--size-10);
+    border-bottom: var(--size-1) solid var(--divider);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--size-8);
+}
+
+.live-sidebar-title > span {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-6);
+}
+
+.live-sidebar-title > span i {
+    color: var(--text-muted);
+    font-size: var(--size-13);
+}
+
+.live-sidebar-actions {
+    margin-top: auto;
+    padding-top: var(--size-12);
+    border-top: var(--size-1) solid var(--divider);
+    display: flex;
+    flex-direction: column;
+    gap: var(--size-8);
+}
+
+#live-room-list {
+    overflow-y: auto;
+    flex: 1;
+}
+
+.live-room-item {
+    display: flex;
+    align-items: center;
+    gap: var(--size-10);
+    padding: var(--size-10);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    margin-bottom: var(--size-6);
+    border: var(--size-1) solid transparent;
+}
+
+.live-room-item:hover {
+    background: var(--bg);
+}
+
+.live-room-item.active {
+    background: var(--brand-soft);
+    border-color: var(--brand);
+}
+
+.live-room-avatar {
+    width: var(--size-32);
+    height: var(--size-32);
+    border-radius: 50%;
+    background: var(--brand-soft);
+    color: var(--brand);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: var(--size-12);
+    flex-shrink: 0;
+    object-fit: cover;
+}
+
+.live-room-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.live-room-name {
+    font-weight: 500;
+    font-size: var(--size-13);
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: var(--size-6);
+}
+
+.live-room-meta {
+    font-size: var(--size-11);
+    color: var(--text-muted);
+    margin-top: var(--size-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.live-room-dot {
+    width: var(--size-7);
+    height: var(--size-7);
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--border-strong);
+}
+
+.live-room-dot.live {
+    background: var(--brand);
+}
+
+.live-room-dot.recording {
+    background: var(--success);
+}
+
+.live-room-dot.warn {
+    background: var(--warning);
+}
+
+.live-detail-panel {
+    background: var(--surface);
+    border: var(--size-1) solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--size-16);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.live-empty-state {
+    text-align: center;
+    padding: var(--size-60) var(--size-20);
+    color: var(--text-muted);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.live-empty-state i {
+    font-size: var(--size-40);
+    margin-bottom: var(--size-12);
+    opacity: 0.4;
+}
+
+.live-empty-state p {
+    font-size: var(--size-13);
+    margin-bottom: var(--size-16);
+}
+
+.live-empty-state .empty-hint {
+    font-size: var(--size-12);
+    margin-top: var(--size-4);
+    margin-bottom: 0;
+    opacity: 0.7;
+}
+
+.live-detail-header {
+    display: flex;
+    gap: var(--size-14);
+    align-items: flex-start;
+    margin-bottom: var(--size-14);
+    padding-bottom: var(--size-12);
+    border-bottom: var(--size-1) solid var(--divider);
+}
+
+.live-cover-thumb {
+    width: 128px;
+    height: 72px;
+    border-radius: var(--radius-md);
+    object-fit: cover;
+    background: var(--bg);
+    flex-shrink: 0;
+}
+
+.live-detail-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--size-6);
+}
+
+.live-detail-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--size-8);
+    flex-wrap: wrap;
+}
+
+.live-detail-title {
+    font-size: var(--size-15);
+    font-weight: 600;
+    color: var(--text);
+}
+
+.live-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--size-4) var(--size-12);
+    font-size: var(--size-12);
+    color: var(--text-muted);
+}
+
+.live-detail-actions {
+    display: flex;
+    gap: var(--size-8);
+    margin-top: var(--size-6);
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* 状态徽章：视频/互动分开，图标+文字，不只靠颜色 */
+.live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-5);
+    padding: var(--size-2) var(--size-10);
+    border-radius: var(--radius-full);
+    font-size: var(--size-12);
+    font-weight: 500;
+    white-space: nowrap;
+    border: var(--size-1) solid var(--border);
+    background: var(--bg);
     color: var(--text-secondary);
-    font-size: var(--text-xs);
+}
+
+.live-badge::before {
+    content: "";
+    width: var(--size-6);
+    height: var(--size-6);
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+}
+
+.live-badge.live {
+    background: color-mix(in srgb, var(--brand) 12%, transparent);
+    color: var(--brand);
+    border-color: transparent;
+}
+
+.live-badge.recording,
+.live-badge.capturing,
+.live-badge.completed,
+.live-badge.ok {
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+    color: var(--success-text);
+    border-color: transparent;
+}
+
+.live-badge.starting,
+.live-badge.stopping,
+.live-badge.finalizing,
+.live-badge.connecting {
+    background: color-mix(in srgb, var(--info) 12%, transparent);
+    color: var(--info-text);
+    border-color: transparent;
+}
+
+.live-badge.risk,
+.live-badge.stale,
+.live-badge.degraded {
+    background: color-mix(in srgb, var(--warning) 14%, transparent);
+    color: var(--warning-text);
+    border-color: transparent;
+}
+
+.live-badge.failed,
+.live-badge.unavailable,
+.live-badge.cancelled {
+    background: color-mix(in srgb, var(--error) 12%, transparent);
+    color: var(--error-text);
+    border-color: transparent;
+}
+
+/* 提示条（风控/降级/启动中说明） */
+.live-alert {
+    display: flex;
+    gap: var(--size-8);
+    align-items: flex-start;
+    padding: var(--size-10) var(--size-14);
+    border-radius: var(--radius-md);
+    font-size: var(--size-12);
+    line-height: 1.7;
+    margin-bottom: var(--size-12);
+}
+
+.live-alert.warn {
+    background: var(--warning-soft);
+    color: var(--warning-text);
+}
+
+.live-alert.error {
+    background: var(--error-soft);
+    color: var(--error-text);
+}
+
+.live-alert .btn {
+    flex-shrink: 0;
+}
+
+/* 排期策略摘要：把“什么时候自动录”直接摆在详情里 */
+.live-strategy-summary {
+    margin-top: var(--size-10);
+    padding-top: var(--size-10);
+    border-top: var(--size-1) dashed var(--border);
+    font-size: var(--size-12);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: var(--size-6);
+    flex-wrap: wrap;
+    line-height: 1.7;
+}
+
+.live-strategy-summary i {
+    color: var(--text-muted);
+}
+
+/* 互动区 */
+.live-section-title {
+    font-size: var(--size-13);
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: var(--size-14) 0 var(--size-10);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--size-8);
+    flex-wrap: wrap;
+}
+
+.live-section-title .form-note {
+    margin: 0;
+    font-size: var(--size-11);
 }
 
 .live-stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
-    gap: var(--size-2);
-    margin-bottom: var(--size-3);
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: var(--size-8);
+    margin-bottom: var(--size-12);
 }
 
-.live-stats-grid div {
-    padding: var(--size-2);
-    border-radius: var(--radius-md);
+.live-stats-cell {
     background: var(--bg);
-    text-align: center;
-}
-
-.live-stats-grid strong,
-.live-stats-grid span {
-    display: block;
-}
-
-.live-stats-grid span {
-    margin-top: var(--size-1);
-    color: var(--text-secondary);
-    font-size: var(--text-xs);
-}
-
-.live-timeline-toolbar {
-    display: flex;
-    align-items: center;
-    gap: var(--size-2);
-    margin: var(--size-3) 0;
-}
-
-.live-timeline-toolbar .form-control {
-    width: auto;
-    min-width: 140px;
-}
-
-.live-event-timeline {
-    max-height: 430px;
-    min-height: 120px;
-    overflow: auto;
-    border: 1px solid var(--border);
+    border: var(--size-1) solid var(--border);
     border-radius: var(--radius-md);
+    padding: var(--size-8) var(--size-10);
 }
 
-.live-event-row {
-    display: grid;
-    grid-template-columns: 68px minmax(70px, 1fr) 1fr auto;
-    gap: var(--size-2);
-    align-items: start;
-    padding: var(--size-2) var(--size-3);
-    border-bottom: 1px solid var(--border);
-    font-size: var(--text-sm);
-}
-
-.live-event-row:last-child {
-    border-bottom: 0;
-}
-
-.live-event-row time {
-    color: var(--text-secondary);
+.live-stats-cell strong {
+    display: block;
+    font-size: var(--size-15);
     font-variant-numeric: tabular-nums;
 }
 
-.live-event-row em {
-    color: #fb7299;
-    font-style: normal;
-    font-weight: 700;
-}
-
-.live-event-super_chat {
-    background: rgba(255, 179, 0, 0.09);
-    border-left: 3px solid #ffb300;
-}
-
-.live-event-guard {
-    border-left: 3px solid #8b5cf6;
-}
-
-.live-event-link_mic_pk {
-    border-left: 3px solid #00aeec;
+.live-stats-cell span {
+    font-size: var(--size-11);
+    color: var(--text-muted);
 }
 
 .live-sc-pins {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-    gap: var(--size-2);
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--size-8);
+    margin-bottom: var(--size-10);
 }
 
 .live-sc-card {
@@ -5566,11 +5678,13 @@ progress.download-item-progress-fill {
     flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
-    gap: var(--size-1);
-    padding: var(--size-2) var(--size-3);
-    color: #5f3b00;
-    background: linear-gradient(135deg, #ffe082, #ffca61);
+    gap: var(--size-4);
+    padding: var(--size-8) var(--size-12);
     border-radius: var(--radius-md);
+    background: var(--warning-soft);
+    border: var(--size-1) solid color-mix(in srgb, var(--warning) 35%, transparent);
+    color: var(--warning-text);
+    font-size: var(--size-13);
 }
 
 .live-sc-card strong {
@@ -5586,7 +5700,31 @@ progress.download-item-progress-fill {
 
 .live-sc-card p {
     width: 100%;
-    margin: var(--size-1) 0 0;
+    margin: var(--size-4) 0 0;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.live-toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: var(--size-8);
+    flex-wrap: wrap;
+    margin-bottom: var(--size-8);
+}
+
+.live-toolbar-row .form-control {
+    width: auto;
+    min-width: 140px;
+}
+
+.live-events-status {
+    font-size: var(--size-12);
+    color: var(--text-muted);
+}
+
+.live-events-status[data-state="error"] {
+    color: var(--error-text);
 }
 
 .live-heat-bar {
@@ -5594,181 +5732,282 @@ progress.download-item-progress-fill {
     align-items: flex-end;
     gap: 2px;
     min-height: 38px;
-    padding: 5px 0 10px;
+    padding: var(--size-5) 0 var(--size-10);
     overflow-x: auto;
 }
 
 .live-heat-bar button {
-    flex: 0 0 8px;
-    min-height: 5px;
-    height: calc(5px + 28px * var(--heat, 0));
-    padding: 0;
+    flex: 1 1 0;
+    min-width: var(--size-10);
+    /* 外层 padding 扩大命中区，内层 i 才是可见柱体 */
+    padding: 0 1px;
     border: 0;
-    border-radius: 2px;
-    background: linear-gradient(#fb7299, #00aeec);
-    cursor: pointer;
-}
-
-.live-source-dialog {
-    width: min(640px, calc(100vw - 28px));
-    max-height: 85vh;
-    margin: auto;
-    padding: var(--size-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    background: var(--surface);
-    color: var(--text);
-}
-
-.live-source-dialog::backdrop {
-    background: rgba(0, 0, 0, 0.5);
-}
-
-.live-toggle-row {
-    display: block;
-    margin: var(--size-3) 0;
-}
-
-.live-weekly-schedule {
-    display: grid;
-    gap: var(--size-2);
-    margin-top: var(--size-3);
-}
-
-.live-weekly-schedule label {
-    display: grid;
-    grid-template-columns: 45px 1fr;
-    gap: var(--size-2);
-    align-items: center;
-}
-
-.live-dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--size-2);
-    margin-top: var(--size-4);
-}
-
-.nav-tab {
-    border: 0;
-    font: inherit;
-    color: inherit;
     background: transparent;
     cursor: pointer;
+    display: flex;
+    align-items: flex-end;
 }
 
-.nav-tab:focus-visible,
-.live-source-actions button:focus-visible,
-.live-recording-actions button:focus-visible {
-    outline: 3px solid var(--brand);
-    outline-offset: 2px;
+.live-heat-bar button i {
+    width: 100%;
+    height: calc(5px + 28px * var(--heat, 0));
+    border-radius: 2px 2px 0 0;
+    background: var(--brand);
+    opacity: 0.35;
 }
 
-.live-source-status[data-state="risk"],
-.live-source-status[data-state="stale"],
-.recording-state-recording,
-.interaction-state-unavailable,
-.interaction-state-degraded {
-    color: var(--warning, #e5a83b);
+.live-heat-bar button.hot i {
+    opacity: 0.9;
 }
 
-.live-source-status[data-state="live"],
-.recording-state-completed,
-.recording-state-stopped,
-.interaction-state-capturing {
-    color: var(--success, #22c55e);
+.live-event-timeline {
+    max-height: 320px;
+    min-height: 120px;
+    overflow: auto;
+    border: var(--size-1) solid var(--divider);
+    border-radius: var(--radius-md);
 }
 
-.live-source-status[data-state="unknown"],
-.recording-state-failed {
-    color: var(--error, #e85d75);
+.live-event-row {
+    display: grid;
+    grid-template-columns: 64px minmax(70px, 140px) 1fr auto;
+    gap: var(--size-8);
+    align-items: baseline;
+    padding: var(--size-6) var(--size-10);
+    border-bottom: var(--size-1) solid var(--divider);
+    font-size: var(--size-12);
 }
 
-.live-source-checked {
-    display: block;
-    margin-top: var(--size-2);
+.live-event-row:last-child {
+    border-bottom: 0;
+}
+
+.live-event-row time {
     color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.live-event-row .live-event-user {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.live-event-row .live-event-text {
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.live-event-row em {
+    color: var(--brand);
+    font-style: normal;
+    font-weight: 700;
+}
+
+.live-event-type {
+    font-size: var(--size-10);
+    padding: var(--size-1) var(--size-6);
+    border-radius: var(--radius-full);
+    border: var(--size-1) solid var(--border);
+    color: var(--text-muted);
+}
+
+.live-event-super_chat {
+    border-left: 3px solid var(--warning);
+}
+
+.live-event-guard {
+    border-left: 3px solid var(--info);
+}
+
+.live-event-link_mic_pk {
+    border-left: 3px solid var(--brand);
+}
+
+/* 录制任务看板行 */
+.live-recording-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--size-14);
+    padding: var(--size-14);
+    border: var(--size-1) solid var(--border);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--size-10);
+    flex-wrap: wrap;
+    background: var(--surface);
+}
+
+.live-recording-row:last-child {
+    margin-bottom: 0;
+}
+
+.live-recording-main {
+    flex: 1;
+    min-width: var(--size-240);
+    display: flex;
+    flex-direction: column;
+    gap: var(--size-4);
+}
+
+.live-recording-title {
+    font-weight: 600;
+    display: flex;
+    gap: var(--size-8);
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.live-recording-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--size-4) var(--size-12);
+    font-size: var(--size-12);
+    color: var(--text-muted);
+}
+
+.live-recording-meta b {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.live-recording-note {
+    font-size: var(--size-12);
+    color: var(--warning-text);
+}
+
+.live-recording-actions {
+    display: flex;
+    gap: var(--size-8);
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.live-progress {
+    width: var(--size-140);
+    accent-color: var(--brand);
+}
+
+/* 直播源设置弹窗：周排期编辑器 */
+.live-settings-form {
+    display: grid;
+    gap: var(--size-14);
+}
+
+.live-add-textarea {
+    height: auto;
+    min-height: var(--size-80);
+    resize: vertical;
+    line-height: 1.6;
+}
+
+.live-tz-note {
+    font-size: var(--size-12);
+    color: var(--info-text);
+    background: var(--info-soft);
+    border-radius: var(--radius-md);
+    padding: var(--size-6) var(--size-10);
+    margin-bottom: var(--size-10);
+}
+
+.live-schedule-grid {
+    display: grid;
+    gap: var(--size-8);
+    border: var(--size-1) solid var(--divider);
+    border-radius: var(--radius-md);
+    padding: var(--size-12);
+    background: var(--bg);
 }
 
 .live-schedule-day {
     display: grid;
-    grid-template-columns: 48px 1fr;
-    gap: var(--size-2);
+    grid-template-columns: var(--size-40) 1fr 1fr;
+    gap: var(--size-8);
     align-items: center;
+}
+
+.live-schedule-day > span {
+    font-size: var(--size-13);
+    color: var(--text-secondary);
 }
 
 .live-schedule-window {
     display: flex;
-    gap: var(--size-1);
+    gap: var(--size-6);
     align-items: center;
-    margin-bottom: var(--size-1);
+    min-width: 0;
 }
 
 .live-schedule-window input[type="time"] {
-    min-width: 0;
     flex: 1;
-}
-
-.live-source-dialog {
-    overflow: auto;
-}
-
-.live-source-dialog form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--size-2);
-}
-
-.live-dialog-actions {
-    position: sticky;
-    bottom: 0;
-    padding: var(--size-2) 0;
+    min-width: 0;
+    height: var(--size-32);
+    padding: var(--size-4) var(--size-8);
+    border: var(--size-1) solid var(--border);
+    border-radius: var(--radius-md);
     background: var(--surface);
+    color: var(--text);
+    font-family: inherit;
 }
 
-@media (max-width: 760px) {
-    .live-query-bar,
-    .live-room-detail,
-    .live-meta {
-        flex-direction: column;
-        align-items: stretch;
+.live-schedule-window input[type="time"]:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.live-schedule-window .live-schedule-clear {
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: var(--size-4);
+    border-radius: var(--radius-sm);
+}
+
+.live-schedule-window .live-schedule-clear:hover {
+    color: var(--error);
+    background: var(--error-soft);
+}
+
+.live-schedule-error {
+    font-size: var(--size-12);
+    color: var(--error-text);
+    min-height: var(--size-16);
+    margin-top: var(--size-6);
+}
+
+/* 移动端 */
+@media (max-width: 860px) {
+    .live-dashboard {
+        grid-template-columns: 1fr;
+        max-height: none;
     }
 
-    .live-query-bar .form-control {
-        max-width: none;
-    }
-
-    .live-cover {
-        width: 100%;
-        height: auto;
-        aspect-ratio: 16 / 9;
+    .live-sidebar {
+        max-height: 340px;
     }
 }
 
 @media (max-width: 620px) {
     .live-event-row {
-        grid-template-columns: 62px 1fr;
+        grid-template-columns: 60px 1fr auto;
     }
 
-    .live-event-row span {
+    .live-event-row .live-event-text {
         grid-column: 1 / -1;
     }
 
-    .live-source-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .live-recording-item {
+    .live-detail-header {
         flex-direction: column;
-        align-items: flex-start;
     }
 
-    .live-recording-meta,
-    .live-recording-actions {
+    .live-cover-thumb {
         width: 100%;
+        height: auto;
+        aspect-ratio: 16 / 9;
     }
 
-    .live-recording-actions {
-        justify-content: flex-start;
+    .live-schedule-day {
+        grid-template-columns: var(--size-40) 1fr;
     }
 }

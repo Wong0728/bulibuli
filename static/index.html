@@ -287,94 +287,156 @@
 
     <!-- 直播录制 Tab -->
     <section id="tab-live" class="tab-panel">
-        <div class="live-health-summary" id="live-health-summary" aria-live="polite">
-            <span>监控：等待检查</span><span>B站状态：等待检查</span><span>录制：0</span>
-        </div>
+        <!-- 直播看板：布局对齐博主监控看板（侧边栏 + 详情） -->
         <div class="card">
             <div class="card-title">
-                <i class="fa-solid fa-tower-broadcast"></i>
-                <span>添加直播源</span>
-                <span id="live-sync-state" class="live-sync-state">等待同步</span>
+                <span><i class="fa-solid fa-tower-broadcast"></i> 直播录制看板</span>
+                <div class="live-sync-group" id="live-sync-group" aria-live="polite">
+                    <span class="live-sync-item" id="live-sync-page" data-state="ok" title="本地页面与服务的连接状态"><span class="aria2-dot connected"></span>页面已连接</span>
+                    <span class="live-sync-item" id="live-sync-monitor" data-state="ok" title="后端开播监控 worker 的运行状态"><span class="aria2-dot connected"></span>监控运行中</span>
+                    <span class="live-sync-item" id="live-sync-bili" data-state="ok" title="最近一次成功向 B 站检查开播状态的时间"><span class="aria2-dot connected"></span>B站状态：等待检查</span>
+                    <button class="btn btn-sm btn-ghost" id="live-refresh-btn" title="手动刷新直播状态">
+                        <i class="fa-solid fa-arrows-rotate"></i> 刷新
+                    </button>
+                </div>
             </div>
-            <div class="live-query-bar">
-                <label class="sr-only" for="live-room-input">直播间号</label>
-                <input type="text" id="live-room-input" class="form-control" placeholder="输入直播间号（短号/长号均可）">
-                <button id="live-query-btn" class="btn btn-primary">查询</button>
+            <div id="live-risk-notice" class="live-alert warn" hidden role="alert"></div>
+            <div class="live-dashboard">
+                <!-- 房间列表侧边栏 -->
+                <aside class="live-sidebar">
+                    <div class="live-sidebar-title">
+                        <span><i class="fa-solid fa-list"></i> 关注房间（<span id="live-source-count">0</span>）</span>
+                        <button class="btn btn-sm btn-ghost" id="live-show-add-btn">
+                            <i class="fa-solid fa-plus"></i> 添加
+                        </button>
+                    </div>
+                    <div id="live-room-list" aria-live="polite">
+                        <!-- 动态生成房间列表 -->
+                    </div>
+                    <div class="live-sidebar-actions">
+                        <button class="btn btn-primary btn-block" id="live-refresh-list-btn">
+                            <i class="fa-solid fa-rotate"></i> 刷新列表
+                        </button>
+                    </div>
+                </aside>
+
+                <!-- 房间详情面板 -->
+                <div class="live-detail-panel" id="live-detail-panel">
+                    <div class="live-empty-state" id="live-empty-state">
+                        <i class="fa-solid fa-tower-broadcast"></i>
+                        <p>暂无直播源</p>
+                        <p class="empty-hint">点击上方“添加”输入房间号或直播链接，查询后即可关注</p>
+                    </div>
+                    <div id="live-detail-content" hidden>
+                        <!-- 动态生成房间详情 -->
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- 房间信息 -->
-        <div class="card" id="live-room-info-card" hidden>
-            <div class="card-title">
-                <i class="fa-solid fa-circle-info"></i>
-                <span>房间信息</span>
-            </div>
-            <div id="live-room-info-content" class="live-room-info" aria-live="polite"></div>
-        </div>
-
+        <!-- 录制任务看板：布局对齐下载管理（顶栏 + 子 tab） -->
         <div class="card">
-            <div class="card-title"><i class="fa-solid fa-satellite-dish"></i><span>我的直播源</span></div>
-            <div id="live-risk-notice" class="live-risk-notice" hidden></div>
-            <div id="live-source-list" class="live-source-grid" aria-live="polite">
-                <p class="empty-hint">暂无直播源，请先在上方查询并添加</p>
+            <div class="board-top-bar">
+                <div class="board-top-bar-left">
+                    <i class="fa-solid fa-record-vinyl"></i>
+                    <span>录制任务</span>
+                    <span id="live-disk-hint" class="last-pull-time" title="录制目录所在磁盘余量"></span>
+                </div>
+            </div>
+            <div class="board-sub-tabs" id="live-board-tabs">
+                <div class="board-sub-tab active" data-live-board="recording" data-action="switch-live-board">
+                    录制中 <span class="board-tab-count" id="live-count-recording">0</span>
+                </div>
+                <div class="board-sub-tab" data-live-board="history" data-action="switch-live-board">
+                    最近录制 <span class="board-tab-count" id="live-count-history">0</span>
+                </div>
+                <div class="board-sub-tab" data-live-board="attention" data-action="switch-live-board">
+                    需要处理 <span class="board-tab-count" id="live-count-attention">0</span>
+                </div>
+            </div>
+            <div class="live-board-panel active" id="live-panel-recording">
+                <div id="live-recording-list"><p class="empty-hint">暂无录制中的任务</p></div>
+            </div>
+            <div class="live-board-panel" id="live-panel-history">
+                <div id="live-history-list" class="live-history-list"><p class="empty-hint">正在加载录制历史</p></div>
+            </div>
+            <div class="live-board-panel" id="live-panel-attention">
+                <div id="live-attention-list"><p class="empty-hint">暂无需要处理的项目</p></div>
             </div>
         </div>
+    </section>
 
-        <!-- 当前录制 -->
-        <div class="card">
-            <div class="card-title">
-                <i class="fa-solid fa-record-vinyl"></i>
-                <span>当前录制</span>
-                <button id="live-refresh-status-btn" class="btn btn-sm btn-ghost" title="刷新状态">
-                    <i class="fa-solid fa-arrows-rotate"></i>
+    <!-- 直播源设置弹窗（结构与添加博主弹窗一致） -->
+    <div id="live-source-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="live-settings-title">
+        <div class="modal-container modal-container-wide">
+            <div class="modal-header">
+                <i class="fa-solid fa-sliders"></i>
+                <span id="live-settings-title">直播源设置 · 房间 <span id="live-settings-room-id"></span></span>
+                <button type="button" class="modal-close-btn" id="live-settings-close-btn" aria-label="关闭">
+                    <i class="fa-solid fa-times"></i>
                 </button>
             </div>
-            <div id="live-recording-list" class="live-recording-list" aria-live="polite" aria-busy="false">
-                <p class="empty-hint">暂无录制中的任务</p>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-title"><i class="fa-solid fa-clock-rotate-left"></i><span>最近录制</span></div>
-            <div id="live-history-list" class="live-recording-list"><p class="empty-hint">正在加载录制历史</p></div>
-        </div>
-
-        <div class="card" id="live-recovery-card">
-            <div class="card-title"><i class="fa-solid fa-life-ring"></i><span>待恢复分段与后台任务</span></div>
-            <div id="live-recovery-list" class="live-recording-list"><p class="empty-hint">暂无待恢复任务</p></div>
-        </div>
-
-        <details class="card live-interaction-card">
-            <summary class="card-title"><i class="fa-solid fa-comments"></i><span>实时互动</span><span id="live-interaction-room" class="live-interaction-room"></span></summary>
-            <div id="live-interaction-stats" class="live-stats-grid"></div>
-            <div id="live-sc-pins" class="live-sc-pins"></div>
-            <div class="live-timeline-toolbar">
-                <label for="live-event-filter">筛选</label>
-                <select id="live-event-filter" class="form-control">
-                    <option value="all">全部互动</option><option value="danmaku">弹幕</option><option value="gift">礼物</option>
-                    <option value="super_chat">SC</option><option value="guard">上舰</option><option value="link_mic_pk">连麦 / PK</option>
-                </select>
-                <span id="live-events-status" class="live-events-status" role="status">实时互动状态：等待检查</span>
-            </div>
-            <div id="live-heat-bar" class="live-heat-bar" aria-label="30秒弹幕热度"></div>
-            <div id="live-event-timeline" class="live-event-timeline"><p class="empty-hint">录制开始后在这里显示互动</p></div>
-            <p class="form-note">实时互动显示最近 100 条；热度按 30 秒桶统计。观看人数是 B 站累计口径，互动人数按可识别事件 UID 估算，金额为非结算估算值。</p>
-        </details>
-
-        <dialog id="live-source-dialog" class="live-source-dialog">
-            <form method="dialog" id="live-source-form">
-                <div class="card-title"><i class="fa-solid fa-calendar-week"></i><span>直播源设置</span></div>
+            <div class="form-section">
                 <input type="hidden" id="live-source-room-id">
-                <label class="live-toggle-row"><input type="checkbox" id="live-source-auto"> 自动录制</label>
-                <label for="live-source-mode">互动采集</label>
-                <select id="live-source-mode" class="form-control"><option value="standard">标准（推荐）</option><option value="full">完整原始数据</option><option value="off">关闭</option></select>
-                <label class="live-toggle-row"><input type="checkbox" id="live-source-all-day"> 全天允许自动开始</label>
-                <div id="live-weekly-schedule" class="live-weekly-schedule"></div>
-                <p class="form-note">每行可填写多个时段，用逗号分隔，例如 09:00-12:00, 22:00-02:00。</p>
-                <div class="live-dialog-actions"><button value="cancel" class="btn btn-ghost">取消</button><button type="button" id="live-source-save" class="btn btn-primary">保存</button></div>
-            </form>
-        </dialog>
-    </section>
+                <div class="form-group">
+                    <label><input type="checkbox" id="live-source-auto"> 自动录制（检测到开播且在排期窗口内时自动开始）</label>
+                </div>
+                <div class="form-group">
+                    <label for="live-source-mode"><i class="fa-solid fa-comments"></i> 互动采集</label>
+                    <select id="live-source-mode" class="form-control">
+                        <option value="standard">标准（推荐，弹幕/礼物/SC/上舰）</option>
+                        <option value="full">完整原始数据（含全部未知命令）</option>
+                        <option value="off">关闭（仅录制视频）</option>
+                    </select>
+                </div>
+                <div class="form-group form-full">
+                    <label><input type="checkbox" id="live-source-all-day"> 全天允许自动开始（勾选后忽略下方周排期）</label>
+                </div>
+                <div class="form-group form-full">
+                    <label><i class="fa-solid fa-calendar-week"></i> 自动录制周排期（每天最多 2 个时段，支持跨天如 22:00-02:00）</label>
+                    <div class="live-tz-note" id="live-tz-note">排期按服务器时区生效，正在获取服务器时间…</div>
+                    <div id="live-weekly-schedule" class="live-schedule-grid"></div>
+                    <div class="live-schedule-error" id="live-schedule-error" role="alert"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="live-settings-cancel-btn">
+                    <i class="fa-solid fa-times"></i> 取消
+                </button>
+                <button class="btn btn-primary" id="live-source-save">
+                    <i class="fa-solid fa-check"></i> 保存设置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加直播源弹窗 -->
+    <div id="live-add-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="live-add-title">
+        <div class="modal-container">
+            <div class="modal-header">
+                <i class="fa-solid fa-satellite-dish"></i>
+                <span id="live-add-title">添加直播源</span>
+                <button type="button" class="modal-close-btn" id="live-add-close-btn" aria-label="关闭">
+                    <i class="fa-solid fa-times"></i>
+                </button>
+            </div>
+            <div class="form-section">
+                <div class="form-group form-full">
+                    <label for="live-add-input"><i class="fa-solid fa-link"></i> 房间号或直播链接（支持批量粘贴）</label>
+                    <textarea id="live-add-input" class="form-control live-add-textarea" rows="3" placeholder="例如 123456 或 https://live.bilibili.com/123456，多个房间用换行 / 空格 / 逗号分隔"></textarea>
+                    <div class="form-note">添加后默认关闭自动录制；请在房间详情的“设置”中开启自动录制并配置周排期。短号会自动解析为长号。</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="live-add-cancel-btn">
+                    <i class="fa-solid fa-times"></i> 取消
+                </button>
+                <button class="btn btn-primary" id="live-add-confirm-btn">
+                    <i class="fa-solid fa-check"></i> 查询并添加
+                </button>
+            </div>
+        </div>
+    </div>
 
     <!-- 系统设置 Tab -->
     <section id="tab-settings" class="tab-panel">
