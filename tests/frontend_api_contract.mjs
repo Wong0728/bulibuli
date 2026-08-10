@@ -139,8 +139,11 @@ test('live UI defaults saved sources to manual-only and exposes trustworthy stat
     const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
     assert.match(live, /auto_record_enabled: false/);
     assert.match(live, /pendingRooms/);
-    assert.match(live, /\/api\/live\/history\?limit=20/);
-    assert.match(html, /live-health-summary/);
+    assert.match(live, /\/api\/live\/history\?limit=30/);
+    // 页面连接 / 监控 worker / B 站新鲜度三态独立展示，任一失败不清空整页
+    assert.match(html, /live-sync-page/);
+    assert.match(html, /live-sync-monitor/);
+    assert.match(html, /live-sync-bili/);
     assert.match(html, /live-history-list/);
 });
 
@@ -154,4 +157,19 @@ test('live UI exposes bounded polling, schedule validation, and cancellable merg
     assert.match(live, /merge-cancel/);
     assert.match(backend, /\/api\/live\/merge\/{job_id}\/cancel/);
     assert.match(backend, /server_timezone/);
+});
+
+test('live UI maps internal enum values to Chinese and degrades gracefully on failure', () => {
+    const live = readFileSync(new URL('../static/js/live.js', import.meta.url), 'utf8');
+    // 英文内部状态一律映射中文展示
+    assert.match(live, /interactionStateText/);
+    assert.match(live, /captureModeText/);
+    assert.match(live, /stopReasonText/);
+    // dashboard 失败后保留旧数据并标记，不再整页清空
+    assert.match(live, /dashboardFailedAt/);
+    // 离开直播 Tab 时停止轮询
+    assert.match(live, /liveTabActive/);
+    // 停止/删除等危险操作走统一确认弹窗而非 window.confirm
+    assert.match(live, /confirmDialog/);
+    assert.doesNotMatch(live, /window\.confirm/);
 });
