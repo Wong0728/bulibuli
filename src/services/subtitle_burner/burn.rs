@@ -11,7 +11,7 @@ use super::ass_render::generate_ass;
 use super::danmaku_source::load_danmaku_list;
 use super::layout::set_position;
 use super::subtitle_convert::{convert_subtitle_to_ass, merge_ass_files};
-use super::{PositionedDanmaku, SubtitleBurner};
+use super::{DanmakuItem, PositionedDanmaku, SubtitleBurner};
 
 struct BurnInput {
     parent: PathBuf,
@@ -70,6 +70,36 @@ impl SubtitleBurner {
             .unwrap_or_default();
         self.burn_with_generated_ass(video_path, &positioned, &source_name, "弹幕烧录")
             .await
+    }
+
+    /// 烧录直播录制的互动条目（弹幕/SC）：调用方直接提供已解析的条目，
+    /// 跳过按 BV 号查找 B 站弹幕文件的步骤；输出命名与下载烧录一致（_弹幕版）。
+    pub async fn burn_live_interactions(
+        &self,
+        video_path: &Path,
+        items: Vec<DanmakuItem>,
+    ) -> Result<(bool, Option<PathBuf>, String)> {
+        info!("[直播互动烧录] 开始处理: {}", video_path.display());
+        let _input = match Self::precheck_burn_input(video_path, "直播互动烧录") {
+            Ok(input) => input,
+            Err(message) => return Ok((false, None, message)),
+        };
+        if items.is_empty() {
+            return Ok((false, None, "没有可烧录的互动内容".to_string()));
+        }
+        let positioned = set_position(&items, &self.burn_config);
+        if positioned.is_empty() {
+            warn!("[直播互动烧录] 弹幕位置计算失败");
+            return Ok((false, None, "弹幕位置计算失败".to_string()));
+        }
+        info!("[直播互动烧录] 已计算 {} 条互动位置", positioned.len());
+        self.burn_with_generated_ass(
+            video_path,
+            &positioned,
+            "live_interactions.jsonl",
+            "直播互动烧录",
+        )
+        .await
     }
 
     /// 烧录 CC 字幕到视频（source=subtitle）。

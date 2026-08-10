@@ -5281,13 +5281,14 @@ progress.download-item-progress-fill {
     color: var(--warning-text);
 }
 
-/* 看板：侧边栏 + 详情（复刻 blogger-dashboard） */
+/* 看板：侧边栏 + 详情（复刻 blogger-dashboard）；
+   详情区不设高度上限，内容随页面整体滚动，避免宽屏/低分辨率下
+   互动区被裁剪且无法滚动的问题 */
 .live-dashboard {
     display: grid;
     grid-template-columns: var(--size-240) 1fr;
     gap: var(--size-16);
     min-height: var(--size-480);
-    max-height: calc(100vh - var(--size-220));
 }
 
 .live-sidebar {
@@ -5297,7 +5298,9 @@ progress.download-item-progress-fill {
     padding: var(--size-14);
     display: flex;
     flex-direction: column;
-    max-height: 100%;
+    align-self: start;
+    max-height: calc(100vh - var(--size-220));
+    min-height: var(--size-320);
     overflow: hidden;
 }
 
@@ -5428,7 +5431,6 @@ progress.download-item-progress-fill {
     display: flex;
     flex-direction: column;
     min-height: 0;
-    overflow-y: auto;
 }
 
 .live-empty-state {
@@ -5980,7 +5982,6 @@ progress.download-item-progress-fill {
 @media (max-width: 860px) {
     .live-dashboard {
         grid-template-columns: 1fr;
-        max-height: none;
     }
 
     .live-sidebar {

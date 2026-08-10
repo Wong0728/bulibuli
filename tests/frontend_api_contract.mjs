@@ -190,3 +190,19 @@ test('live sources expose per-room quality cap wired to settings and recorder', 
     assert.match(html, /setting-live-file-template/);
     assert.match(recorder, /render_file_template/);
 });
+
+test('live recordings expose danmaku burn-in reusing the download burn pipeline', () => {
+    const live = readFileSync(new URL('../static/js/live.js', import.meta.url), 'utf8');
+    const backend = readFileSync(new URL('../src/api/live.rs', import.meta.url), 'utf8');
+    const burner = readFileSync(new URL('../src/services/subtitle_burner/burn.rs', import.meta.url), 'utf8');
+    // 历史条目展示烧录入口与已有弹幕版标记
+    assert.match(live, /has_burned/);
+    assert.match(live, /history-burn/);
+    // 前端轮询复用下载烧录的状态接口
+    assert.match(live, /\/api\/download\/burn\/status\//);
+    // 后端新路由接入共享烧录任务队列
+    assert.match(backend, /burn-danmaku/);
+    assert.match(backend, /burn_tasks/);
+    // 烧录器提供直接接收互动条目的入口，跳过 BV 号查找
+    assert.match(burner, /burn_live_interactions/);
+});
