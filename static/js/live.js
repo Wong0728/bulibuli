@@ -511,10 +511,14 @@ function renderHistoryBoard(items) {
         const failedInfo = item.status === 'failed'
             ? `${badge('failed', item.is_recoverable ? '失败可恢复' : '失败')}`
             : badge(statusCls, reason || videoStatusText(item.status));
+        const burnedBadge = item.has_burned ? badge('completed', '已有弹幕版') : '';
+        const burnButton = item.has_output && item.has_events && !item.has_burned
+            ? `<button class="btn btn-sm btn-ghost" data-action="history-burn" data-recording-id="${item.id}" title="把录到的弹幕和 SC 烧录进视频，生成弹幕版">烧录弹幕</button>`
+            : '';
         return `
         <div class="live-recording-row">
             <div class="live-recording-main">
-                <span class="live-recording-title">${escapeHtml(item.title || `房间 ${item.room_id}`)} ${failedInfo}</span>
+                <span class="live-recording-title">${escapeHtml(item.title || `房间 ${item.room_id}`)} ${failedInfo} ${burnedBadge}</span>
                 <span class="live-recording-meta">
                     <span>#${item.room_id}</span>
                     <span>${escapeHtml(item.started_at || '').replace('T', ' ').slice(0, 16)}</span>
@@ -527,6 +531,7 @@ function renderHistoryBoard(items) {
             </div>
             <div class="live-recording-actions">
                 ${item.is_recoverable ? `<button class="btn btn-sm btn-primary" data-action="history-merge" data-recording-id="${item.id}">重试合并</button>` : ''}
+                ${burnButton}
                 ${item.has_output ? `<button class="btn btn-sm btn-ghost" data-action="history-open" data-recording-id="${item.id}">打开目录</button>` : ''}
             </div>
         </div>`;
@@ -793,6 +798,45 @@ async function submitAdd() {
     }
 }
 
+async function burnRecordingDanmaku(recordingId) {
+    const confirmed = await confirmDialog(
+        '将把本场录到的弹幕和 SC 烧录进视频，生成一个新的“弹幕版”文件，原视频不变。烧录耗时取决于视频长度，期间可继续使用其他功能。继续吗？',
+        { title: '烧录互动弹幕', okText: '开始烧录', danger: false },
+    );
+    if (!confirmed) return;
+    try {
+        const response = await apiPost(`/api/live/history/${recordingId}/burn-danmaku`, {});
+        const taskId = response.data?.task_id;
+        showToast('烧录任务已排队，完成后会提示', 'success');
+        if (taskId) trackBurnTask(taskId);
+    } catch (error) {
+        showToast(`启动烧录失败：${error.message}`, 'error');
+    }
+}
+
+function trackBurnTask(taskId) {
+    const startedAt = Date.now();
+    const timer = window.setInterval(async () => {
+        try {
+            const response = await apiGet(`/api/download/burn/status/${taskId}`);
+            const status = response.data?.status;
+            if (status === 'completed') {
+                window.clearInterval(timer);
+                showToast('弹幕烧录完成，已生成弹幕版视频', 'success');
+                await refreshDashboard(true);
+            } else if (status === 'failed') {
+                window.clearInterval(timer);
+                showToast(`弹幕烧录失败：${response.data?.message || '未知错误'}`, 'error');
+            } else if (Date.now() - startedAt > 30 * 60 * 1000) {
+                window.clearInterval(timer);
+                showToast('弹幕烧录超时，请到录制目录确认结果', 'warning');
+            }
+        } catch (error) {
+            console.error('[live] 查询烧录任务状态失败：', error);
+        }
+    }, 3000);
+}
+
 // ==================== 直播源设置弹窗 ====================
 
 function scheduleRows(key) {
@@ -1031,6 +1075,8 @@ function initLiveTab() {
             apiPost(`/api/live/merge/${button.dataset.jobId}/cancel`, {})
                 .then(() => refreshDashboard(true))
                 .catch(error => showToast(`取消合并失败：${error.message}`, 'error'));
+        } else if (action === 'history-burn') {
+            burnRecordingDanmaku(button.dataset.recordingId);
         } else if (action === 'history-open') {
             apiPost(`/api/live/history/${button.dataset.recordingId}/open-directory`, {})
                 .catch(error => showToast(`打开目录失败：${error.message}`, 'error'));

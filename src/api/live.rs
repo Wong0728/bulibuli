@@ -3,6 +3,8 @@ use crate::services::live_recorder::RecordingTrigger;
 use crate::services::live_source::{
     schedule_from_json, CaptureMode, NewLiveSource, UpdateLiveSource, WeeklySchedule,
 };
+use crate::services::subtitle_burner::{DanmakuItem, SubtitleBurner};
+use crate::state::media::BurnTask;
 use crate::state::SharedState;
 use axum::{
     extract::{Query, State},
@@ -27,6 +29,10 @@ pub fn router() -> Router<SharedState> {
         .route("/api/live/history", get(history))
         .route("/api/live/history/{recording_id}", get(history_item))
         .route("/api/live/history/{recording_id}/merge", post(start_merge))
+        .route(
+            "/api/live/history/{recording_id}/burn-danmaku",
+            post(burn_recording_danmaku),
+        )
         .route(
             "/api/live/history/{recording_id}/open-directory",
             post(open_history_directory),
@@ -420,6 +426,188 @@ async fn start_merge(
     )))
 }
 
+async fn burn_recording_danmaku(
+    State(state): State<SharedState>,
+    axum::extract::Path(recording_id): axum::extract::Path<i32>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let row = state
+        .media
+        .live_recorder
+        .history_item(recording_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("录制历史不存在".into()))?;
+    let output = row
+        .output_path
+        .as_deref()
+        .map(Path::new)
+        .filter(|path| path.exists())
+        .ok_or_else(|| AppError::BadRequest("该录制没有可烧录的输出视频".into()))?
+        .to_path_buf();
+    let events_path = row
+        .event_path
+        .as_deref()
+        .map(Path::new)
+        .filter(|path| path.exists())
+        .ok_or_else(|| AppError::BadRequest("该录制没有互动归档，无法烧录弹幕".into()))?
+        .to_path_buf();
+    let task_key = format!("live-recording-{recording_id}");
+    {
+        let tasks = state.media.burn_tasks.lock().await;
+        if tasks.values().any(|task| {
+            task.bvid == task_key && matches!(task.status.as_str(), "queued" | "running")
+        }) {
+            return Err(AppError::Conflict("该录制的烧录任务已在进行中".into()));
+        }
+    }
+    let items = load_live_burn_items(&events_path)
+        .await
+        .map_err(|error| AppError::BadRequest(format!("读取互动归档失败: {error}")))?;
+    if items.is_empty() {
+        return Err(AppError::BadRequest("互动归档中没有弹幕或 SC".into()));
+    }
+    let settings = state.infra.settings_service.current();
+    let burn_config = settings.burn.to_burn_config();
+    let custom_path = settings.ffmpeg.custom_path.trim().to_string();
+    let custom_ffmpeg = (!custom_path.is_empty()).then_some(custom_path);
+    let burner = SubtitleBurner::with_burn_config(
+        state.media.video_processor.clone(),
+        custom_ffmpeg,
+        burn_config,
+    );
+    let burn_tasks = state.media.burn_tasks.clone();
+    let burn_semaphore = state.media.burn_semaphore.clone();
+    let task_id = uuid::Uuid::new_v4()
+        .to_string()
+        .chars()
+        .take(8)
+        .collect::<String>();
+    let response_task_id = task_id.clone();
+    burn_tasks.lock().await.insert(
+        task_id.clone(),
+        BurnTask {
+            bvid: task_key,
+            status: "queued".to_string(),
+            message: "烧录任务已排队".to_string(),
+            output_path: None,
+        },
+    );
+    tokio::spawn(async move {
+        let Ok(_permit) = burn_semaphore.acquire_owned().await else {
+            let mut tasks = burn_tasks.lock().await;
+            if let Some(task) = tasks.get_mut(&task_id) {
+                task.status = "failed".to_string();
+                task.message = "获取烧录并发槽失败".to_string();
+            }
+            return;
+        };
+        {
+            let mut tasks = burn_tasks.lock().await;
+            if let Some(task) = tasks.get_mut(&task_id) {
+                task.status = "running".to_string();
+                task.message = "正在烧录互动弹幕，请勿关闭程序".to_string();
+            }
+        }
+        let result = burner.burn_live_interactions(&output, items).await;
+        let mut tasks = burn_tasks.lock().await;
+        if let Some(task) = tasks.get_mut(&task_id) {
+            match result {
+                Ok((true, path, message)) => {
+                    task.status = "completed".to_string();
+                    task.message = message;
+                    task.output_path = path.map(|value| value.to_string_lossy().to_string());
+                }
+                Ok((false, _, message)) => {
+                    task.status = "failed".to_string();
+                    task.message = message;
+                }
+                Err(error) => {
+                    task.status = "failed".to_string();
+                    task.message = format!("烧录失败: {error}");
+                }
+            }
+        }
+    });
+    Ok(Json(ApiResponse::with_message(
+        json!({"task_id": response_task_id, "status": "queued"}),
+        "烧录任务已排队，完成后会生成带弹幕的版本",
+    )))
+}
+
+/// 从直播互动 JSONL 归档提取可烧录条目：弹幕走滚动轨道，SC 走顶部固定轨道。
+async fn load_live_burn_items(events_path: &Path) -> anyhow::Result<Vec<DanmakuItem>> {
+    let content = tokio::fs::read_to_string(events_path).await?;
+    let mut items = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let time_secs = value
+            .get("media_time_ms")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0) as f64
+            / 1000.0;
+        let data = value
+            .get("data")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        match value
+            .get("event_type")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("danmaku") => {
+                let text = data
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if text.is_empty() {
+                    continue;
+                }
+                items.push(DanmakuItem {
+                    text,
+                    time: time_secs,
+                    mode: "R2L".to_string(),
+                    size: 25,
+                    color: "FFFFFF".to_string(),
+                    bottom: false,
+                });
+            }
+            Some("super_chat") => {
+                let uname = data
+                    .get("uname")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("匿名");
+                let message = data
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let price = data
+                    .get("price")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
+                items.push(DanmakuItem {
+                    text: format!("SC ¥{price} {uname}: {message}"),
+                    time: time_secs,
+                    mode: "TOP".to_string(),
+                    size: 30,
+                    color: "FFB300".to_string(),
+                    bottom: false,
+                });
+            }
+            _ => {}
+        }
+        if items.len() >= 200_000 {
+            break;
+        }
+    }
+    Ok(items)
+}
+
 async fn merge_job(
     State(state): State<SharedState>,
     axum::extract::Path(job_id): axum::extract::Path<String>,
@@ -496,6 +684,14 @@ fn history_view(row: &crate::models::live_recording::Model) -> serde_json::Value
         "stop_reason": row.stop_reason, "is_recoverable": row.is_recoverable,
         "has_output": row.output_path.as_deref().is_some_and(|path| Path::new(path).exists()),
         "has_events": row.event_path.as_deref().is_some_and(|path| Path::new(path).exists()),
+        "has_burned": row.output_path.as_deref().is_some_and(|path| {
+            let source = Path::new(path);
+            source
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| source.with_file_name(format!("{stem}_弹幕版.mp4")).exists())
+                .unwrap_or(false)
+        }),
     })
 }
 
@@ -541,5 +737,29 @@ mod tests {
     #[test]
     fn public_error_keeps_plain_messages() {
         assert_eq!(public_error(" 认证被拒绝 "), "认证被拒绝");
+    }
+
+    #[tokio::test]
+    async fn live_burn_items_extract_danmaku_and_super_chat() {
+        let dir = std::env::temp_dir().join(format!("live-burn-test-{}", uuid::Uuid::new_v4().simple()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("events.jsonl");
+        let content = [
+            r#"{"seq":1,"media_time_ms":1500,"event_type":"danmaku","data":{"text":"你好"}}"#,
+            r#"{"seq":2,"media_time_ms":3000,"event_type":"super_chat","data":{"uname":"某人","price":30,"message":"唱得好"}}"#,
+            r#"{"seq":3,"media_time_ms":4000,"event_type":"gift","data":{"gift_name":"烟花"}}"#,
+            r#"{"seq":4,"media_time_ms":5000,"event_type":"danmaku","data":{"text":"   "}}"#,
+        ]
+        .join("\n");
+        tokio::fs::write(&path, content).await.unwrap();
+        let items = load_live_burn_items(&path).await.unwrap();
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].text, "你好");
+        assert!((items[0].time - 1.5).abs() < 1e-9);
+        assert_eq!(items[0].mode, "R2L");
+        assert_eq!(items[1].mode, "TOP");
+        assert!(items[1].text.contains("SC ¥30"));
+        assert!(items[1].text.contains("唱得好"));
     }
 }

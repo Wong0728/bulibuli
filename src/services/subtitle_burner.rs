@@ -77,14 +77,15 @@ impl SubtitleBurner {
     }
 }
 
+/// 单条待烧录弹幕；直播互动烧录入口也复用该结构（弹幕/SC 转换而来）。
 #[derive(Clone)]
-struct DanmakuItem {
-    text: String,
-    time: f64,
-    mode: String,
-    size: i32,
-    color: String,
-    bottom: bool,
+pub struct DanmakuItem {
+    pub text: String,
+    pub time: f64,
+    pub mode: String,
+    pub size: i32,
+    pub color: String,
+    pub bottom: bool,
 }
 
 #[derive(Clone)]
