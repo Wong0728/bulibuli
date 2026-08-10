@@ -1,0 +1,127 @@
+# Rust 编译输出
+**/target
+*.pdb
+
+# 应用数据
+auth_data
+*.sqlite
+/video
+debug*
+
+# Node.js 依赖
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 前端构建输出
+web/build
+web/.svelte-kit
+web/dist
+
+# 文档构建输出
+docs/.vitepress/cache
+docs/.vitepress/dist
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+CLAUDE.MD
+# IDE 配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+/issues
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+bili-sync-main
+# 压缩包和打包文件
+*.zip
+*.tar.gz
+*.rar
+*.7z
+bili-sync-01-2.6.2
+Downloads
+config
+问题
+/make1.bat
+
+# 编译产物和发布文件
+releases/
+bili-sync-source-*
+temp_package/
+
+# 版本记录和第三方库
+版本记录/
+bilibili-api-main/
+
+# Temporary package files
+bili-sync-source-*
+temp_package/
+
+# Version records and temporary dirs
+版本记录/
+未修复PR*/
+数据库文件/
+bilibili-api-main/
+precompiled/
+targets/
+
+# Log files
+日志
+*.log
+log*
+# Dockerfile copies
+Dockerfile*副本
+Dockerfile - 副本
+
+# Downloaded artifacts (for testing)
+*.tar.gz.zip
+*_2.zip
+
+# aria2 相关临时文件
+download-aria2*.ps1
+bili-sync-rs.exe
+bili-sync-rs
+aria2c.exe
+aria2c
+
+# Root directory build outputs
+/_app/
+/index.html
+/add-source.html
+/settings.html
+/favicon.png
+/*.html
+
+# GitHub Actions 构建日志
+logs_*/
+UP主投稿风控优化总结.md
+内存泄漏修复报告.md
+bili-sync-AI优化-问题解决方案汇总-2025年06月.md
+bili-sync-AI优化-专业Code-Review报告-2025年06月.md
+config_hot_reload_summary.md
+config_migration_analysis.md
+config_migration_fix.md
+.claude/settings.local.json
+开发进度-TODO清单.md
+cursor_.md
+*.py
+.claude/agents/

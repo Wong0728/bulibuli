@@ -1,0 +1,168 @@
+from ...common.data import audio_reorder_map, reversed_audio_quality_map
+from ...common.signal_bus import signal_bus
+from ...common.enum import MediaType
+from ...common.config import config
+
+from ...thread.async_ import AsyncTask
+
+from .worker import QueryInfoWorker
+from .info import PreviewerInfo
+
+from collections import defaultdict
+from typing import Callable
+import logging
+
+logger = logging.getLogger(__name__)
+
+class AudioInfoParser:
+    def __init__(self):
+        self.callback: Callable = None
+        self.audio_quality_info_map = {}
+
+        signal_bus.parse.query_audio_info.connect(self.query_info)
+
+    def _get_dash_available_quality_list(self):
+        available_quality_list = []
+
+        dash_node = PreviewerInfo.info_data["dash"]
+
+        if audio_node := self.safe_get(dash_node.copy(), ["flac", "audio"]):
+            # 30251 为 Hi-Res 无损
+            quality_id = 30251
+            audio_node["id"] = quality_id
+
+            available_quality_list.append(quality_id)
+
+            self.audio_quality_info_map[quality_id] = audio_node.copy()
+
+        if audio_node := self.safe_get(dash_node.copy(), ["dolby", "audio"]):
+            # 30250 30255 均为杜比全景声，为便于区分，统一为 30250
+            if audio_node[0]["id"] == 30255:
+                logger.info("检测到 audio_quality_id 为 30255 的杜比全景声音频，已统一为 30250 以便区分")
+
+            quality_id = 30250
+            audio_node[0]["id"] = quality_id
+
+            available_quality_list.append(quality_id)
+
+            self.audio_quality_info_map[quality_id] = audio_node[0].copy()
+
+        if dash_node.get("audio", []):
+
+            for entry in dash_node["audio"].copy():
+                quality_id = entry["id"]
+
+                if quality_id not in available_quality_list:
+                    available_quality_list.append(quality_id)
+
+                    self.audio_quality_info_map[quality_id] = entry.copy()
+
+        return sorted(available_quality_list, key = lambda x: audio_reorder_map.get(x))
+
+    def _get_m4a_available_quality_list(self):
+        # m4a 只支持 192K 码率
+        self.audio_quality_info_map[30280] = {
+            "id": 30280,
+            "codecs": "mp4a.40.2",
+            "backup_url": PreviewerInfo.info_data["cdns"],
+            "bandwidth": 192000
+        }
+
+        return [30280]
+
+    def get_available_list(self):
+        match PreviewerInfo.media_type:
+            case MediaType.DASH:
+                return self._get_dash_available_quality_list()
+            
+            case MediaType.M4A:
+                return self._get_m4a_available_quality_list()
+            
+            case _:
+                return []
+    
+    def parse_info(self):
+        self.audio_quality_info_map = defaultdict(dict)
+
+        initial_data = {
+            "auto": 30300
+        }
+
+        available_audio_quality = self.get_available_list()
+
+        for quality_id in available_audio_quality.copy():
+            quality_str = reversed_audio_quality_map.get(quality_id)
+
+            initial_data[quality_str] = quality_id
+
+        PreviewerInfo.audio_quality_choice_data = initial_data.copy()
+
+    def query_info(self, audio_quality_id: int, callback: Callable):
+        self.callback = callback
+
+        audio_info = self.get_audio_info(audio_quality_id)
+
+        if audio_info:
+            quality_id = audio_info["id"]
+
+            if cached_info := PreviewerInfo.cache["audio"][quality_id]:
+                self.callback(cached_info)
+
+            else:
+                if "size" in audio_info.keys():
+                    # 如果已有文件大小无需再 HEAD 请求
+                    file_size = audio_info["size"]
+
+                    self.on_query_info_success(audio_info, file_size)
+                else:
+                    worker = QueryInfoWorker(audio_info)
+                    worker.success.connect(self.on_query_info_success)
+                    worker.error.connect(lambda error: self.callback(None))
+
+                    AsyncTask.run(worker)
+                
+        else:
+            self.callback(None)
+
+    def on_query_info_success(self, media_info: dict, file_size: int):
+        quality_id = media_info["id"]
+
+        info = {
+            "quality_id": quality_id,
+            "file_size": file_size,
+            "bitrate": media_info["bandwidth"],
+            "codec": media_info["codecs"]
+        }
+
+        if quality_id not in PreviewerInfo.cache["audio"]:
+            PreviewerInfo.cache["audio"][quality_id] = info.copy()
+
+        self.callback(info)
+
+    def get_audio_info(self, audio_quality_id: int):
+        if audio_quality_id == 30300:
+            return self.get_audio_info_by_priority()
+
+        else:
+            return self.audio_quality_info_map.get(audio_quality_id, {})
+
+    def get_audio_info_by_priority(self):
+        for quality_id in config.get(config.audio_quality_priority):
+            if quality_id in self.audio_quality_info_map.keys():
+                return self.audio_quality_info_map.get(quality_id, {})
+
+    def make_empty_data(self, reason: str):
+        return {
+            "empty": True,
+            "reason": reason
+        }
+
+    def safe_get(self, data: dict, keys: list, default = None):
+        for key in keys:
+            if data := data.get(key):
+                continue
+
+            else:
+                return default
+
+        return data

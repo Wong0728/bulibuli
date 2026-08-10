@@ -1,0 +1,159 @@
+name: Build bili-sync
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_frontend:
+    name: Build frontend
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: web-build
+          path: web/build
+
+  build:
+    name: Build ${{ matrix.platform.name }}
+    needs: build_frontend
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: Windows-x86_64
+            bin: bili-sync-rs.exe
+            archive_name: bili-sync-rs-Windows-x86_64.zip
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            name: Linux-x86_64-musl
+            bin: bili-sync-rs
+            archive_name: bili-sync-rs-Linux-x86_64-musl.tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04
+            name: Linux-aarch64-musl
+            bin: bili-sync-rs
+            archive_name: bili-sync-rs-Linux-aarch64-musl.tar.gz
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-24.04
+            name: Linux-armv7l-musl
+            bin: bili-sync-rs
+            archive_name: bili-sync-rs-Linux-armv7l-musl.tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-15
+            name: macos-x86_64
+            bin: bili-sync-rs
+            archive_name: bili-sync-rs-macos-x86_64.tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: macos-aarch64
+            bin: bili-sync-rs
+            archive_name: bili-sync-rs-macos-aarch64.tar.gz
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Reset frontend build output
+        shell: bash
+        run: |
+          rm -rf web/build
+          mkdir -p web/build
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: web-build
+          path: web/build
+
+      - name: Read Rust toolchain version
+        id: read_rust_toolchain
+        shell: bash
+        run: |
+          channel=$(grep '^channel' rust-toolchain.toml | sed 's/.*= *"\(.*\)"/\1/')
+          echo "value=$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Install unzip on Linux runners
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+
+      - name: Build binary
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          command: build
+          target: ${{ matrix.platform.target }}
+          toolchain: ${{ steps.read_rust_toolchain.outputs.value }}
+          args: "--locked --release -p bili_sync"
+          strip: true
+
+      - name: Package archive
+        shell: bash
+        run: |
+          cd target/${{ matrix.platform.target }}/release
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            7z a "../../../${{ matrix.platform.archive_name }}" "${{ matrix.platform.bin }}"
+          else
+            tar czf "../../../${{ matrix.platform.archive_name }}" "${{ matrix.platform.bin }}"
+          fi
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.platform.archive_name }}
+          path: ${{ github.workspace }}/${{ matrix.platform.archive_name }}
+
+  release:
+    name: Create release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bili-sync-rs*
+          draft: false
+          prerelease: false
+          generate_release_notes: true

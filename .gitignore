@@ -1,0 +1,7 @@
+/target
+/dist/
+/data/
+/__pycache__/
+*.py[cod]
+clippy_output*.txt
+.codex_*

@@ -1,0 +1,114 @@
+from ..common.signal_bus import signal_bus
+from ..common.translator import Translator
+from ..common.config import config
+
+from ..network.request import NetworkRequestWorker, RequestType, ResponseType
+from ..thread.async_ import AsyncTask
+from .base import AuthBase
+
+from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
+
+class UserManager(AuthBase):
+    def __init__(self):
+        super().__init__()
+
+    def init_user_info(self):
+        self.get_user_info()
+
+    def get_user_info(self):
+        def on_success(response: dict):
+            data: dict = response.get("data", {})
+
+            img_url = data["wbi_img"]["img_url"]
+            sub_url = data["wbi_img"]["sub_url"]
+
+            config.set(config.img_key, Path(img_url).stem, save = False)
+            config.set(config.sub_key, Path(sub_url).stem, save = False)
+
+            if data.get("isLogin"):
+                config.user_uname = data.get("uname", "")
+                config.user_uid = data.get("mid")
+
+                self.get_user_avatar(data.get("face", ""))
+
+                signal_bus.emit_signal(signal_bus.parse.update_preview_info)
+
+                logger.info("用户信息获取成功，用户名: %s, UID: %s", config.user_uname, config.user_uid)
+
+            else:
+                if config.get(config.is_login):
+                    config.is_expired = True
+
+                    self.show_toast_error(
+                        Translator.ERROR_MESSAGES("LOGIN_EXPIRED"),
+                        Translator.ERROR_MESSAGES("LOGIN_EXPIRED_MESSAGE")
+                    )
+
+                    return
+                
+                logger.warning("用户未登录，无法获取用户信息")
+
+        def on_error(error_message: str):
+            self.show_toast_error(Translator.ERROR_MESSAGES("USER_INFO_FAILED"), error_message)
+        
+        url = "https://api.bilibili.com/x/web-interface/nav"
+
+        worker = NetworkRequestWorker(url)
+        worker.success.connect(on_success)
+        worker.error.connect(on_error)
+
+        AsyncTask.run(worker)
+
+    def get_user_avatar(self, face_url: str):
+        if not face_url:
+            return
+
+        def on_success(response: bytes):
+            signal_bus.emit_signal(signal_bus.login.update_avatar, response)
+
+        def on_error(error_message: str):
+            self.show_toast_error(Translator.ERROR_MESSAGES("USER_AVATAR_FAILED"), error_message)
+
+        request = NetworkRequestWorker(face_url, response_type = ResponseType.BYTES)
+        request.success.connect(on_success)
+        request.error.connect(on_error)
+
+        AsyncTask.run(request)
+
+    def logout(self):
+        def on_success(response: dict):
+            config.set(config.is_login, False)
+            config.is_expired = False
+
+            config.set(config.bili_jct, "")
+            config.set(config.DedeUserID, "")
+            config.set(config.DedeUserID__ckMd5, "")
+            config.set(config.SESSDATA, "")
+
+        def on_error(error_message: str):
+            self.show_toast_error(Translator.ERROR_MESSAGES("LOGOUT_FAILED"), error_message)
+
+        params = {
+            "biliCSRF": config.get(config.bili_jct)
+        }
+
+        url = "https://passport.bilibili.com/login/exit/v2"
+
+        worker = NetworkRequestWorker(url, request_type = RequestType.POST, params = params)
+        worker.success.connect(on_success)
+        worker.error.connect(on_error)
+
+        AsyncTask.run(worker)
+
+    def check_response(self, response: dict):
+        if response.get("code", -1) != 0:
+            message = response.get("message", "Unknown error")
+
+            self.show_toast_error(Translator.ERROR_MESSAGES("UNKNOWN_ERROR"), message)
+
+            raise RuntimeError(message)
+
+user_manager = UserManager()

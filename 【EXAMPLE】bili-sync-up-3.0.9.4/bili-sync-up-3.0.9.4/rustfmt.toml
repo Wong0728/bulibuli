@@ -1,0 +1,17 @@
+# Rustfmt 配置 - bili-sync 项目代码格式化标准
+# 只使用稳定版 rustfmt 支持的配置选项
+
+# 基本设置
+max_width = 120                     # 最大行宽
+tab_spaces = 4                      # 使用4个空格缩进
+hard_tabs = false                   # 使用空格而不是制表符
+newline_style = "Unix"              # 使用Unix风格换行符
+edition = "2021"                    # 使用 Rust 2021 edition
+
+# 导入管理
+reorder_imports = true              # 自动重排导入顺序
+
+# 代码结构
+remove_nested_parens = true         # 移除不必要的嵌套括号
+use_try_shorthand = true            # 使用?操作符简写形式
+use_small_heuristics = "Default"    # 使用默认的小型启发式规则

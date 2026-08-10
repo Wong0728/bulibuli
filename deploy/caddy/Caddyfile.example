@@ -1,0 +1,21 @@
+downloads.example.com {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:5000 {
+		# security.toml 的 proxy 模式只信任回环 Caddy 覆盖后的单一来源地址。
+		header_up -X-Forwarded-For
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto https
+		header_up Host {host}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+
+	# 默认不启用 access log，避免完整下载查询 URL 进入日志。
+}

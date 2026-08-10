@@ -1,0 +1,5 @@
+# Shell 脚本必须保持 LF，否则 Linux/Termux 上无法执行
+*.sh text eol=lf
+# Windows 批处理保持 CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf

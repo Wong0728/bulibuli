@@ -1,0 +1,54 @@
+from ...common.translator import Translator
+
+from .tree import TreeItem, Attribute
+from .base import EpisodeParserBase
+
+class PopularEpisodeParser(EpisodeParserBase):
+    def __init__(self, info_data: dict, category_name: str):
+        super().__init__()
+
+        self.info_data = info_data["data"]
+        self.category_name = category_name
+
+    def parse(self):
+        self._init_episode_data()
+
+        node = self.list_parser()
+
+        self.update_episode_list(node)
+
+    def list_parser(self):
+        weekly_title = self.info_data["config"]["label"]
+        node_data = {
+            "number": Translator.EPISODE_TYPE("WEEKLY"),
+            "title": weekly_title
+        }
+
+        root_node = TreeItem(node_data)
+        root_node.set_attribute(Attribute.TREE_NODE_BIT)
+
+        for episode in self.info_data["list"]:
+            self.episode_count += 1
+
+            item_data = {
+                "aid": episode["aid"],
+                "bvid": episode["bvid"],
+                "cid": episode["cid"],
+                "cover": episode["pic"],
+                "duration": self.get_episode_duration(episode),
+                "number": self.episode_count,
+                "pubtime": episode["pubdate"],
+                "episode_id": self.episode_id,
+                "title": episode["title"],
+                "related_titles": {
+                    "parent_title": weekly_title
+                },
+                "url": "https://www.bilibili.com/video/{bvid}".format(bvid = episode["bvid"])
+            }
+
+            item = TreeItem(item_data)
+            item.set_attribute(Attribute.VIDEO_BIT | Attribute.WEEKLY_BIT)
+
+            root_node.add_child(item)
+
+        return root_node

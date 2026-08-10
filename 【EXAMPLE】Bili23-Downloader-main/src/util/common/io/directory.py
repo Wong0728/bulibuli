@@ -1,0 +1,184 @@
+from PySide6.QtWidgets import QFileDialog, QWidget
+
+from ...format.units import Units
+
+from shutil import disk_usage
+from pathlib import Path
+import subprocess
+import logging
+import psutil
+import ctypes
+import sys
+import os
+
+logger = logging.getLogger(__name__)
+
+class Directory:
+    @staticmethod
+    def ensure_directory_accessible(directory: str) -> bool:
+        try:
+            path = Path(directory)
+
+            # 目录不存在则创建
+            path.mkdir(parents = True, exist_ok = True)
+
+            # 创建临时文件 .access_test 验证目录是否可写
+            test_file = path / ".access_test"
+
+            try:
+                test_file.touch(exist_ok = True)
+                # 删除测试文件
+                test_file.unlink()
+
+                return True
+
+            except (OSError, PermissionError):
+                return False
+
+        except (OSError, PermissionError, FileNotFoundError):
+            return False
+        
+    @staticmethod
+    def calc_disk_space(directory: str) -> str:
+        try:
+            total, used, free = disk_usage(directory)
+
+            return {
+                "total": Units.format_file_size(total),
+                "used": Units.format_file_size(used),
+                "free": Units.format_file_size(free)
+            }
+
+        except (OSError, FileNotFoundError):
+            logger.exception("无法获取路径 %s 的磁盘空间信息", directory)
+            
+            return None
+        
+    @staticmethod
+    def has_enough_space(path: str, required_space: int) -> bool:
+        if required_space <= 0:
+            return True
+
+        try:
+            total, used, free = disk_usage(Path(path))
+
+            if free < required_space:
+                logger.error("路径 %s 可用空间不足: %d bytes 可用, 需要 %d bytes", path, free, required_space)
+
+            return free >= required_space
+        
+        except PermissionError:
+            logger.error("无权访问路径：%s", path)
+            return False
+
+        except FileNotFoundError:
+            logger.error("路径不存在：%s", path)
+            return False
+
+        except OSError:
+            logger.error("检查路径 %s 可用空间时出错", path)
+            return False
+        
+    @staticmethod
+    def browse_directory(parent: QWidget, title: str, default_path: str = ""):
+        dir_path = QFileDialog.getExistingDirectory(parent, title, default_path, QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks)
+
+        if dir_path:
+            if Directory.ensure_directory_accessible(dir_path):
+                return dir_path
+
+            return None
+        else:
+            return default_path
+
+    @staticmethod
+    def open_directory_in_explorer(directory: str):
+        if sys.platform == "win32":
+            os.startfile(directory)
+
+        elif sys.platform == "linux":
+            subprocess.Popen(["xdg-open", directory])
+
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", directory])
+
+    @staticmethod
+    def open_files_in_explorer(directory: str, files: list[str]):
+        if sys.platform == "win32":
+            Directory.msw_SHOpenFolderAndSelectItems(directory, files)
+
+        elif sys.platform == "linux":
+            subprocess.Popen(["xdg-open", directory])
+
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", directory])
+
+    @staticmethod
+    def msw_SHOpenFolderAndSelectItems(directory: str, files: list[str]):
+        class ITEMIDLIST(ctypes.Structure):
+            _fields_ = [("mkid", ctypes.c_byte)]
+
+        def get_pidl(path):
+            pidl = ctypes.POINTER(ITEMIDLIST)()
+            ctypes.windll.shell32.SHParseDisplayName(path, None, ctypes.byref(pidl), 0, None)
+            return pidl
+
+        # 拼接完整路径
+        full_paths = [str(Path(directory, f)) for f in files]
+
+        ctypes.windll.ole32.CoInitialize(None)
+        try:
+            folder_pidl = get_pidl(directory)
+
+            pidl_array_type = ctypes.POINTER(ITEMIDLIST) * len(full_paths)
+
+            pidl_array = pidl_array_type()
+
+            for i, p in enumerate(full_paths):
+                pidl_array[i] = get_pidl(p)
+
+            ctypes.windll.shell32.SHOpenFolderAndSelectItems(folder_pidl, len(full_paths), pidl_array, 0)
+        finally:
+            ctypes.windll.ole32.CoUninitialize()
+
+    @staticmethod
+    def get_relative_path(base_path: str, target_path: str) -> str:
+        # 如果能够成功计算相对路径则返回相对路径，否则返回 None
+
+        try:
+            relative_path = os.path.relpath(target_path, base_path)
+            return relative_path
+        
+        except ValueError:
+            return None
+
+    @staticmethod
+    def get_cwd():
+        if home := os.environ.get("PYSTAND_HOME"):
+            return Path(home)
+        else:
+            return Path.cwd()
+        
+    @staticmethod
+    def get_filesystem_type(directory: str) -> str:
+        # 获取目录所在磁盘的文件系统类型（如 NTFS、FAT32、exFAT 等），如果无法获取则返回 None
+        try:
+            directory = os.path.abspath(directory)
+            directory_drive = os.path.splitdrive(directory)[0].lower()
+
+            psutil_disk_partitions = psutil.disk_partitions(all = True)
+            
+            for partition in psutil_disk_partitions:
+                partition_mountpoint = os.path.abspath(partition.mountpoint)
+                partition_drive = os.path.splitdrive(partition_mountpoint)[0].lower()
+
+                if directory_drive != partition_drive:
+                    continue
+
+                if os.path.commonpath([partition_mountpoint, directory]) == partition_mountpoint:
+                    return partition.fstype
+
+        except Exception as e:
+            logger.exception("获取目录 %s 的文件系统类型时发生错误: %s", directory, str(e))
+
+        return None

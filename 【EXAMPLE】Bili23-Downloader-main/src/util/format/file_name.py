@@ -1,0 +1,206 @@
+from ..parse.episode.tree import Attribute
+from ..download.task.info import TaskInfo
+
+from ..common.enum import ConventionType
+from ..common.config import config
+
+from .time import Time
+
+from pathlib import Path
+from typing import List
+import re
+import logging
+
+logger = logging.getLogger(__name__)
+
+class FileNameFormatter:
+    def __init__(self):
+        self.type_id = None
+        self.rule = None
+        self.variable_data: dict = {}
+
+        self.attribute = None
+
+    def set_type_id(self, type_id: int):
+        self.type_id = type_id
+
+    def set_rule(self, rule: str):
+        self.rule = rule
+
+    def set_variable_data(self, data: TaskInfo | List[dict]):
+        if isinstance(data, TaskInfo):
+            self.variable_data = self.get_variable_data_from_task_info(data)
+
+            self.type_id = self.get_type_id_from_task_info(data)
+
+        elif isinstance(data, list):
+            for entry in data:
+                name = entry.get("name")
+                example = entry.get("example")
+
+                if name in ["pub_time", "create_time", "last_watched_time", "fav_time"]:
+                    example = Time.from_timestamp(1772841600)
+
+                self.variable_data[name] = example
+
+    def format(self):
+        try:
+            if not self.rule:
+                self.rule = self.get_rule_from_config(self.type_id)
+
+            if self.attribute:
+                self.rule = self.get_special_rule()
+
+            safe_variable_data = {
+                name: self.__sanitize_component(value)
+                for name, value in self.variable_data.items()
+            }
+
+            return self.__normalize_path(self.rule.format(**safe_variable_data))
+        
+        except Exception as e:
+            logger.exception(f"格式化文件名时发生错误")
+
+            return None
+
+    @staticmethod
+    def __sanitize_component(value):
+        if not isinstance(value, str):
+            return value
+
+        return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value)
+
+    def __normalize_path(self, path_str: str):
+        if not path_str:
+            return path_str
+        
+        path_str = path_str.lstrip("/\\")
+
+        path = Path(path_str)
+        normalized_parts = []
+
+        for part in path.parts:
+            cleaned_part = part.lstrip("/\\").strip(" .")
+
+            if cleaned_part:
+                normalized_parts.append(cleaned_part)
+
+        if not normalized_parts:
+            return "_"
+
+        return str(Path(*normalized_parts))
+
+    def get_special_rule(self):
+        if self.rule is None:
+            self.rule = ""
+
+        rule_map = {
+            Attribute.DOWNLOAD_AS_SINGLE_VIDEO_BIT: "{leaf_title}",
+        }
+
+        for attr, rule in rule_map.items():
+            if self.attribute & attr:
+                return str(Path(rule))
+        
+        return self.rule
+        
+    def get_rule_from_config(self, type_id: int = None):
+        # 从命名规则配置中查询到对应的命名规则模板
+        for entry in config.get(config.naming_rule_list):
+            if entry["type"] == type_id and entry["default"]:
+                return entry["rule"]
+
+    def get_rule_by_id(self, rule_id: int):
+        for entry in config.get(config.naming_rule_list):
+            if entry["id"] == rule_id:
+                return entry["rule"]
+
+    def get_variable_data_from_task_info(self, task_info: TaskInfo):
+        number = task_info.Episode.number
+
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            # “使用解析列表序号”时，某些分类的序号是文本标签。
+            # 普通命名规则仍应允许这些条目创建下载任务。
+            pass
+
+        return {
+            "pub_time": Time.from_timestamp(task_info.Episode.pubtime),
+            "pub_ts": task_info.Episode.pubtime,
+            "create_time": Time.from_timestamp(task_info.Basic.created_time),
+            "create_ts": task_info.Basic.created_time,
+            "fav_time": Time.from_timestamp(task_info.Episode.favtime),
+            "fav_ts": task_info.Episode.favtime,
+            "last_watched_time": Time.from_timestamp(task_info.Episode.viewtime),
+            "last_watched_ts": task_info.Episode.viewtime,
+            "number": number,
+            "uploader": task_info.Episode.uploader,
+            "uploader_uid": task_info.Episode.uploader_uid,
+            "video_quality": task_info.Episode.video_quality,
+            "audio_quality": task_info.Episode.audio_quality,
+            "video_codec": task_info.Episode.video_codec,
+
+            "aid": task_info.Episode.aid,
+            "bvid": task_info.Episode.bvid,
+            "cid": task_info.Episode.cid,
+            "ep_id": task_info.Episode.ep_id,
+            "season_id": task_info.Episode.season_id,
+
+            "leaf_title": task_info.Episode.leaf_title,
+            "parent_title": task_info.Episode.parent_title,
+            "section_title": task_info.Episode.section_title,
+            "collection_title": task_info.Episode.collection_title,
+            "series_title": task_info.Episode.series_title,
+            "season_title": task_info.Episode.season_title,
+            "episode_title": task_info.Episode.episode_title,
+
+            "season_number": task_info.Episode.season_number,
+            "episode_number": task_info.Episode.episode_number,
+            "p": task_info.Episode.part_number,
+
+            "favorites_name": task_info.Episode.favorites_name,
+            "favorites_id": task_info.Episode.favorites_id,
+            "favorites_owner":task_info.Episode.favorites_owner,
+            "favorites_owner_id": task_info.Episode.favorites_owner_id,
+            "space_owner": task_info.Episode.space_owner,
+            "space_owner_id": task_info.Episode.space_owner_id
+        }
+    
+    def get_type_id_from_task_info(self, task_info: TaskInfo):
+        self.attribute = task_info.Episode.attribute
+
+        return self.get_type_id_from_attribute(task_info.Episode.attribute)
+
+    def get_type_id_from_attribute(self, attribute: int):
+        type_map = {
+            Attribute.FAVLIST_BIT: ConventionType.FAVORITE,
+            Attribute.SPACE_BIT: ConventionType.SPACE,
+            Attribute.HISTORY_BIT: ConventionType.HISTORY,
+            Attribute.WATCH_LATER_BIT: ConventionType.WATCH_LATER,
+            Attribute.WEEKLY_BIT: ConventionType.WEEKLY,
+            Attribute.AUDIO_BIT: ConventionType.AUDIO,
+
+            Attribute.NORMAL_BIT: ConventionType.NORMAL,
+            Attribute.PART_BIT: ConventionType.PART,
+            Attribute.COLLECTION_BIT: ConventionType.COLLECTION,
+            Attribute.INTERACTIVE_BIT: ConventionType.INTERACTIVE_VIDEO,
+            Attribute.BANGUMI_BIT: ConventionType.BANGUMI,
+            Attribute.CHEESE_BIT: ConventionType.CHEESE,
+        }
+
+        for attr, type_id in type_map.items():
+            if attribute & attr != 0:
+                return type_id
+
+    def get_rule_list_from_attribute(self, attribute: int):
+        type_id = self.get_type_id_from_attribute(attribute)
+
+        rule_list = []
+
+        for entry in config.get(config.naming_rule_list):
+            if entry["type"] == type_id:
+                rule_list.append(entry)
+
+        return rule_list
+    

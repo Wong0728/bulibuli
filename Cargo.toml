@@ -1,0 +1,113 @@
+[package]
+name = "bilibili-uid-buildownloader"
+version = "2.0.0"
+edition = "2021"
+authors = ["BilibiliUIDBuildownloader"]
+description = "B站视频监控助手 - Axum/Rust 后端"
+rust-version = "1.85"
+
+[[bin]]
+name = "bilibili-uid-buildownloader"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt", "io"] }
+
+# Web framework
+axum = { version = "0.8" }
+tower-http = { version = "0.7", features = ["cors", "fs", "trace"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_path_to_error = "0.1"
+
+# HTTP client (使用 rustls 避免依赖系统 OpenSSL)
+reqwest = { version = "0.13", default-features = false, features = ["json", "cookies", "stream", "query", "rustls-no-provider", "webpki-roots", "gzip", "deflate", "brotli"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
+
+# Database (使用 rustls 避免依赖系统 OpenSSL)
+sea-orm = { version = "2.0", default-features = false, features = ["macros", "runtime-tokio", "sqlx-sqlite", "with-chrono", "with-json"] }
+sea-orm-migration = { version = "2.0", default-features = false, features = ["runtime-tokio", "sqlx-sqlite"] }
+
+# WebSocket / Socket.IO
+socketioxide = { version = "0.18", features = ["state"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+
+# Compression (弹幕 WebSocket 协议解压)
+brotli = "8"
+flate2 = "1"
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+
+# Configuration
+config = "0.15"
+dotenvy = "0.15"
+arc-swap = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Errors
+anyhow = "1"
+thiserror = "2"
+
+# Crypto / hashing
+md5 = "0.7"
+murmur3 = "0.5"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+aes-gcm = "0.10"
+base64 = "0.22"
+subtle = "2"
+
+# Utilities
+rand = "0.9"
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+urlencoding = "2"
+ipnet = { version = "2", features = ["serde"] }
+toml = "0.8"
+maxminddb = "0.24"
+futures = "0.3"
+regex = "1"
+quick-xml = { version = "0.41", features = ["serialize"] }
+fs2 = "0.4"
+tempfile = "3"
+socket2 = "0.6"
+
+# Rate limiting
+governor = "0.8"
+
+# Process management / path lookup
+which = "7"
+
+# 自动打开浏览器（Setup 向导）
+open = "5"
+
+# 终端交互界面（日志分区 + 命令说明 + 命令输入）
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Protobuf (弹幕 seg.so 解析)
+prost = "0.13"
+
+# Windows 专用：用 Job Object 确保父进程退出（含被强杀）时子进程 aria2c 一起被系统结束，避免残留占用下载目录
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Threading"] }
+
+[dev-dependencies]
+# 弹幕协议边界测试：随机包头、压缩正文和嵌套包均必须返回错误或结果，不能 panic。
+proptest = "1"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+panic = "abort"
