@@ -11,6 +11,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use std::path::Path;
 
 pub fn router() -> Router<SharedState> {
     Router::new()
@@ -23,6 +24,16 @@ pub fn router() -> Router<SharedState> {
         .route("/api/live/source/update", post(update_source))
         .route("/api/live/source/delete", post(delete_source))
         .route("/api/live/events", get(events))
+        .route("/api/live/history", get(history))
+        .route("/api/live/history/{recording_id}", get(history_item))
+        .route("/api/live/history/{recording_id}/merge", post(start_merge))
+        .route(
+            "/api/live/history/{recording_id}/open-directory",
+            post(open_history_directory),
+        )
+        .route("/api/live/recovery", get(recovery))
+        .route("/api/live/merge/{job_id}", get(merge_job))
+        .route("/api/live/merge/{job_id}/cancel", post(cancel_merge))
 }
 
 #[derive(Deserialize)]
@@ -38,6 +49,10 @@ struct EventsQuery {
     room_id: i64,
     #[serde(default)]
     after_seq: u64,
+    limit: Option<usize>,
+}
+#[derive(Deserialize)]
+struct HistoryQuery {
     limit: Option<usize>,
 }
 #[derive(Deserialize)]
@@ -108,16 +123,36 @@ async fn start_recording(
         Some(source) => CaptureMode::parse(&source.capture_mode).unwrap_or_default(),
         None => CaptureMode::Standard,
     };
-    let info = state
+    let source_before = state
+        .business
+        .live_source_service
+        .find(body.room_id)
+        .await?;
+    if source_before.is_some() {
+        state
+            .business
+            .live_source_service
+            .set_manual_latch(body.room_id, false)
+            .await?;
+    }
+    let info = match state
         .media
         .live_recorder
         .start_with_options(body.room_id, RecordingTrigger::Manual, mode)
-        .await?;
-    state
-        .business
-        .live_source_service
-        .set_manual_latch(info.room_id, false)
-        .await?;
+        .await
+    {
+        Ok(info) => info,
+        Err(error) => {
+            if let Some(source) = source_before {
+                let _ = state
+                    .business
+                    .live_source_service
+                    .set_manual_stop_session(body.room_id, source.manual_stop_session_key)
+                    .await;
+            }
+            return Err(error.into());
+        }
+    };
     Ok(Json(ApiResponse::with_message(json!(info), "录制已开始")))
 }
 
@@ -125,20 +160,59 @@ async fn stop_recording(
     State(state): State<SharedState>,
     Json(body): Json<RoomBody>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let info = state
-        .media
-        .live_recorder
-        .stop(body.room_id)
-        .await
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
-    state
+    let session_key = match state.infra.settings_service.cookie_header().await {
+        Ok(cookies) => state
+            .bili
+            .bili_api
+            .live_room_init(body.room_id, &cookies)
+            .await
+            .ok()
+            .filter(|init| init.is_live() && init.live_time > 0)
+            .map(|init| format!("{}:{}", init.room_id, init.live_time)),
+        Err(_) => None,
+    };
+    let source_before = state
         .business
         .live_source_service
-        .set_manual_latch(body.room_id, true)
+        .find(body.room_id)
         .await?;
+    if session_key.is_some() {
+        state
+            .business
+            .live_source_service
+            .set_manual_stop_session(body.room_id, session_key.clone())
+            .await?;
+    } else {
+        state
+            .business
+            .live_source_service
+            .set_manual_latch(body.room_id, true)
+            .await?;
+    }
+    let job = match state.media.live_recorder.request_stop(body.room_id).await {
+        Ok(job) => job,
+        Err(error) => {
+            if let Some(source) = source_before.clone() {
+                if source.manual_stop_session_key.is_some() {
+                    let _ = state
+                        .business
+                        .live_source_service
+                        .set_manual_stop_session(body.room_id, source.manual_stop_session_key)
+                        .await;
+                } else {
+                    let _ = state
+                        .business
+                        .live_source_service
+                        .set_manual_latch(body.room_id, source.manual_stop_latched)
+                        .await;
+                }
+            }
+            return Err(AppError::BadRequest(error.to_string()));
+        }
+    };
     Ok(Json(ApiResponse::with_message(
-        json!(info),
-        "录制已停止，本场直播不会自动重启",
+        json!({"operation_id": job.id, "recording_id": job.recording_id, "status": job.status, "progress": job.progress}),
+        "停止请求已接受，正在后台收尾与合并",
     )))
 }
 
@@ -169,9 +243,13 @@ async fn dashboard(
         })
     }).collect::<Vec<_>>();
     Ok(Json(ApiResponse::success(json!({
-        "sources": items, "sessions": sessions, "monitor_running": true,
+        "sources": items, "sessions": sessions,
+        "monitor": state.business.live_monitor.health_snapshot().await,
         "risk_notice": state.business.live_monitor.risk_snapshot().await,
-        "synced_at": chrono::Utc::now().to_rfc3339(), "poll_interval_secs": 30,
+        "synced_at": chrono::Utc::now().to_rfc3339(), "server_now": chrono::Local::now().to_rfc3339(),
+        "server_timezone": chrono::Local::now().format("%Z %:z").to_string(), "poll_interval_secs": 30,
+        "merge_jobs": state.media.live_recorder.merge_jobs().await,
+        "recovery": state.media.live_recorder.recovery_items().await?,
     }))))
 }
 
@@ -213,7 +291,7 @@ async fn add_source(
             face: profile.as_ref().map(|p| p.face.clone()).unwrap_or_default(),
             title: info.title,
             cover: info.user_cover,
-            auto_record_enabled: body.auto_record_enabled.unwrap_or(true),
+            auto_record_enabled: body.auto_record_enabled.unwrap_or(false),
             weekly_schedule: body.weekly_schedule,
             capture_mode: body.capture_mode.unwrap_or_default(),
         })
@@ -281,4 +359,142 @@ async fn events(
     Ok(Json(ApiResponse::success(
         json!({"events": events, "next_seq": next_seq}),
     )))
+}
+
+async fn history(
+    State(state): State<SharedState>,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let rows = state
+        .media
+        .live_recorder
+        .history(query.limit.unwrap_or(30))
+        .await?;
+    Ok(Json(ApiResponse::success(json!({
+        "items": rows.iter().map(history_view).collect::<Vec<_>>()
+    }))))
+}
+
+async fn history_item(
+    State(state): State<SharedState>,
+    axum::extract::Path(recording_id): axum::extract::Path<i32>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let row = state
+        .media
+        .live_recorder
+        .history_item(recording_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("录制历史不存在".into()))?;
+    Ok(Json(ApiResponse::success(history_view(&row))))
+}
+
+async fn start_merge(
+    State(state): State<SharedState>,
+    axum::extract::Path(recording_id): axum::extract::Path<i32>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let job = state
+        .media
+        .live_recorder
+        .retry_merge(recording_id)
+        .await
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    Ok(Json(ApiResponse::with_message(
+        json!(job),
+        "褰曞埗鍚堝苟浠诲姟宸插悗鍙板垱寤?",
+    )))
+}
+
+async fn merge_job(
+    State(state): State<SharedState>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let job = state
+        .media
+        .live_recorder
+        .merge_job(&job_id)
+        .await
+        .ok_or_else(|| AppError::NotFound("鍚堝苟浠诲姟涓嶅瓨鍦?".into()))?;
+    Ok(Json(ApiResponse::success(json!(job))))
+}
+
+async fn cancel_merge(
+    State(state): State<SharedState>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let job = state
+        .media
+        .live_recorder
+        .cancel_merge(&job_id)
+        .await
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    Ok(Json(ApiResponse::with_message(
+        json!(job),
+        "merge cancellation requested",
+    )))
+}
+
+async fn recovery(
+    State(state): State<SharedState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let items = state.media.live_recorder.recovery_items().await?;
+    Ok(Json(ApiResponse::success(json!({ "items": items }))))
+}
+
+async fn open_history_directory(
+    State(state): State<SharedState>,
+    axum::extract::Path(recording_id): axum::extract::Path<i32>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let row = state
+        .media
+        .live_recorder
+        .history_item(recording_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("录制历史不存在".into()))?;
+    let output = row
+        .output_path
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("该录制没有可打开的输出文件".into()))?;
+    let directory = Path::new(output)
+        .parent()
+        .ok_or_else(|| AppError::BadRequest("录制输出路径无效".into()))?;
+    if !directory.is_dir() {
+        return Err(AppError::NotFound("录制输出目录不存在".into()));
+    }
+    open::that(directory)
+        .map_err(|_| AppError::Internal("open recording directory failed".to_owned()))?;
+    Ok(Json(ApiResponse::with_message(
+        json!({"recording_id": recording_id}),
+        "已打开录制目录",
+    )))
+}
+
+fn history_view(row: &crate::models::live_recording::Model) -> serde_json::Value {
+    json!({
+        "id": row.id, "room_id": row.room_id, "title": row.title, "cover": row.cover,
+        "status": row.status, "started_at": row.started_at, "ended_at": row.ended_at,
+        "duration": row.duration, "file_size": row.file_size, "error_msg": row.error_msg.as_deref().map(public_error),
+        "trigger": row.trigger, "capture_mode": row.capture_mode,
+        "interaction_status": row.interaction_status, "interaction_error": row.interaction_error.as_deref().map(public_error),
+        "danmaku_count": row.danmaku_count, "unique_user_count": row.unique_user_count,
+        "segment_index": row.segment_index, "restart_attempts": row.restart_attempts,
+        "stop_reason": row.stop_reason, "is_recoverable": row.is_recoverable,
+        "has_output": row.output_path.as_deref().is_some_and(|path| Path::new(path).exists()),
+        "has_events": row.event_path.as_deref().is_some_and(|path| Path::new(path).exists()),
+    })
+}
+
+fn public_error(value: &str) -> String {
+    let trimmed = value.trim();
+    let bytes = trimmed.as_bytes();
+    let windows_absolute =
+        bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/');
+    if trimmed.starts_with('/')
+        || trimmed.starts_with("\\\\")
+        || trimmed.contains("://")
+        || windows_absolute
+    {
+        "diagnostic redacted".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }

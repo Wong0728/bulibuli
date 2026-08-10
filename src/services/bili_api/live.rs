@@ -1,15 +1,18 @@
 //! 直播间 API 客户端：房间信息、流地址、弹幕连接配置。
 //!
-//! 优先使用新版播放/弹幕接口，保留旧版接口作为协议兼容 fallback。
+//! 播放地址保留旧版接口作为播放协议兼容路径；弹幕配置只允许
+//! WBI 签名的 `getDanmuInfo`，不会回退到旧版 `getConf`。
 //! 接口域名：`api.live.bilibili.com`，走 `api_client`（严格 TLS）。
-
+/// Fetch authenticated WebSocket information from WBI-signed `getDanmuInfo`.
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use tracing::{debug, warn};
 
+use crate::services::wbi;
+
 use super::models::live::{
-    LiveDanmuConf, LivePlayUrl, LiveRoomInfo, LiveRoomInit, LiveRoomPlayInfo, LiveStreamUrl,
-    LiveUrlInfo,
+    LiveBatchStatus, LiveBatchStatusMap, LiveDanmuConf, LivePlayUrl, LiveRoomInfo, LiveRoomInit,
+    LiveRoomPlayInfo, LiveStreamUrl, LiveUrlInfo,
 };
 use super::BiliApi;
 
@@ -17,6 +20,44 @@ use super::BiliApi;
 const LIVE_QN_RAW: i32 = 10000;
 
 impl BiliApi {
+    /// Batch status probe used by the monitor. One request covers all saved
+    /// anchors, preventing a synchronized per-room polling spike.
+    pub async fn live_status_by_uids(
+        &self,
+        uids: &[i64],
+        cookies: &str,
+    ) -> Result<HashMap<i64, LiveBatchStatus>> {
+        let uids = uids
+            .iter()
+            .copied()
+            .filter(|uid| *uid > 0)
+            .collect::<Vec<_>>();
+        if uids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let url = "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids";
+        let enriched = self.enrich_cookies(cookies).await?;
+        self.rate_limiter.until_ready().await;
+        let credential = crate::services::credential::Credential::from_cookie_header(&enriched);
+        let request = self
+            .client_for(url)
+            .post(url)
+            .json(&serde_json::json!({"uids": uids}))
+            .header("User-Agent", &self.config.user_agent)
+            .header("Referer", "https://live.bilibili.com/")
+            .header("Origin", "https://www.bilibili.com")
+            .header("Accept", "application/json, text/plain, */*")
+            .header("Cookie", credential.to_cookie_header());
+        let response = self.send_with_retry(request).await?;
+        let data: LiveBatchStatusMap = self
+            .parse_data_silent(response, "live_status_info_by_uids")
+            .await?;
+        Ok(data
+            .into_values()
+            .filter(|item| item.uid > 0)
+            .map(|item| (item.uid, item))
+            .collect())
+    }
     /// Fetch the small recent-message window used to backfill reconnect gaps.
     pub async fn live_recent_danmaku(
         &self,
@@ -233,44 +274,18 @@ impl BiliApi {
         Ok(data)
     }
 
-    /// 获取弹幕 WebSocket 连接信息（旧版 `getConf`）。
+    /// 获取经过认证的弹幕 WebSocket 连接信息。
     ///
-    /// 返回 `token`（认证凭据）和 `host_server_list`（WebSocket 服务器列表）。
-    /// 连接地址：`wss://{host}:{wss_port}/sub`。
+    /// 无有效登录态时直接返回互动降级错误，不伪装成游客认证。
     pub async fn live_danmu_conf(&self, room_id: i64, cookies: &str) -> Result<LiveDanmuConf> {
-        let primary_error = match self.live_danmu_conf_v2(room_id, cookies).await {
-            Ok(data) if !data.host_server_list.is_empty() => return Ok(data),
-            Ok(_) => {
-                debug!(
-                    room_id,
-                    "新版 getDanmuInfo 未返回弹幕服务器，回退旧版 getConf"
-                );
-                None
-            }
-            Err(error) => {
-                warn!(room_id, %error, "新版 getDanmuInfo 失败，回退旧版 getConf");
-                Some(error)
-            }
-        };
-        let fallback = self.live_danmu_conf_legacy(room_id, cookies).await;
-        if let (Some(primary), Err(fallback_error)) = (&primary_error, &fallback) {
-            let fallback_notified = fallback_error
-                .downcast_ref::<crate::error::BiliApiError>()
-                .is_some_and(|error| {
-                    matches!(
-                        error.kind,
-                        crate::error::BiliErrorKind::RiskControl
-                            | crate::error::BiliErrorKind::Unauthorized
-                    )
-                });
-            if !fallback_notified {
-                if let Some(error) = primary.downcast_ref::<crate::error::BiliApiError>() {
-                    self.notify_bili_error(error, &serde_json::Value::Null)
-                        .await;
-                }
+        let result = self.live_danmu_conf_v2(room_id, cookies).await;
+        if let Err(error) = &result {
+            if let Some(api_error) = error.downcast_ref::<crate::error::BiliApiError>() {
+                self.notify_bili_error(api_error, &serde_json::Value::Null)
+                    .await;
             }
         }
-        fallback
+        result
     }
 
     async fn live_danmu_conf_v2(&self, room_id: i64, cookies: &str) -> Result<LiveDanmuConf> {
@@ -279,36 +294,18 @@ impl BiliApi {
         params.insert("type".to_string(), "0".to_string());
         let url = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
         let enriched = self.enrich_cookies(cookies).await?;
+        let credential = crate::services::credential::Credential::from_cookie_header(&enriched);
+        if !credential.is_logged_in() {
+            return Err(anyhow!("获取新版弹幕配置需要有效的 B站登录态"));
+        }
+        let (img_key, sub_key) = self.get_wbi_keys(&enriched).await?;
+        wbi::enc_wbi(&mut params, &img_key, &sub_key)?;
         let request = self
             .build_get_request(url, &params, "https://live.bilibili.com/", &enriched)
             .await;
         let response = self.send_with_retry(request).await?;
         self.parse_data_silent::<LiveDanmuConf>(response, "live_get_danmu_info")
             .await
-    }
-
-    async fn live_danmu_conf_legacy(&self, room_id: i64, cookies: &str) -> Result<LiveDanmuConf> {
-        let mut params = HashMap::new();
-        params.insert("room_id".to_string(), room_id.to_string());
-
-        let url = "https://api.live.bilibili.com/room/v1/Danmu/getConf";
-        let referer = "https://live.bilibili.com/";
-        debug!(url, room_id, "B站直播 API 请求: getConf");
-
-        let enriched = self.enrich_cookies(cookies).await?;
-        let request = self
-            .build_get_request(url, &params, referer, &enriched)
-            .await;
-        let resp = self.send_with_retry(request).await?;
-        let data = self
-            .parse_data::<LiveDanmuConf>(resp, "live_danmu_conf")
-            .await?;
-
-        if data.host_server_list.is_empty() {
-            return Err(anyhow!("直播间 {room_id} 未返回弹幕服务器列表"));
-        }
-
-        Ok(data)
     }
 }
 

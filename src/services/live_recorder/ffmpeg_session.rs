@@ -9,9 +9,19 @@ use tokio::process::ChildStdin;
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 const MAX_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
+const MIN_MERGED_DURATION_RATIO: f64 = 0.90;
+const MERGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+#[derive(Debug)]
+struct MediaProbe {
+    duration_secs: f64,
+    has_video: bool,
+    has_audio: bool,
+}
 
 /// 单个 FFmpeg 录制进程。
 pub struct FfmpegSession {
@@ -44,6 +54,16 @@ impl FfmpegSession {
             user_agent,
             "-referer",
             referer,
+            "-rw_timeout",
+            "30000000",
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_on_network_error",
+            "1",
+            "-reconnect_delay_max",
+            "10",
             "-i",
             stream_url,
             "-c",
@@ -99,7 +119,7 @@ impl FfmpegSession {
             return String::new();
         };
         match task.await {
-            Ok(Ok(bytes)) => String::from_utf8_lossy(&bytes).trim().to_string(),
+            Ok(Ok(bytes)) => redact_diagnostics(&String::from_utf8_lossy(&bytes)),
             Ok(Err(error)) => format!("读取 FFmpeg 诊断输出失败: {error}"),
             Err(error) => format!("FFmpeg 诊断任务异常退出: {error}"),
         }
@@ -173,6 +193,24 @@ impl Drop for FfmpegSession {
 ///
 /// 本函数不会删除任何输入分段；调用方只有在确认输出文件有效后才能清理输入。
 pub async fn merge_segments_to_mp4(ffmpeg_path: &Path, segments: &[PathBuf]) -> Result<PathBuf> {
+    merge_segments_to_mp4_inner(ffmpeg_path, segments, None).await
+}
+
+/// Merge segments while allowing a background job to terminate the FFmpeg
+/// child. Sources remain untouched when cancellation interrupts the merge.
+pub async fn merge_segments_to_mp4_cancelable(
+    ffmpeg_path: &Path,
+    segments: &[PathBuf],
+    cancellation: &CancellationToken,
+) -> Result<PathBuf> {
+    merge_segments_to_mp4_inner(ffmpeg_path, segments, Some(cancellation)).await
+}
+
+async fn merge_segments_to_mp4_inner(
+    ffmpeg_path: &Path,
+    segments: &[PathBuf],
+    cancellation: Option<&CancellationToken>,
+) -> Result<PathBuf> {
     if segments.is_empty() {
         return Err(anyhow!("没有可合并的直播分段"));
     }
@@ -182,6 +220,7 @@ pub async fn merge_segments_to_mp4(ffmpeg_path: &Path, segments: &[PathBuf]) -> 
         .expect("segments checked above")
         .to_path_buf();
     let output = first.with_extension("mp4");
+    let partial_output = first.with_extension("mp4.partial");
     let list_path = first.with_file_name(format!(
         ".{}.concat-{}.txt",
         first.file_stem().and_then(|v| v.to_str()).unwrap_or("live"),
@@ -196,25 +235,237 @@ pub async fn merge_segments_to_mp4(ffmpeg_path: &Path, segments: &[PathBuf]) -> 
         .await
         .with_context(|| format!("创建 FFmpeg 分段清单失败: {}", list_path.display()))?;
 
-    let result = run_merge_command(ffmpeg_path, &list_path, &output).await;
+    let result =
+        run_merge_command_timed(ffmpeg_path, &list_path, &partial_output, cancellation).await;
     if let Err(error) = tokio::fs::remove_file(&list_path).await {
         debug!(path = %list_path.display(), "删除临时分段清单失败: {error}");
     }
 
-    let output_size = tokio::fs::metadata(&output)
+    let output_size = tokio::fs::metadata(&partial_output)
         .await
         .map(|metadata| metadata.len())
         .unwrap_or(0);
+    if output_size == 0 {
+        let _ = tokio::fs::remove_file(&partial_output).await;
+    }
+    if cancellation.is_some_and(CancellationToken::is_cancelled) {
+        let _ = tokio::fs::remove_file(&partial_output).await;
+        return Err(anyhow!("FFmpeg merge cancelled"));
+    }
     match result {
         Ok(()) if output_size > 0 => {
+            if let Err(error) = verify_merged_output(ffmpeg_path, &partial_output, segments).await {
+                let _ = tokio::fs::remove_file(&partial_output).await;
+                return Err(error);
+            }
+            tokio::fs::rename(&partial_output, &output)
+                .await
+                .with_context(|| {
+                    format!("rename verified merge output failed: {}", output.display())
+                })?;
             info!(output = %output.display(), segments = segments.len(), "直播分段合并完成");
             Ok(output)
         }
         Ok(()) => Err(anyhow!("FFmpeg 合并完成但输出 MP4 为空")),
-        Err(error) => Err(error),
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&partial_output).await;
+            Err(error)
+        }
     }
 }
 
+/// A non-empty MP4 is not enough evidence that a concat succeeded. Probe the
+/// container before callers are allowed to remove original FLV segments.
+async fn verify_merged_output(
+    ffmpeg_path: &Path,
+    output: &Path,
+    segments: &[PathBuf],
+) -> Result<()> {
+    let output_probe = probe_media(ffmpeg_path, output).await?;
+    if !output_probe.has_video || !output_probe.has_audio {
+        return Err(anyhow!(
+            "合并输出缺少{}轨道",
+            if !output_probe.has_video {
+                "视频"
+            } else {
+                "音频"
+            }
+        ));
+    }
+    let mut input_duration = 0.0;
+    for segment in segments {
+        let probe = probe_media(ffmpeg_path, segment)
+            .await
+            .with_context(|| format!("校验合并输入分段失败: {}", segment.display()))?;
+        if probe.duration_secs <= 0.0 {
+            return Err(anyhow!("输入分段时长无效: {}", segment.display()));
+        }
+        input_duration += probe.duration_secs;
+    }
+    if output_probe.duration_secs < input_duration * MIN_MERGED_DURATION_RATIO {
+        return Err(anyhow!(
+            "合并输出时长不足: 输出 {:.3}s，输入合计 {:.3}s",
+            output_probe.duration_secs,
+            input_duration
+        ));
+    }
+    Ok(())
+}
+
+async fn probe_media(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
+    let probe = ffprobe_path(ffmpeg_path);
+    let result = Command::new(&probe)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration:stream=codec_type",
+            "-of",
+            "json",
+        ])
+        .arg(input)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .with_context(|| format!("启动 ffprobe 校验失败: {}", probe.display()))?;
+    if !result.status.success() {
+        return Err(anyhow!(
+            "ffprobe 校验失败: {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        ));
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(&result.stdout).context("解析 ffprobe 校验结果失败")?;
+    let streams = value
+        .get("streams")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("ffprobe 未返回 streams"))?;
+    let has_video = streams.iter().any(|stream| {
+        stream.get("codec_type").and_then(serde_json::Value::as_str) == Some("video")
+    });
+    let has_audio = streams.iter().any(|stream| {
+        stream.get("codec_type").and_then(serde_json::Value::as_str) == Some("audio")
+    });
+    let duration_secs = value
+        .pointer("/format/duration")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|duration| duration.parse::<f64>().ok())
+        .filter(|duration| duration.is_finite() && *duration >= 0.0)
+        .ok_or_else(|| anyhow!("ffprobe 未返回有效时长"))?;
+    Ok(MediaProbe {
+        duration_secs,
+        has_video,
+        has_audio,
+    })
+}
+
+fn ffprobe_path(ffmpeg_path: &Path) -> PathBuf {
+    let probe_name = if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    };
+    ffmpeg_path
+        .parent()
+        .map(|parent| parent.join(probe_name))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(probe_name))
+}
+
+async fn run_merge_command_timed(
+    ffmpeg_path: &Path,
+    list_path: &Path,
+    output: &Path,
+    cancellation: Option<&CancellationToken>,
+) -> Result<()> {
+    let mut cmd = Command::new(ffmpeg_path);
+    cmd.args([
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        &list_path.to_string_lossy(),
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        "-f",
+        "mp4",
+    ])
+    .arg(output)
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .kill_on_drop(true);
+
+    let mut child = cmd.spawn().context("failed to start FFmpeg merge")?;
+    let stdout_task = tokio::spawn(read_diagnostic(child.stdout.take()));
+    let stderr_task = tokio::spawn(read_diagnostic(child.stderr.take()));
+    let status = if let Some(cancellation) = cancellation {
+        tokio::select! {
+            _ = cancellation.cancelled() => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+                return Err(anyhow!("FFmpeg merge cancelled"));
+            }
+            result = timeout(MERGE_TIMEOUT, child.wait()) => {
+                match result {
+                    Ok(result) => result.context("failed to wait for FFmpeg merge")?,
+                    Err(_) => {
+                        warn!(timeout_secs = MERGE_TIMEOUT.as_secs(), "FFmpeg merge timed out");
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        let _ = stdout_task.await;
+                        let _ = stderr_task.await;
+                        return Err(anyhow!("FFmpeg merge timed out"));
+                    }
+                }
+            }
+        }
+    } else {
+        match timeout(MERGE_TIMEOUT, child.wait()).await {
+            Ok(result) => result.context("failed to wait for FFmpeg merge")?,
+            Err(_) => {
+                warn!(
+                    timeout_secs = MERGE_TIMEOUT.as_secs(),
+                    "FFmpeg merge timed out"
+                );
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+                return Err(anyhow!("FFmpeg merge timed out"));
+            }
+        }
+    };
+    let _stdout = stdout_task
+        .await
+        .context("failed to read FFmpeg merge stdout")??;
+    let stderr = stderr_task
+        .await
+        .context("failed to read FFmpeg merge stderr")??;
+    if !status.success() {
+        let diagnostics = redact_diagnostics(&String::from_utf8_lossy(&stderr));
+        error!(stderr = %diagnostics, "FFmpeg merge failed");
+        return Err(anyhow!(
+            "FFmpeg merge failed: {}",
+            diagnostics
+                .lines()
+                .last()
+                .unwrap_or("FFmpeg returned failure")
+        ));
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
 async fn run_merge_command(ffmpeg_path: &Path, list_path: &Path, output: &Path) -> Result<()> {
     let mut cmd = Command::new(ffmpeg_path);
     cmd.args([
@@ -258,6 +509,49 @@ async fn run_merge_command(ffmpeg_path: &Path, list_path: &Path, output: &Path) 
     Ok(())
 }
 
+pub(crate) fn redact_diagnostics(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(index) = rest.find("http://").or_else(|| rest.find("https://")) {
+        output.push_str(&rest[..index]);
+        let url = &rest[index..];
+        let end = url
+            .find(|character: char| {
+                character.is_whitespace() || character == ')' || character == ']'
+            })
+            .unwrap_or(url.len());
+        let token = &url[..end];
+        if let Some(query) = token.find('?') {
+            output.push_str(&token[..query]);
+            output.push_str("?<redacted>");
+        } else {
+            output.push_str("<redacted-url>");
+        }
+        rest = &url[end..];
+    }
+    output.push_str(rest);
+    for marker in [
+        "access_key=",
+        "auth_key=",
+        "token=",
+        "sign=",
+        "w_rid=",
+        "wts=",
+    ] {
+        let mut cursor = 0;
+        while let Some(relative) = output[cursor..].find(marker) {
+            let start = cursor + relative + marker.len();
+            let end = output[start..]
+                .find(|character: char| character.is_whitespace() || character == '&')
+                .map(|index| start + index)
+                .unwrap_or(output.len());
+            output.replace_range(start..end, "<redacted>");
+            cursor = start + "<redacted>".len();
+        }
+    }
+    output.trim().to_owned()
+}
+
 fn escape_concat_path(path: &Path) -> String {
     path.to_string_lossy().replace('\'', "'\\''")
 }
@@ -295,6 +589,7 @@ where
 mod tests {
     use super::*;
     use std::process::Stdio;
+    use tempfile::tempdir;
 
     fn spawn_test_child(script: &str) -> Child {
         #[cfg(windows)]
@@ -396,5 +691,129 @@ mod tests {
             escape_concat_path(&path),
             "C:\\recordings\\主播'\\''segment.flv"
         );
+    }
+
+    fn required_ffmpeg_bin() -> PathBuf {
+        let bin = std::env::var_os("FFMPEG_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(if cfg!(windows) {
+                    "ffmpeg.exe"
+                } else {
+                    "ffmpeg"
+                })
+            });
+        std::process::Command::new(&bin)
+            .arg("-version")
+            .output()
+            .unwrap_or_else(|error| {
+                panic!(
+                "真实媒体集成测试要求可用 ffmpeg；请设置 FFMPEG_BIN 或将 ffmpeg 加入 PATH: {error}"
+            )
+            });
+        let probe = ffprobe_path(&bin);
+        std::process::Command::new(&probe)
+            .arg("-version")
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("真实媒体集成测试要求可用 ffprobe；请将其置于 ffmpeg 同目录或 PATH: {error}")
+            });
+        bin
+    }
+
+    async fn generate_fixture(ffmpeg: &Path, output: &Path) {
+        let result = Command::new(ffmpeg)
+            .args([
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x90:rate=25",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=1000:sample_rate=44100",
+                "-t",
+                "1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-f",
+                "flv",
+            ])
+            .arg(output)
+            .output()
+            .await
+            .expect("run ffmpeg fixture generation");
+        assert!(
+            result.status.success(),
+            "fixture generation failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_real_flv_segments_preserves_duration_and_tracks() {
+        let ffmpeg = required_ffmpeg_bin();
+        let temp = tempdir().expect("temporary directory");
+        let media_dir = temp.path().join("直播 ' 媒体夹具");
+        tokio::fs::create_dir_all(&media_dir)
+            .await
+            .expect("media directory");
+        let first = media_dir.join("第一段.flv");
+        let second = media_dir.join("第二段.flv");
+        generate_fixture(&ffmpeg, &first).await;
+        generate_fixture(&ffmpeg, &second).await;
+
+        let output = merge_segments_to_mp4(&ffmpeg, &[first.clone(), second.clone()])
+            .await
+            .expect("merge real FLV fixtures");
+        let probe = probe_media(&ffmpeg, &output)
+            .await
+            .expect("probe merged output");
+        assert!(probe.has_video && probe.has_audio);
+        assert!(
+            probe.duration_secs >= 1.8,
+            "merged duration: {}",
+            probe.duration_secs
+        );
+        assert!(
+            first.exists() && second.exists(),
+            "merger must not remove source segments"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_merge_keeps_source_segment() {
+        let ffmpeg = required_ffmpeg_bin();
+        let temp = tempdir().expect("temporary directory");
+        let source = temp.path().join("损坏片段.flv");
+        tokio::fs::write(&source, b"not a media stream")
+            .await
+            .expect("write source");
+        assert!(
+            merge_segments_to_mp4(&ffmpeg, std::slice::from_ref(&source))
+                .await
+                .is_err()
+        );
+        assert!(
+            source.exists(),
+            "failed validation must retain recovery input"
+        );
+    }
+
+    #[test]
+    fn diagnostics_redact_urls_and_signed_query_values() {
+        let value = redact_diagnostics(
+            "GET https://cdn.example/live.flv?token=secret&sign=signature w_rid=rid",
+        );
+        assert!(!value.contains("secret"));
+        assert!(!value.contains("signature"));
+        assert!(!value.contains("=rid"));
     }
 }

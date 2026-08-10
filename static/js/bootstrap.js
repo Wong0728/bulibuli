@@ -221,13 +221,23 @@ function escapeStartupMessage(message) {
 export function initTabSwitching() {
     document.querySelectorAll('.nav-tab').forEach(tab => {
         tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+        tab.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                switchTab(tab.dataset.tab);
+            }
+        });
     });
 }
 
 export function switchTab(tabName) {
     document.querySelectorAll('.tab-panel, .nav-tab').forEach(el => el.classList.remove('active'));
     document.getElementById(`tab-${tabName}`).classList.add('active');
-    document.querySelector(`.nav-tab[data-tab="${tabName}"]`).classList.add('active');
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+        const selected = tab.dataset.tab === tabName;
+        tab.classList.toggle('active', selected);
+        tab.setAttribute('aria-selected', String(selected));
+    });
     if (tabName === 'history') {
         // 每次进入下载管理都实时从后端拉取看板数据
         loadHistoryBoard(_state.currentBoardTab);

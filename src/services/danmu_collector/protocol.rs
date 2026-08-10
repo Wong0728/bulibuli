@@ -71,10 +71,10 @@ pub fn make_packet(data: &Value, operation: u32) -> Vec<u8> {
 
 /// 构造认证包（op=7）。
 ///
-/// `uid=0` 表示游客模式，此时 `token` 可为空字符串。
-pub fn make_auth_packet(room_id: i64, token: &str) -> Vec<u8> {
+/// 认证必须使用登录 Cookie 中的账号 UID 与 `getDanmuInfo` 返回的 token。
+pub fn make_auth_packet(room_id: i64, uid: i64, token: &str) -> Vec<u8> {
     let data = serde_json::json!({
-        "uid": 0,
+        "uid": uid,
         "roomid": room_id,
         "protover": 3,
         "platform": "web",
@@ -87,6 +87,13 @@ pub fn make_auth_packet(room_id: i64, token: &str) -> Vec<u8> {
 /// 构造心跳包（op=2），正文为空对象。
 pub fn make_heartbeat_packet() -> Vec<u8> {
     make_packet(&serde_json::json!({}), op::HEARTBEAT)
+}
+
+/// 一帧中每个外层协议包的解析结果。保留 operation 供认证流程严格校验。
+#[derive(Debug, Clone)]
+pub struct ParsedFrame {
+    pub operation: u32,
+    pub values: Vec<Value>,
 }
 
 /// 从 WebSocket 二进制消息中解析出所有命令 JSON。
@@ -106,39 +113,73 @@ pub fn parse_commands(raw: &[u8]) -> Result<Vec<Value>> {
         ));
     }
 
-    let total_len = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
-    let header_len = u16::from_be_bytes([raw[4], raw[5]]) as usize;
-    let proto_ver = u16::from_be_bytes([raw[6], raw[7]]);
-    let operation = u32::from_be_bytes([raw[8], raw[9], raw[10], raw[11]]);
+    Ok(parse_frames(raw)?
+        .into_iter()
+        .flat_map(|frame| frame.values)
+        .collect())
+}
 
-    validate_packet_bounds(raw.len(), total_len, header_len)?;
-    let packet = &raw[..total_len];
-
-    // 心跳回复：前 4 字节是人气值，不作为命令处理
-    if operation == op::HEARTBEAT_REPLY {
-        return Ok(Vec::new());
+/// 解析 WebSocket frame 中所有外层协议包，禁止静默丢弃尾包。
+pub fn parse_frames(raw: &[u8]) -> Result<Vec<ParsedFrame>> {
+    if raw.len() < HEADER_SIZE {
+        return Err(anyhow!("弹幕数据包过短: {} 字节", raw.len()));
+    }
+    if raw.len() > MAX_WIRE_PACKET_SIZE {
+        return Err(anyhow!(
+            "弹幕数据包超过 {} MiB 限制",
+            MAX_WIRE_PACKET_SIZE / 1024 / 1024
+        ));
     }
 
-    // 认证回复：直接解析 body 为 JSON
-    if operation == op::AUTH_REPLY {
-        let body = &packet[header_len..];
-        let value: Value = serde_json::from_slice(body).context("解析认证回复 JSON 失败")?;
-        return Ok(vec![value]);
+    let mut offset = 0;
+    let mut frames = Vec::new();
+    while offset < raw.len() {
+        let remaining = raw.len() - offset;
+        if remaining < HEADER_SIZE {
+            return Err(anyhow!("弹幕外层包头不完整: remaining={remaining}"));
+        }
+        let packet = &raw[offset..];
+        let total_len = u32::from_be_bytes([packet[0], packet[1], packet[2], packet[3]]) as usize;
+        let header_len = u16::from_be_bytes([packet[4], packet[5]]) as usize;
+        let proto_ver = u16::from_be_bytes([packet[6], packet[7]]);
+        let operation = u32::from_be_bytes([packet[8], packet[9], packet[10], packet[11]]);
+        validate_packet_bounds(remaining, total_len, header_len)?;
+        let body = &packet[header_len..total_len];
+        let values = match operation {
+            op::HEARTBEAT_REPLY => Vec::new(),
+            op::AUTH_REPLY => vec![serde_json::from_slice(body).context("解析认证回复 JSON 失败")?],
+            op::COMMAND if matches!(proto_ver, proto::PLAIN | proto::HEARTBEAT_AUTH) => {
+                vec![serde_json::from_slice(body).context("解析明文弹幕 JSON 失败")?]
+            }
+            op::COMMAND => extract_sub_commands(&decompress_body(body, proto_ver)?, 0)?,
+            _ => Vec::new(),
+        };
+        frames.push(ParsedFrame { operation, values });
+        offset += total_len;
     }
+    Ok(frames)
+}
 
-    // 命令包（op=5）：普通正文直接解析 JSON，压缩正文才拆子包。
-    if operation != op::COMMAND {
-        return Ok(Vec::new());
+/// 严格验证认证首包，只有 `op=8` 和 `code=0` 才可视为连接成功。
+pub fn validate_auth_reply(raw: &[u8]) -> Result<()> {
+    let frames = parse_frames(raw)?;
+    let Some(frame) = frames.first() else {
+        return Err(anyhow!("认证回复为空"));
+    };
+    if frame.operation != op::AUTH_REPLY {
+        return Err(anyhow!(
+            "认证回复操作码非法: expected=8, actual={}",
+            frame.operation
+        ));
     }
-
-    let body = &packet[header_len..];
-    if matches!(proto_ver, proto::PLAIN | proto::HEARTBEAT_AUTH) {
-        let value: Value = serde_json::from_slice(body).context("解析明文弹幕 JSON 失败")?;
-        return Ok(vec![value]);
+    let Some(value) = frame.values.first() else {
+        return Err(anyhow!("认证回复缺少 JSON 正文"));
+    };
+    match value.get("code").and_then(Value::as_i64) {
+        Some(0) => Ok(()),
+        Some(code) => Err(anyhow!("弹幕认证失败: code={code}")),
+        None => Err(anyhow!("认证回复缺少 code")),
     }
-
-    let decompressed = decompress_body(body, proto_ver)?;
-    extract_sub_commands(&decompressed, 0)
 }
 
 fn validate_packet_bounds(raw_len: usize, total_len: usize, header_len: usize) -> Result<()> {
@@ -260,7 +301,7 @@ mod tests {
 
     #[test]
     fn make_auth_packet_has_correct_header() {
-        let packet = make_auth_packet(32352630, "test_token");
+        let packet = make_auth_packet(32352630, 114514, "test_token");
         assert!(packet.len() > HEADER_SIZE);
 
         let total_len = u32::from_be_bytes([packet[0], packet[1], packet[2], packet[3]]) as usize;
@@ -280,7 +321,7 @@ mod tests {
         let json: Value = serde_json::from_slice(body).expect("auth body is JSON");
         assert_eq!(json["roomid"], 32352630);
         assert_eq!(json["key"], "test_token");
-        assert_eq!(json["uid"], 0);
+        assert_eq!(json["uid"], 114514);
         assert_eq!(json["protover"], 3);
     }
 
@@ -289,6 +330,27 @@ mod tests {
         let packet = make_heartbeat_packet();
         let operation = u32::from_be_bytes([packet[8], packet[9], packet[10], packet[11]]);
         assert_eq!(operation, op::HEARTBEAT);
+    }
+
+    #[test]
+    fn auth_reply_requires_op8_and_zero_code() {
+        let ok = make_packet(&serde_json::json!({"code": 0}), op::AUTH_REPLY);
+        assert!(validate_auth_reply(&ok).is_ok());
+        let rejected = make_packet(&serde_json::json!({"code": -101}), op::AUTH_REPLY);
+        assert!(validate_auth_reply(&rejected).is_err());
+        let wrong_operation = make_packet(&serde_json::json!({"code": 0}), op::COMMAND);
+        assert!(validate_auth_reply(&wrong_operation).is_err());
+    }
+
+    #[test]
+    fn parse_frames_preserves_all_top_level_packets() {
+        let one = make_packet(&serde_json::json!({"cmd": "ONE"}), op::COMMAND);
+        let two = make_packet(&serde_json::json!({"cmd": "TWO"}), op::COMMAND);
+        let mut frame = one;
+        frame.extend(two);
+        let frames = parse_frames(&frame).expect("multiple outer packets");
+        assert_eq!(frames.len(), 2);
+        assert_eq!(parse_commands(&frame).unwrap().len(), 2);
     }
 
     #[test]
