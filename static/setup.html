@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B站视频监控助手 - 初始设置</title>
+    <link rel="icon" href="bilibili.ico" type="image/x-icon">
+    <link rel="stylesheet" href="css/lib/fontawesome.min.css">
+    <link rel="stylesheet" href="css/setup.css">
+</head>
+<body>
+    <main class="setup-container" id="setup-main">
+        <div class="setup-header">
+            <h1><i class="fa-solid fa-gear"></i> 初始设置向导</h1>
+            <p>只需几步即可完成配置</p>
+        </div>
+
+        <!-- 步骤指示器 -->
+        <div class="step-indicator" aria-label="设置步骤">
+            <div class="step active" data-step="1" aria-current="step">
+                <span class="step-number">1</span>
+                <span class="step-label">使用场景</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step" data-step="2">
+                <span class="step-number">2</span>
+                <span class="step-label">场景配置</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step" data-step="3">
+                <span class="step-number">3</span>
+                <span class="step-label">完成</span>
+            </div>
+        </div>
+
+        <!-- Step 1: 使用场景选择 -->
+        <div class="step-panel active" id="step-1">
+            <h2 tabindex="-1">选择使用场景</h2>
+            <p class="step-desc">选择最符合你使用方式的场景，我们会据此配置网络访问策略。</p>
+            <div class="scene-cards">
+                <div class="scene-card" data-scene="local" role="button" tabindex="0" aria-pressed="false">
+                    <div class="scene-icon"><i class="fa-solid fa-laptop"></i></div>
+                    <div class="scene-title">仅本机</div>
+                    <div class="scene-desc">在自己电脑上使用，最安全</div>
+                </div>
+                <div class="scene-card" data-scene="lan" role="button" tabindex="0" aria-pressed="false">
+                    <div class="scene-icon"><i class="fa-solid fa-wifi"></i></div>
+                    <div class="scene-title">局域网</div>
+                    <div class="scene-desc">手机、平板也能访问</div>
+                </div>
+                <div class="scene-card" data-scene="remote" role="button" tabindex="0" aria-pressed="false">
+                    <div class="scene-icon"><i class="fa-solid fa-globe"></i></div>
+                    <div class="scene-title">远程访问</div>
+                    <div class="scene-desc">在外面也能用</div>
+                </div>
+            </div>
+
+            <!-- 远程访问二级选择 -->
+            <div class="remote-options" id="remote-options" hidden>
+                <h3>远程访问方式</h3>
+                <div class="scene-cards">
+                    <div class="scene-card" data-remote="proxy" role="button" tabindex="0" aria-pressed="false">
+                        <div class="scene-icon"><i class="fa-solid fa-server"></i></div>
+                        <div class="scene-title">有域名 + 反向代理</div>
+                        <div class="scene-desc">Caddy / Nginx，有 HTTPS</div>
+                    </div>
+                    <div class="scene-card" data-remote="tunnel" role="button" tabindex="0" aria-pressed="false">
+                        <div class="scene-icon"><i class="fa-solid fa-network-wired"></i></div>
+                        <div class="scene-title">内网穿透</div>
+                        <div class="scene-desc">frp / Cloudflare Tunnel 等</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-actions">
+                <button class="btn btn-primary" id="step1-next" disabled>下一步</button>
+            </div>
+        </div>
+
+        <!-- Step 2: 场景配置 -->
+        <div class="step-panel" id="step-2">
+            <h2 tabindex="-1">场景配置</h2>
+
+            <!-- 仅本机：跳过配置 -->
+            <div class="config-section" id="config-local" hidden>
+                <div class="config-info">
+                    <i class="fa-solid fa-check-circle config-success-icon"></i>
+                    <p>仅本机模式无需额外配置，服务将绑定 127.0.0.1。</p>
+                </div>
+            </div>
+
+            <!-- 局域网：安全策略 -->
+            <div class="config-section" id="config-lan" hidden>
+                <p>局域网模式下，同一网络内的设备可以访问服务。请选择安全策略：</p>
+                <div class="form-group">
+                    <label for="lan-access-policy">访问策略</label>
+                    <select id="lan-access-policy" class="form-control">
+                        <option value="allow" selected>推荐：全部允许（同网段设备可访问）</option>
+                        <option value="deny">默认拒绝（需手动添加允许规则）</option>
+                    </select>
+                    <div class="form-note">推荐“全部允许”，同网段设备均可访问。如需限制，可切换为“默认拒绝”后在设置页添加信任设备。</div>
+                </div>
+                <div class="detected-ips" id="detected-ips-lan">
+                    <p><i class="fa-solid fa-spinner fa-spin"></i> 正在检测网络地址...</p>
+                </div>
+            </div>
+
+            <!-- 反向代理：域名输入 -->
+            <div class="config-section" id="config-proxy" hidden>
+                <div class="form-group">
+                    <label for="proxy-domain">公开域名</label>
+                    <input type="text" id="proxy-domain" class="form-control" placeholder="downloads.example.com" aria-describedby="proxy-domain-note" autocomplete="url">
+                    <div class="form-note" id="proxy-domain-note">输入你的域名，确保已通过反向代理（Caddy/Nginx）映射到本机端口。</div>
+                </div>
+                <div class="caddy-config" id="caddy-config" hidden>
+                    <p>可复制的 Caddy 配置：</p>
+                    <pre id="caddy-config-content"></pre>
+                    <button class="btn btn-sm" id="copy-caddy-btn"><i class="fa-solid fa-copy"></i> 复制</button>
+                </div>
+            </div>
+
+            <!-- 内网穿透：引导 -->
+            <div class="config-section" id="config-tunnel" hidden>
+                <div class="config-info">
+                    <i class="fa-solid fa-info-circle"></i>
+                    <p>请确保你的内网穿透工具（frp / Cloudflare Tunnel 等）已配置好，将外部地址映射到本机端口。</p>
+                    <p>完成穿透配置后，点击"完成设置"即可。</p>
+                </div>
+            </div>
+
+            <div class="step-actions">
+                <button class="btn" id="step2-back">上一步</button>
+                <button class="btn btn-primary" id="step2-next">完成设置</button>
+            </div>
+        </div>
+
+        <!-- Step 3: 完成 -->
+        <div class="step-panel" id="step-3">
+            <h2 tabindex="-1">设置完成</h2>
+            <div class="config-info">
+                <i class="fa-solid fa-check-circle config-success-icon"></i>
+                <p id="setup-complete-message">配置已保存！你可以随时在设置页重新运行此向导。</p>
+            </div>
+
+            <!-- AI Skill 配置 -->
+            <div class="ai-skill-section">
+                <h3><i class="fa-solid fa-robot"></i> AI Skill 模式</h3>
+                <div class="form-group">
+                    <div class="choice-row">
+                        <label for="ai-skill-toggle">启用 AI Skill 模式</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="ai-skill-toggle">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-note">启用后，本机 AI 可通过命令编排下载/查询/管理。</div>
+                </div>
+
+                <div class="skill-path-section" id="skill-path-section" hidden>
+                    <p>AI Skill 文件路径：</p>
+                    <div class="path-box">
+                        <code id="skill-path-text">docs/skill.md</code>
+                        <button class="btn btn-sm" id="copy-skill-path-btn"><i class="fa-solid fa-copy"></i> 复制路径</button>
+                    </div>
+                    <div class="skill-usage">
+                        <p>使用方法：</p>
+                        <ol>
+                            <li>复制上面的路径</li>
+                            <li>打开你的 AI 助手</li>
+                            <li>发送："请阅读这个文件并学习如何使用"</li>
+                            <li>之后 AI 就能帮你操作下载器了</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 配置摘要 -->
+            <div class="config-summary" id="config-summary">
+                <h3>配置摘要</h3>
+                <div id="summary-content"></div>
+            </div>
+
+            <div class="step-actions">
+                <button class="btn btn-primary btn-large" id="enter-main-btn">
+                    <i class="fa-solid fa-arrow-right"></i> 进入主界面
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="js/setup.js"></script>
+</body>
+</html>
