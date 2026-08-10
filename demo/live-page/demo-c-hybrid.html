@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo C · 混合式 — 直播录制页方案</title>
+<style>
+/* ========== 与主站 style.css 一致的设计 token ========== */
+:root {
+    --brand: #fb7299; --brand-hover: #e85a89; --brand-soft: #fff0f3;
+    --bg: #f7f8fa; --surface: #ffffff; --surface-hover: #fafafa;
+    --border: #e5e6eb; --border-strong: #d0d1d9; --divider: #f0f1f5;
+    --text: #1d2129; --text-secondary: #4e5969; --text-muted: #86909c;
+    --success: #00b578; --success-text: #087443; --success-soft: #e8ffea;
+    --error: #f53f3f; --error-text: #b42318; --error-soft: #ffece8;
+    --warning: #ff7d00; --warning-text: #8a4b00; --warning-soft: #fff7e6;
+    --info: #165dff; --info-text: #175cd3; --info-soft: #e6f4ff;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.04); --shadow-md: 0 2px 8px rgba(0,0,0,.06); --shadow-lg: 0 4px 16px rgba(0,0,0,.08);
+    --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px; --radius-full: 9999px;
+    --font-base: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --transition-fast: 150ms ease;
+}
+[data-theme="dark"] {
+    --bg: #111318; --surface: #1b1e25; --surface-hover: #252934;
+    --border: #343946; --border-strong: #4a5161; --divider: #292e39;
+    --text: #f2f3f5; --text-secondary: #c9cdd4; --text-muted: #8f959e;
+    --brand-soft: #3a202b;
+    --success-soft: #0d3324; --warning-soft: #3d2a10; --error-soft: #3d1512; --info-soft: #122c4d;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font-base); font-size: 14px; padding-bottom: 48px; }
+
+/* ========== Demo 导航条 ========== */
+.demo-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--text); color: var(--bg); padding: 8px 16px; font-size: 12px; position: sticky; top: 0; z-index: 60; }
+.demo-bar a { color: inherit; opacity: .75; text-decoration: none; padding: 4px 10px; border-radius: var(--radius-full); }
+.demo-bar a.active, .demo-bar a:hover { opacity: 1; background: rgba(255,255,255,.14); }
+.demo-bar .demo-links { display: flex; gap: 4px; align-items: center; }
+.demo-bar button { background: rgba(255,255,255,.14); color: inherit; border: none; border-radius: var(--radius-full); padding: 4px 12px; cursor: pointer; font-size: 12px; }
+
+/* ========== 通用组件 ========== */
+.container { max-width: 1240px; margin: 0 auto; padding: 20px 16px 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; margin-bottom: 16px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 16px; border-radius: var(--radius-md); border: 1px solid transparent; font-size: 14px; cursor: pointer; transition: all var(--transition-fast); font-family: inherit; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary { background: var(--brand); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--brand-hover); }
+.btn-danger { background: var(--error); color: #fff; }
+.btn-ghost { background: transparent; color: var(--text-secondary); border-color: var(--border); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+.btn-sm { height: 28px; padding: 0 12px; font-size: 13px; }
+.form-control { width: 100%; padding: 8px 12px; height: 36px; border: 1px solid var(--border); border-radius: var(--radius-md); font-size: 14px; color: var(--text); background: var(--surface); outline: none; font-family: inherit; }
+.form-control:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.form-note { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+.empty-hint { color: var(--text-muted); font-size: 13px; padding: 24px; text-align: center; }
+
+/* ========== 徽章 ========== */
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; border-radius: var(--radius-full); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.badge.live { background: var(--brand-soft); color: var(--brand); }
+.badge.recording, .badge.capturing, .badge.ok { background: var(--success-soft); color: var(--success-text); }
+.badge.starting, .badge.stopping { background: var(--info-soft); color: var(--info-text); }
+.badge.offline, .badge.waiting { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+.badge.risk, .badge.stale, .badge.degraded { background: var(--warning-soft); color: var(--warning-text); }
+.badge.failed, .badge.unavailable { background: var(--error-soft); color: var(--error-text); }
+
+/* ========== Demo C 特色 1：顶部健康摘要条 ========== */
+.health-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.health-pill { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.health-pill .label { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; }
+.health-pill .value { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.health-pill .value .dot { width: 8px; height: 8px; border-radius: 50%; }
+.dot-ok { background: var(--success); }
+.dot-warn { background: var(--warning); }
+.dot-err { background: var(--error); }
+.health-pill.attention { border-color: var(--error); cursor: pointer; }
+.health-pill.attention .value { color: var(--error-text); }
+
+/* ========== 子 tab ========== */
+.board-sub-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; flex-wrap: wrap; }
+.board-sub-tab { padding: 10px 16px; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; background: none; border-top: none; border-left: none; border-right: none; font-family: inherit; transition: color var(--transition-fast); }
+.board-sub-tab:hover { color: var(--text); }
+.board-sub-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
+.board-tab-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--radius-full); background: var(--bg); color: var(--text-muted); font-size: 11px; font-weight: 600; }
+.board-sub-tab.active .board-tab-count { background: var(--brand-soft); color: var(--brand); }
+.board-tab-count.alert { background: var(--error-soft); color: var(--error-text); }
+.board-panel { display: none; }
+.board-panel.active { display: block; }
+
+/* ========== 直播源 tab：侧边栏 + 详情（博主页同款） ========== */
+.live-dashboard { display: grid; grid-template-columns: 250px 1fr; gap: 16px; min-height: 480px; }
+@media (max-width: 860px) { .live-dashboard { grid-template-columns: 1fr; } }
+.room-sidebar { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px; display: flex; flex-direction: column; }
+.room-sidebar-title { font-size: 13px; font-weight: 600; margin-bottom: 10px; padding: 2px 4px 8px; border-bottom: 1px solid var(--divider); display: flex; align-items: center; justify-content: space-between; }
+.room-list { overflow-y: auto; flex: 1; }
+.room-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--radius-md); cursor: pointer; margin-bottom: 4px; border: 1px solid transparent; transition: all var(--transition-fast); }
+.room-item:hover { background: var(--surface-hover); }
+.room-item.active { background: var(--brand-soft); border-color: var(--brand); }
+.room-avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.room-item-info { flex: 1; min-width: 0; }
+.room-item-name { font-weight: 500; font-size: 13px; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-item-meta { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.dot-sm { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--border-strong); }
+.dot-sm.live { background: var(--brand); }
+.dot-sm.recording { background: var(--success); }
+.dot-sm.risk { background: var(--warning); }
+.room-detail-panel { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px; background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+.room-detail-header { display: flex; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--divider); margin-bottom: 12px; flex-wrap: wrap; }
+.room-cover { width: 132px; height: 74px; border-radius: var(--radius-md); flex-shrink: 0; display: flex; align-items: flex-end; padding: 5px; }
+.room-cover .qn { font-size: 10px; background: rgba(0,0,0,.55); color: #fff; padding: 1px 6px; border-radius: var(--radius-sm); }
+.room-detail-main { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px; }
+.room-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.room-title { font-size: 15px; font-weight: 600; }
+.room-meta-row { font-size: 12px; color: var(--text-muted); display: flex; gap: 10px; flex-wrap: wrap; }
+.room-actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; align-items: center; }
+.status-display { background: var(--bg); border: 1px solid var(--border); padding: 10px 14px; border-radius: var(--radius-lg); margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 10px 26px; }
+.status-item { display: flex; flex-direction: column; gap: 2px; }
+.status-label { font-size: 11px; color: var(--text-muted); }
+.status-value { font-size: 13px; font-weight: 500; }
+.alert-note { display: flex; gap: 8px; align-items: flex-start; border-radius: var(--radius-md); padding: 8px 12px; font-size: 12px; margin-bottom: 12px; line-height: 1.6; }
+.alert-note.warn { background: var(--warning-soft); color: var(--warning-text); }
+.alert-note.error { background: var(--error-soft); color: var(--error-text); }
+
+/* ========== 录制中 tab：行 + 内联互动区（选中展开） ========== */
+.recording-block { border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 12px; background: var(--surface); overflow: hidden; }
+.recording-row { display: flex; align-items: center; gap: 14px; padding: 12px 14px; flex-wrap: wrap; cursor: pointer; }
+.recording-row:hover { background: var(--surface-hover); }
+.recording-main { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 4px; }
+.recording-title { font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.recording-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 12px; flex-wrap: wrap; }
+.recording-meta b { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.recording-actions { display: flex; gap: 8px; }
+.interaction-panel { border-top: 1px solid var(--divider); padding: 14px; display: none; background: var(--bg); }
+.recording-block.expanded .interaction-panel { display: block; }
+.expand-hint { font-size: 11px; color: var(--text-muted); }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.stat-cell { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 10px; }
+.stat-cell strong { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
+.stat-cell span { font-size: 11px; color: var(--text-muted); }
+.sc-card { background: linear-gradient(135deg, var(--info-soft), var(--brand-soft)); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 12px; margin-bottom: 8px; font-size: 13px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.sc-card p { flex-basis: 100%; color: var(--text-secondary); }
+.heat-bar { display: flex; align-items: flex-end; gap: 2px; height: 30px; margin: 8px 0; }
+.heat-bar i { flex: 1; background: var(--brand); opacity: .35; border-radius: 2px 2px 0 0; min-width: 4px; }
+.heat-bar i.hot { opacity: .9; }
+.event-list { border: 1px solid var(--divider); border-radius: var(--radius-md); background: var(--surface); max-height: 220px; overflow-y: auto; }
+.event-row { display: grid; grid-template-columns: 60px minmax(70px,130px) 1fr auto; gap: 8px; padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--divider); align-items: baseline; }
+.event-row:last-child { border-bottom: none; }
+.event-row time { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.event-row .user { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-row .text { color: var(--text-secondary); overflow-wrap: anywhere; }
+.event-type { font-size: 10px; padding: 1px 6px; border-radius: var(--radius-full); border: 1px solid var(--border); color: var(--text-muted); }
+.filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.filter-row select { width: 160px; height: 30px; }
+
+/* ========== 最近录制 / 需要处理 ========== */
+.list-row { display: flex; align-items: center; gap: 12px; padding: 12px 4px; border-bottom: 1px solid var(--divider); flex-wrap: wrap; }
+.list-row:last-child { border-bottom: none; }
+.list-info { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 3px; }
+.list-title { font-weight: 500; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.list-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 10px; flex-wrap: wrap; }
+.list-actions { display: flex; gap: 6px; }
+progress { width: 130px; accent-color: var(--brand); }
+
+/* 弹窗 */
+dialog { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); padding: 20px; width: min(440px, 92vw); box-shadow: var(--shadow-lg); }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+.dialog-field { margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
+.dialog-field label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.toggle-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.tz-note { font-size: 12px; color: var(--info-text); background: var(--info-soft); border-radius: var(--radius-md); padding: 6px 10px; }
+</style>
+</head>
+<body>
+<div class="demo-bar">
+    <span>直播页方案 Demo（静态 mock 数据，仅对比布局与交互思路）</span>
+    <div class="demo-links">
+        <a href="demo-a-sidebar.html">A · 侧边栏+详情</a>
+        <a href="demo-b-board.html">B · 子tab看板</a>
+        <a href="demo-c-hybrid.html" class="active">C · 混合式</a>
+        <button id="theme-toggle" type="button">切换深浅色</button>
+    </div>
+</div>
+
+<div class="container">
+    <!-- 顶部健康摘要条 -->
+    <div class="health-strip">
+        <div class="health-pill"><span class="label">监控 worker</span><span class="value"><i class="dot dot-ok"></i>运行中 · 心跳 3 秒前</span></div>
+        <div class="health-pill"><span class="label">B 站状态新鲜度</span><span class="value"><i class="dot dot-ok"></i>18 秒前更新</span></div>
+        <div class="health-pill"><span class="label">直播中 / 录制中</span><span class="value">3 / 2</span></div>
+        <div class="health-pill"><span class="label">互动采集</span><span class="value"><i class="dot dot-warn"></i>1 路已降级</span></div>
+        <div class="health-pill"><span class="label">磁盘余量</span><span class="value">182 GB · 预警线 10 GB</span></div>
+        <div class="health-pill attention" onclick="switchPanel('attention')"><span class="label">需要处理</span><span class="value">2 项待处理</span></div>
+    </div>
+
+    <div class="card">
+        <div class="board-sub-tabs" role="tablist">
+            <button class="board-sub-tab active" data-panel="sources" type="button">直播源 <span class="board-tab-count">6</span></button>
+            <button class="board-sub-tab" data-panel="recording" type="button">录制中 <span class="board-tab-count">2</span></button>
+            <button class="board-sub-tab" data-panel="history" type="button">最近录制 <span class="board-tab-count">3</span></button>
+            <button class="board-sub-tab" data-panel="attention" type="button">需要处理 <span class="board-tab-count alert">2</span></button>
+        </div>
+
+        <!-- 直播源：侧边栏 + 详情 -->
+        <div class="board-panel active" id="panel-sources">
+            <div class="live-dashboard">
+                <aside class="room-sidebar">
+                    <div class="room-sidebar-title">
+                        <span>直播源（6）</span>
+                        <button class="btn btn-sm btn-ghost" type="button" onclick="alert('支持房间号 / 直播 URL / 批量粘贴，默认关闭自动录制')">添加</button>
+                    </div>
+                    <div class="room-list" id="room-list"></div>
+                </aside>
+                <div class="room-detail-panel" id="room-detail"></div>
+            </div>
+        </div>
+
+        <!-- 录制中：点击行展开内联互动区 -->
+        <div class="board-panel" id="panel-recording">
+            <div class="recording-block expanded" id="block-1">
+                <div class="recording-row" onclick="toggleBlock('block-1')">
+                    <div class="recording-main">
+                        <span class="recording-title">深夜点歌台 · 接受点歌
+                            <span class="badge recording">录制中</span><span class="badge capturing">互动采集中</span>
+                        </span>
+                        <span class="recording-meta">
+                            <span>#8178490 · 星汐Sora</span><span>时长 <b>01:23:45</b></span><span><b>4.2 GB</b></span>
+                            <span>原画 (10000)</span><span>自动触发</span><span class="expand-hint">点击展开互动</span>
+                        </span>
+                    </div>
+                    <div class="recording-actions">
+                        <button class="btn btn-sm btn-danger" type="button" onclick="event.stopPropagation();alert('停止会先收尾互动数据，再合并并校验录制文件；该过程可能需要一些时间。')">停止并合并</button>
+                    </div>
+                </div>
+                <div class="interaction-panel">
+                    <p class="form-note" style="margin-bottom:10px">口径：观看为 B 站累计"看过"；互动人数 = 可识别互动的去重 UID；金额为估算、不作结算依据。仅显示最近 100 条。</p>
+                    <div class="stats-grid">
+                        <div class="stat-cell"><strong>12,483</strong><span>弹幕</span></div>
+                        <div class="stat-cell"><strong>3,211</strong><span>互动人数</span></div>
+                        <div class="stat-cell"><strong>862</strong><span>免费礼物</span></div>
+                        <div class="stat-cell"><strong>37</strong><span>付费礼物</span></div>
+                        <div class="stat-cell"><strong>5</strong><span>SC</span></div>
+                        <div class="stat-cell"><strong>3</strong><span>上舰</span></div>
+                        <div class="stat-cell"><strong>45,210</strong><span>累计看过</span></div>
+                        <div class="stat-cell"><strong>¥1,289.50</strong><span>估算付费价值</span></div>
+                    </div>
+                    <div class="sc-card"><strong>太子殿下</strong><span style="color:var(--warning-text);font-weight:600">¥100</span><span style="font-size:11px;color:var(--text-muted)">剩余 58 秒</span><p>点一首《起风来》</p></div>
+                    <div class="filter-row">
+                        <select class="form-control"><option>全部互动</option><option>弹幕</option><option>礼物</option><option>SC</option><option>上舰</option><option>连麦 / PK</option></select>
+                        <span class="form-note">实时互动状态：正常 · 最后事件 2 秒前</span>
+                    </div>
+                    <div class="heat-bar" id="heat-1"></div>
+                    <div class="event-list" id="events-1"></div>
+                </div>
+            </div>
+
+            <div class="recording-block" id="block-2">
+                <div class="recording-row" onclick="toggleBlock('block-2')">
+                    <div class="recording-main">
+                        <span class="recording-title">早安直播 · 聊天
+                            <span class="badge recording">录制中</span><span class="badge degraded">互动已降级</span>
+                        </span>
+                        <span class="recording-meta">
+                            <span>#732 · 白上吹雪</span><span>时长 <b>00:41:02</b></span><span><b>1.8 GB</b></span>
+                            <span>蓝光 (400) · 申请原画被降级</span><span>自动触发</span>
+                        </span>
+                        <span class="alert-note warn" style="margin:4px 0 0">弹幕连接在 00:12:40 熔断（认证被拒绝），本场仅录制视频，不影响画面。</span>
+                    </div>
+                    <div class="recording-actions">
+                        <button class="btn btn-sm btn-danger" type="button" onclick="event.stopPropagation()">停止并合并</button>
+                    </div>
+                </div>
+                <div class="interaction-panel"><div class="empty-hint">本场互动采集已降级，无互动数据。</div></div>
+            </div>
+        </div>
+
+        <!-- 最近录制 -->
+        <div class="board-panel" id="panel-history">
+            <div class="list-row">
+                <div class="list-info">
+                    <span class="list-title">周末歌会 · 完整场 <span class="badge ok">自然下播</span></span>
+                    <span class="list-meta"><span>#8178490</span><span>2026-08-09 22:41</span><span>03:12:09</span><span>6.8 GB</span><span>互动归档 12,483 条</span></span>
+                </div>
+                <div class="list-actions"><button class="btn btn-sm btn-ghost" type="button">打开目录</button><button class="btn btn-sm btn-ghost" type="button">复制路径</button></div>
+            </div>
+            <div class="list-row">
+                <div class="list-info">
+                    <span class="list-title">游戏排位冲分 <span class="badge offline">手动停止</span></span>
+                    <span class="list-meta"><span>#1871977513</span><span>2026-08-09 18:02</span><span>01:08:33</span><span>2.9 GB</span></span>
+                </div>
+                <div class="list-actions"><button class="btn btn-sm btn-ghost" type="button">打开目录</button></div>
+            </div>
+            <div class="list-row">
+                <div class="list-info">
+                    <span class="list-title">深夜电台 · 合并失败 <span class="badge failed">失败可恢复</span></span>
+                    <span class="list-meta"><span>#22102040</span><span>2026-08-08 23:55</span><span>02:20:14</span><span>保留分段 2 个</span><span>原因：输出文件缺少音轨</span></span>
+                </div>
+                <div class="list-actions"><button class="btn btn-sm btn-primary" type="button">重试合并</button><button class="btn btn-sm btn-ghost" type="button">打开目录</button></div>
+            </div>
+        </div>
+
+        <!-- 需要处理 -->
+        <div class="board-panel" id="panel-attention">
+            <div class="alert-note warn">B 站限制了状态检查 · 受影响：老陈电台。预计 240 秒后自动重试，期间显示最后一次成功结果。退避等级会在恢复成功后自动回落。</div>
+            <div class="list-row">
+                <div class="list-info">
+                    <span class="list-title">后台合并 · 录制 #118</span>
+                    <span class="list-meta"><span>3 个分段 → MP4（faststart）</span></span>
+                </div>
+                <progress max="100" value="62"></progress><span style="font-size:12px">62%</span>
+                <div class="list-actions"><button class="btn btn-sm btn-ghost" type="button">取消</button></div>
+            </div>
+            <div class="list-row">
+                <div class="list-info">
+                    <span class="list-title">#107 深夜电台 · 合并失败保留分段 <span class="badge failed">失败可恢复</span></span>
+                    <span class="list-meta"><span>保留源分段 2 个</span><span>原因：输出文件缺少音轨</span></span>
+                </div>
+                <div class="list-actions"><button class="btn btn-sm btn-primary" type="button">重试合并</button><button class="btn btn-sm btn-ghost" type="button">打开目录</button></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 设置弹窗 -->
+<dialog id="source-dialog">
+    <div style="font-weight:600;margin-bottom:14px">直播源设置 · 房间 <b id="dialog-room"></b></div>
+    <div class="dialog-field"><label class="toggle-row"><input type="checkbox" checked> 自动录制（开播时自动开始）</label></div>
+    <div class="dialog-field">
+        <label>清晰度上限</label>
+        <select class="form-control"><option>原画</option><option>蓝光</option><option>超清</option><option>高清</option></select>
+    </div>
+    <div class="dialog-field">
+        <label>互动采集</label>
+        <select class="form-control"><option>标准（推荐）</option><option>完整原始数据</option><option>关闭</option></select>
+    </div>
+    <div class="dialog-field">
+        <label class="toggle-row"><input type="checkbox" checked> 全天允许自动开始</label>
+        <p class="form-note">取消勾选后显示 7 天 × 2 时段排期编辑器（此处从略）。</p>
+    </div>
+    <div class="tz-note">排期按服务器时区生效：Asia/Shanghai（服务器当前时间 21:14）</div>
+    <div class="dialog-actions">
+        <button class="btn btn-ghost" type="button" onclick="document.getElementById('source-dialog').close()">取消</button>
+        <button class="btn btn-primary" type="button" onclick="document.getElementById('source-dialog').close()">保存</button>
+    </div>
+</dialog>
+
+<script>
+const ROOMS = [
+    { id: 8178490, anchor: '星汐Sora', live: true, auto: true, grad: 'linear-gradient(135deg,#5b3b8c,#fb7299)',
+      title: '深夜点歌台 · 接受点歌', recording: true, checked: '18 秒前', schedule: '全天',
+      badges: [['live','直播中'],['recording','视频 录制中'],['capturing','互动 采集中']],
+      status: [['录制时长','01:23:45'],['文件大小','4.2 GB'],['触发方式','自动'],['清晰度','原画 (10000)'],['分段状态','分段 1 · 无重启']] },
+    { id: 732, anchor: '白上吹雪', live: true, auto: true, grad: 'linear-gradient(135deg,#165dff,#7ee787)',
+      title: '早安直播 · 聊天', recording: true, checked: '12 秒前', schedule: '全天',
+      badges: [['live','直播中'],['recording','视频 录制中'],['degraded','互动 已降级']],
+      status: [['录制时长','00:41:02'],['文件大小','1.8 GB'],['触发方式','自动'],['清晰度','蓝光 (400) · 申请原画被降级'],['分段状态','分段 1']],
+      alert: { kind: 'warn', text: '互动采集已降级：弹幕连接在 00:12:40 熔断（认证被拒绝），本场仅录制视频。' } },
+    { id: 1871977513, anchor: '小狼XF', live: true, auto: false, grad: 'linear-gradient(135deg,#ff7d00,#fb7299)',
+      title: '游戏排位冲分', checked: '5 秒前', schedule: '计划未启用',
+      badges: [['live','直播中'],['starting','视频 启动中'],['starting','互动 连接中']],
+      alert: { kind: 'warn', text: '正在解析流地址并初始化录制会话，可随时取消启动。' } },
+    { id: 21452505, anchor: '阿枝', live: false, auto: true, grad: 'linear-gradient(135deg,#00b578,#165dff)',
+      title: null, checked: '42 秒前', schedule: '周一~周五 18:00-23:30 · 下次：明天 18:00',
+      badges: [['offline','未开播']] },
+    { id: 36080905, anchor: '奈奈Nana', live: false, auto: false, grad: 'linear-gradient(135deg,#86909c,#4e5969)',
+      title: null, checked: '尚未检查（1 分钟内首次检查）', schedule: '计划未启用',
+      badges: [['waiting','等待首次检查']] },
+    { id: 22102040, anchor: '老陈电台', live: false, auto: true, grad: 'linear-gradient(135deg,#8a4b00,#ff7d00)',
+      title: null, checked: '6 分钟前', schedule: '全天',
+      badges: [['risk','B站检查受限'],['stale','状态已过期']],
+      alert: { kind: 'error', text: 'B 站当前限制状态检查：本页显示的是最后一次成功结果，不代表当前真实开播状态。预计 240 秒后自动重试。' } },
+];
+let selected = ROOMS[0];
+
+function renderSidebar() {
+    document.getElementById('room-list').innerHTML = ROOMS.map(room => `
+        <div class="room-item ${room === selected ? 'active' : ''}" data-id="${room.id}">
+            <div class="room-avatar" style="background:${room.grad}">${room.anchor.slice(0,1)}</div>
+            <div class="room-item-info">
+                <div class="room-item-name">${room.anchor}
+                    <span class="dot-sm ${room.recording ? 'recording' : room.riskDot ? 'risk' : room.live ? 'live' : ''}"></span>
+                </div>
+                <div class="room-item-meta">#${room.id} · ${room.auto ? '自动' : '手动'}</div>
+            </div>
+        </div>`).join('');
+}
+
+function renderDetail() {
+    const room = selected;
+    let html = `
+        <div class="room-detail-header">
+            <div class="room-cover" style="background:${room.grad}"></div>
+            <div class="room-detail-main">
+                <div class="room-title-row">
+                    <span class="room-title">${room.title || '（未开播，暂无标题）'}</span>
+                    ${room.badges.map(([cls, text]) => `<span class="badge ${cls}">${text}</span>`).join('')}
+                </div>
+                <div class="room-meta-row"><span>${room.anchor}</span><span>#${room.id}</span><span>最近检查：${room.checked}</span></div>
+                <div class="room-actions">
+                    ${room.recording
+                        ? `<button class="btn btn-danger btn-sm" type="button">停止并合并</button>`
+                        : `<button class="btn btn-primary btn-sm" type="button" ${room.live ? '' : 'disabled'}>${room.badges.some(([c]) => c === 'starting') ? '启动中…（可取消）' : '开始录制'}</button>`}
+                    <button class="btn btn-ghost btn-sm" type="button" onclick="openSettings()">设置</button>
+                    <button class="btn btn-ghost btn-sm" type="button" ${room.recording ? 'disabled title="录制中不可删除"' : ''}>删除源</button>
+                    <span class="form-note" style="margin-left:auto">自动录制：${room.auto ? '开' : '关'} · ${room.schedule}</span>
+                </div>
+            </div>
+        </div>`;
+    if (room.alert) html += `<div class="alert-note ${room.alert.kind}">${room.alert.text}</div>`;
+    if (room.status) {
+        html += `<div class="status-display">${room.status.map(([label, value]) =>
+            `<div class="status-item"><span class="status-label">${label}</span><span class="status-value">${value}</span></div>`).join('')}</div>`;
+    }
+    if (!room.recording && !room.alert) {
+        html += `<div class="empty-hint">${room.badges.some(([c]) => c === 'waiting') ? '新添加的直播源，等待第一次状态检查。' : '当前未在录制。开启自动录制或点击"开始录制"。'}</div>`;
+    }
+    document.getElementById('room-detail').innerHTML = html;
+}
+
+const EVENTS = [
+    { t: '01:23:12', type: '弹幕', user: '路过的观众A', text: '唱得太好了！！' },
+    { t: '01:22:58', type: '礼物', user: '小明同学', text: '烟花 ×2（免费）' },
+    { t: '01:22:31', type: 'SC', user: '太子殿下', text: '¥100 · 点一首《起风来》' },
+    { t: '01:22:07', type: '弹幕', user: '山间清风', text: '来了来了' },
+    { t: '01:21:44', type: '上舰', user: '夜航西飞', text: '开通舰长（提督）' },
+    { t: '01:21:20', type: '弹幕', user: '白给战士', text: '前排' },
+    { t: '01:20:55', type: '礼物', user: '匿名观众', text: '电池 ×30（付费）' },
+];
+
+function toggleBlock(id) { document.getElementById(id).classList.toggle('expanded'); }
+function openSettings() {
+    document.getElementById('dialog-room').textContent = selected.id;
+    document.getElementById('source-dialog').showModal();
+}
+function switchPanel(name) {
+    document.querySelectorAll('.board-sub-tab').forEach(node => node.classList.toggle('active', node.dataset.panel === name));
+    document.querySelectorAll('.board-panel').forEach(node => node.classList.toggle('active', node.id === 'panel-' + name));
+}
+
+document.querySelector('.board-sub-tabs').addEventListener('click', event => {
+    const tab = event.target.closest('.board-sub-tab');
+    if (tab) switchPanel(tab.dataset.panel);
+});
+document.getElementById('room-list').addEventListener('click', event => {
+    const item = event.target.closest('.room-item');
+    if (!item) return;
+    selected = ROOMS.find(room => String(room.id) === item.dataset.id);
+    renderSidebar(); renderDetail();
+});
+document.getElementById('theme-toggle').addEventListener('click', () => {
+    const root = document.documentElement;
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+});
+
+document.getElementById('heat-1').innerHTML =
+    [3,5,2,8,12,6,4,9,15,7,3,6,10].map(v => `<i style="height:${v*2}px" class="${v>10?'hot':''}"></i>`).join('');
+document.getElementById('events-1').innerHTML = EVENTS.map(e =>
+    `<div class="event-row"><time>${e.t}</time><span class="user">${e.user}</span><span class="text">${e.text}</span><span class="event-type">${e.type}</span></div>`).join('');
+
+renderSidebar(); renderDetail();
+</script>
+</body>
+</html>

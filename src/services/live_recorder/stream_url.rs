@@ -64,7 +64,7 @@ pub fn select_stream_candidates(
     let mut seen = std::collections::HashSet::new();
     sorted.retain(|stream| seen.insert(stream.url.clone()));
     if sorted.is_empty() {
-        return Err(anyhow!("娴佸湴鍧€鍒楄〃涓虹┖"));
+        return Err(anyhow!("流地址列表为空"));
     }
     Ok(sorted)
 }

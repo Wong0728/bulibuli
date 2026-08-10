@@ -396,10 +396,13 @@ impl LiveMonitor {
         warn!(delay, "B站直播状态检查受限，启用全局退避");
     }
 
+    /// 退避衰减：连续 3 批成功检查后降低一级退避等级；等级归零后彻底清除退避。
+    /// 注意衰减过程不能反过来设置新的退避窗口，否则成功检查之后会把所有
+    /// 直播源误标为“风控退避中”。
     async fn note_successful_batch(&self) {
         let mut risk = self.inner.risk_backoff.lock().await;
         risk.successful_batches = risk.successful_batches.saturating_add(1);
-        if risk.successful_batches < 3 {
+        if risk.level == 0 || risk.successful_batches < 3 {
             return;
         }
         risk.successful_batches = 0;
@@ -407,8 +410,6 @@ impl LiveMonitor {
         if risk.level == 0 {
             risk.until = None;
             risk.reason = None;
-        } else {
-            risk.until = Some(Instant::now() + Duration::from_secs(60));
         }
     }
 

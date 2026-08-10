@@ -250,7 +250,20 @@ async fn dashboard(
         "server_timezone": chrono::Local::now().format("%Z %:z").to_string(), "poll_interval_secs": 30,
         "merge_jobs": state.media.live_recorder.merge_jobs().await,
         "recovery": state.media.live_recorder.recovery_items().await?,
+        "disk": disk_status(&state.infra.paths.download_dir),
     }))))
+}
+
+/// 录制目录所在磁盘的余量；读取失败时返回 null，前端按“未知”降级展示。
+fn disk_status(dir: &Path) -> serde_json::Value {
+    match (fs2::available_space(dir), fs2::total_space(dir)) {
+        (Ok(available), Ok(total)) => json!({
+            "available_bytes": available,
+            "total_bytes": total,
+            "path_hidden": true,
+        }),
+        _ => serde_json::Value::Null,
+    }
 }
 
 async fn add_source(
@@ -400,7 +413,7 @@ async fn start_merge(
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
     Ok(Json(ApiResponse::with_message(
         json!(job),
-        "褰曞埗鍚堝苟浠诲姟宸插悗鍙板垱寤?",
+        "录制合并任务已后台创建",
     )))
 }
 
@@ -413,7 +426,7 @@ async fn merge_job(
         .live_recorder
         .merge_job(&job_id)
         .await
-        .ok_or_else(|| AppError::NotFound("鍚堝苟浠诲姟涓嶅瓨鍦?".into()))?;
+        .ok_or_else(|| AppError::NotFound("合并任务不存在".into()))?;
     Ok(Json(ApiResponse::success(json!(job))))
 }
 
@@ -429,7 +442,7 @@ async fn cancel_merge(
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
     Ok(Json(ApiResponse::with_message(
         json!(job),
-        "merge cancellation requested",
+        "已请求取消合并任务",
     )))
 }
 
@@ -485,16 +498,45 @@ fn history_view(row: &crate::models::live_recording::Model) -> serde_json::Value
 
 fn public_error(value: &str) -> String {
     let trimmed = value.trim();
+    // 包含 URL 的错误信息：保留协议与主机便于诊断，但剥掉路径与签名参数，
+    // 避免流地址 token 通过 API 泄露。
+    if trimmed.contains("://") {
+        return crate::services::live_recorder::ffmpeg_session::redact_diagnostics(trimmed);
+    }
     let bytes = trimmed.as_bytes();
     let windows_absolute =
         bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/');
     if trimmed.starts_with('/')
         || trimmed.starts_with("\\\\")
-        || trimmed.contains("://")
         || windows_absolute
     {
         "diagnostic redacted".to_owned()
     } else {
         trimmed.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_error_strips_signed_url_tokens() {
+        let message = "获取流失败: https://cdn.example.com/live.flv?sign=abc&token=secret";
+        let result = public_error(message);
+        assert!(result.contains("https://cdn.example.com/live.flv"));
+        assert!(!result.contains("token=secret"));
+        assert!(!result.contains("sign=abc"));
+    }
+
+    #[test]
+    fn public_error_redacts_absolute_paths() {
+        assert_eq!(public_error("D:\\downloads\\live\\out.flv"), "diagnostic redacted");
+        assert_eq!(public_error("/var/data/out.flv"), "diagnostic redacted");
+    }
+
+    #[test]
+    fn public_error_keeps_plain_messages() {
+        assert_eq!(public_error(" 认证被拒绝 "), "认证被拒绝");
     }
 }
