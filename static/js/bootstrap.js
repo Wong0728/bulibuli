@@ -237,6 +237,10 @@ export function switchTab(tabName) {
     } else if (tabName === 'search') {
         // 进入博主搜索页时检查黄点
         checkBloggerProfileNotices();
+    } else if (tabName === 'live') {
+        if (typeof window.refreshDashboard === 'function') {
+            window.refreshDashboard(true);
+        }
     }
 }
 
