@@ -173,3 +173,20 @@ test('live UI maps internal enum values to Chinese and degrades gracefully on fa
     assert.match(live, /confirmDialog/);
     assert.doesNotMatch(live, /window\.confirm/);
 });
+
+test('live sources expose per-room quality cap wired to settings and recorder', () => {
+    const live = readFileSync(new URL('../static/js/live.js', import.meta.url), 'utf8');
+    const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+    const backend = readFileSync(new URL('../src/api/live.rs', import.meta.url), 'utf8');
+    const recorder = readFileSync(new URL('../src/services/live_recorder/mod.rs', import.meta.url), 'utf8');
+    // 设置弹窗提供清晰度上限并随 update 保存
+    assert.match(html, /live-source-quality/);
+    assert.match(live, /max_qn/);
+    assert.match(backend, /max_qn/);
+    // 录制器把每源清晰度上限传给流地址请求
+    assert.match(recorder, /source_max_qn/);
+    // 全局直播设置（并发/磁盘/时长/文件名模板）可从设置页配置
+    assert.match(html, /setting-live-max-concurrent/);
+    assert.match(html, /setting-live-file-template/);
+    assert.match(recorder, /render_file_template/);
+});

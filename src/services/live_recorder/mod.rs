@@ -5,6 +5,7 @@ pub mod stream_url;
 
 use crate::config::AppPaths;
 use crate::models::live_recording;
+use crate::models::live_source;
 use crate::services::bili_api::models::live::LiveStreamUrl;
 use crate::services::bili_api::BiliApi;
 use crate::services::danmu_collector::DanmuCollector;
@@ -40,9 +41,6 @@ const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 const URL_REFRESH_MARGIN_SECS: i64 = 60;
 const CONSERVATIVE_URL_REFRESH: Duration = Duration::from_secs(15 * 60);
 const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(10);
-const MAX_CONCURRENT_RECORDINGS: usize = 2;
-const MIN_FREE_SPACE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
-const MAX_RECORDING_DURATION: Duration = Duration::from_secs(12 * 60 * 60);
 const MAX_RECORDING_FILE_SIZE: u64 = 200 * 1024 * 1024 * 1024;
 const MAX_UNEXPECTED_EXIT_RECOVERY_ATTEMPTS: u32 = 3;
 const STOP_REASON_MANUAL: &str = "manual_stop";
@@ -253,9 +251,10 @@ impl LiveRecorder {
         if room_id <= 0 {
             return Err(anyhow!("直播间号必须为正整数"));
         }
-        if self.inner.sessions.lock().await.len() >= MAX_CONCURRENT_RECORDINGS {
+        let max_concurrent = self.inner.settings_service.current().live.max_concurrent;
+        if self.inner.sessions.lock().await.len() >= max_concurrent {
             return Err(anyhow!(
-                "已达到直播录制并发上限 ({MAX_CONCURRENT_RECORDINGS} 路)"
+                "已达到直播录制并发上限 ({max_concurrent} 路)，可在系统设置中调整"
             ));
         }
         let cookies = self.inner.settings_service.cookie_header().await?;
@@ -311,7 +310,7 @@ impl LiveRecorder {
         }));
         {
             let mut sessions = self.inner.sessions.lock().await;
-            if sessions.len() >= MAX_CONCURRENT_RECORDINGS {
+            if sessions.len() >= max_concurrent {
                 return Err(anyhow!("recording concurrency limit reached"));
             }
             if sessions.contains_key(&room_id) {
@@ -365,10 +364,11 @@ impl LiveRecorder {
             .await
             .context("获取直播间信息失败")?;
         ensure_startup_active(startup_cancellation)?;
+        let max_qn = source_max_qn(&self.inner.db, room_id).await;
         let playurl = self
             .inner
             .bili_api
-            .live_playurl(room_id, None, cookies)
+            .live_playurl(room_id, max_qn, cookies)
             .await
             .context("获取直播流地址失败")?;
         ensure_startup_active(startup_cancellation)?;
@@ -390,13 +390,21 @@ impl LiveRecorder {
             .join(room_id.to_string());
         let available = fs2::available_space(&self.inner.paths.download_dir)
             .context("检查直播录制磁盘空间失败")?;
-        if available < MIN_FREE_SPACE_BYTES {
-            return Err(anyhow!("可用磁盘空间不足 10 GiB，已拒绝启动直播录制"));
+        let live_cfg = self.inner.settings_service.current().live.clone();
+        let min_free_bytes = live_cfg.min_free_space_gib * 1024 * 1024 * 1024;
+        if available < min_free_bytes {
+            return Err(anyhow!(
+                "可用磁盘空间低于 {} GiB 安全阈值，已拒绝启动直播录制",
+                live_cfg.min_free_space_gib
+            ));
         }
-        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let unique = uuid::Uuid::new_v4().simple().to_string();
-        let safe_title = sanitize_filename(&info.title);
-        let base_prefix = format!("{timestamp}_{unique}_{safe_title}");
+        let now_local = chrono::Local::now();
+        let timestamp = now_local.format("%Y%m%d_%H%M%S");
+        let rendered = render_file_template(&live_cfg.file_name_template, room_id, &info.title, now_local);
+        let safe_name = sanitize_filename(&rendered);
+        // 保留短时间戳与随机后缀，避免同日多场直播文件名碰撞
+        let unique_suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
+        let base_prefix = format!("{safe_name}_{timestamp}_{unique_suffix}");
         let first_segment = segment_path(&live_dir, &base_prefix, 0);
         let started_at = chrono::Utc::now();
         let interaction_paths = InteractionPaths {
@@ -1125,6 +1133,10 @@ impl RecordingWorker {
     async fn run(mut self) {
         let mut health_tick = interval(HEALTH_CHECK_INTERVAL);
         let mut refresh_requested = false;
+        // 资源保护阈值在会话开始时从设置读取，运行中修改设置只影响新会话
+        let live_limits = self.settings_service.current().live.clone();
+        let min_free_bytes = live_limits.min_free_space_gib * 1024 * 1024 * 1024;
+        let max_duration = chrono::Duration::hours(live_limits.max_duration_hours as i64);
         let mut refresh_failures = 0usize;
         let mut next_refresh_retry = Instant::now();
 
@@ -1238,8 +1250,12 @@ impl RecordingWorker {
                     }
                 }
                 _ = health_tick.tick() => {
-                    if fs2::available_space(&self.live_dir).unwrap_or(0) < MIN_FREE_SPACE_BYTES {
-                        self.mark_failure("可用磁盘空间低于 10 GiB 安全阈值".to_owned()).await;
+                    if fs2::available_space(&self.live_dir).unwrap_or(0) < min_free_bytes {
+                        self.mark_failure(format!(
+                            "可用磁盘空间低于 {} GiB 安全阈值，已安全停录",
+                            live_limits.min_free_space_gib
+                        ))
+                        .await;
                         let _ = self.finalize(None).await;
                         self.sessions.lock().await.remove(&self.room_id);
                         return;
@@ -1305,9 +1321,13 @@ impl RecordingWorker {
                         self.last_checkpoint = Instant::now();
                     }
                     if chrono::Utc::now().signed_duration_since(self.started_at)
-                        > chrono::Duration::from_std(MAX_RECORDING_DURATION).unwrap_or_default()
+                        > max_duration
                     {
-                        self.mark_failure("录制超过 12 小时安全上限，已停止".to_owned()).await;
+                        self.mark_failure(format!(
+                            "录制超过 {} 小时安全上限，已停止",
+                            live_limits.max_duration_hours
+                        ))
+                        .await;
                         let _ = self.finalize(None).await;
                         return;
                     }
@@ -1430,9 +1450,10 @@ impl RecordingWorker {
 
     async fn refresh_segment(&mut self) -> Result<()> {
         let cookies = self.settings_service.cookie_header().await?;
+        let max_qn = source_max_qn(&self.db, self.room_id).await;
         let playurl = self
             .bili_api
-            .live_playurl(self.room_id, None, &cookies)
+            .live_playurl(self.room_id, max_qn, &cookies)
             .await
             .context("刷新直播流地址失败")?;
         let candidates = select_stream_candidates(&playurl.durl)?;
@@ -1445,10 +1466,10 @@ impl RecordingWorker {
         let same_profile = |stream: &LiveStreamUrl| {
             current_format
                 .as_deref()
-                .map_or(true, |format| stream.format_name.eq_ignore_ascii_case(format))
+                .is_none_or(|format| stream.format_name.eq_ignore_ascii_case(format))
                 && current_codec
                     .as_deref()
-                    .map_or(true, |codec| stream.codec_name.eq_ignore_ascii_case(codec))
+                    .is_none_or(|codec| stream.codec_name.eq_ignore_ascii_case(codec))
         };
         let selected_index = candidates
             .iter()
@@ -1774,6 +1795,38 @@ fn segment_path(live_dir: &Path, base_prefix: &str, index: u32) -> PathBuf {
     live_dir.join(format!("{base_prefix}_segment_{index:04}.flv"))
 }
 
+/// 读取每个直播源的清晰度上限；未配置或非法时返回 None，交给 B 站默认原画。
+async fn source_max_qn(db: &DatabaseConnection, room_id: i64) -> Option<i32> {
+    live_source::Entity::find()
+        .filter(live_source::Column::RoomId.eq(room_id))
+        .one(db)
+        .await
+        .ok()
+        .flatten()
+        .map(|source| source.max_qn)
+        .filter(|qn| *qn > 0)
+}
+
+/// 渲染录制文件名模板，支持 {room_id} {title} {date} {time} 占位符；
+/// 结果未经清洗，调用方需自行 sanitize。
+fn render_file_template(
+    template: &str,
+    room_id: i64,
+    title: &str,
+    now: chrono::DateTime<chrono::Local>,
+) -> String {
+    let rendered = template
+        .replace("{room_id}", &room_id.to_string())
+        .replace("{title}", title)
+        .replace("{date}", &now.format("%Y%m%d").to_string())
+        .replace("{time}", &now.format("%H%M%S").to_string());
+    if rendered.trim().is_empty() {
+        format!("live_{room_id}")
+    } else {
+        rendered
+    }
+}
+
 fn ensure_startup_active(cancellation: &CancellationToken) -> Result<()> {
     if cancellation.is_cancelled() {
         Err(anyhow!("直播录制启动已取消"))
@@ -1982,6 +2035,7 @@ fn count_residual_segments(root: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn unexpected_exit_state_machine_requires_offline_confirmation_for_completion() {
@@ -2022,5 +2076,23 @@ mod tests {
             STOP_REASON_UNRECOVERABLE_EXIT,
             "ffmpeg_exit_while_live_or_unconfirmed"
         );
+    }
+
+    #[test]
+    fn file_template_renders_known_tokens() {
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 8, 10, 21, 14, 5)
+            .unwrap();
+        let rendered = render_file_template("{room_id}_{title}_{date}", 8178490, "深夜点歌台", now);
+        assert_eq!(rendered, "8178490_深夜点歌台_20260810");
+        let with_time = render_file_template("{room_id}_{time}", 732, "标题", now);
+        assert_eq!(with_time, "732_211405");
+    }
+
+    #[test]
+    fn file_template_falls_back_for_empty_result() {
+        let now = chrono::Local::now();
+        assert_eq!(render_file_template("   ", 123, "标题", now), "live_123");
+        assert_eq!(render_file_template("{missing}", 456, "标题", now), "{missing}");
     }
 }

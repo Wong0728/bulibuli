@@ -34,6 +34,7 @@ pub struct RuntimeSettings {
     pub appearance: AppearanceSettings,
     pub burn: BurnSettings,
     pub subtitle: SubtitleSettings,
+    pub live: LiveRecordingSettings,
 }
 
 impl Default for RuntimeSettings {
@@ -56,6 +57,7 @@ impl Default for RuntimeSettings {
             appearance: AppearanceSettings::default(),
             burn: BurnSettings::default(),
             subtitle: SubtitleSettings::default(),
+            live: LiveRecordingSettings::default(),
         }
     }
 }
@@ -213,6 +215,15 @@ impl RuntimeSettings {
         {
             return Err(AppError::BadRequest("弹幕烧录参数超出允许范围".to_string()));
         }
+        if !(1..=8).contains(&self.live.max_concurrent)
+            || !(1..=1024).contains(&self.live.min_free_space_gib)
+            || !(1..=72).contains(&self.live.max_duration_hours)
+            || self.live.file_name_template.trim().is_empty()
+        {
+            return Err(AppError::BadRequest(
+                "直播录制设置超出允许范围".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -335,6 +346,17 @@ default_struct!(SubtitleSettings {
     accept_ai: bool = false,
     // 语言过滤：空数组表示下载全部；非空时只下载 lan 匹配的语言（如 ["zh-CN", "zh-Hans"]）
     languages: Vec<String> = vec![],
+});
+
+default_struct!(LiveRecordingSettings {
+    // 并发录制上限（多房间同时开播时的资源保护）
+    max_concurrent: usize = 2,
+    // 磁盘余量安全阈值（GiB）：启动与运行中低于该值时安全停录
+    min_free_space_gib: u64 = 10,
+    // 单场录制时长上限（小时），防止忘关的异常直播永久占用磁盘
+    max_duration_hours: u64 = 12,
+    // 录制文件名模板，可用占位符：{room_id} {title} {date} {time}
+    file_name_template: String = "{room_id}_{title}_{date}".to_string(),
 });
 
 impl BurnSettings {

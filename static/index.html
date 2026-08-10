@@ -389,6 +389,17 @@
                         <option value="off">关闭（仅录制视频）</option>
                     </select>
                 </div>
+                <div class="form-group">
+                    <label for="live-source-quality"><i class="fa-solid fa-film"></i> 清晰度上限</label>
+                    <select id="live-source-quality" class="form-control">
+                        <option value="10000">原画（10000，推荐）</option>
+                        <option value="400">蓝光（400）</option>
+                        <option value="250">超清（250）</option>
+                        <option value="150">高清（150）</option>
+                        <option value="80">流畅（80）</option>
+                    </select>
+                    <div class="form-note">实际清晰度受账号权限限制可能被 B 站降级，录制卡片会显示实际拿到的清晰度。</div>
+                </div>
                 <div class="form-group form-full">
                     <label><input type="checkbox" id="live-source-all-day"> 全天允许自动开始（勾选后忽略下方周排期）</label>
                 </div>
@@ -1145,6 +1156,37 @@
                         <label>L1 视频数据刷新间隔（分钟）</label>
                         <input type="number" id="setting-l1-interval-minutes" class="form-control" min="1" max="1440">
                         <div class="form-note">范围: 1-1440，建议 5。后端每 N 分钟抽 50 条最久未刷的视频更新播放量/状态</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 直播录制设置 -->
+        <div class="section-collapsible" data-section="live-recording">
+            <div class="section-header">
+                <h4><i class="fa-solid fa-tower-broadcast"></i> 直播录制</h4>
+            </div>
+            <div class="section-body">
+                <div class="settings-grid">
+                    <div class="form-group">
+                        <label class="form-label" for="setting-live-max-concurrent">并发录制上限（路）</label>
+                        <input type="number" id="setting-live-max-concurrent" class="form-control" min="1" max="8" value="2">
+                        <div class="form-note">范围 1-8。多房间同时开播时，超出上限的房间不会自动开录</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="setting-live-min-free-space">磁盘余量安全阈值（GiB）</label>
+                        <input type="number" id="setting-live-min-free-space" class="form-control" min="1" max="1024" value="10">
+                        <div class="form-note">启动和录制过程中可用空间低于该值时安全停录，避免磁盘写满</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="setting-live-max-duration">单场录制时长上限（小时）</label>
+                        <input type="number" id="setting-live-max-duration" class="form-control" min="1" max="72" value="12">
+                        <div class="form-note">范围 1-72。防止忘关的异常直播永久占用磁盘</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="setting-live-file-template">录制文件名模板</label>
+                        <input type="text" id="setting-live-file-template" class="form-control" value="{room_id}_{title}_{date}">
+                        <div class="form-note">可用占位符：{room_id} 房间号、{title} 直播标题、{date} 日期、{time} 时间；系统会自动追加时间戳与短后缀避免重名</div>
                     </div>
                 </div>
             </div>

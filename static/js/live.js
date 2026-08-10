@@ -377,7 +377,7 @@ function renderDetail() {
             </div>
             <div class="live-strategy-summary">
                 <i class="fa-solid fa-calendar-week"></i>
-                <span>自动录制：${source.auto_record_enabled ? '开' : '关'} · ${escapeHtml(scheduleText)}${nextSchedule ? ` · ${escapeHtml(nextSchedule)}` : ''} · 互动采集：${captureModeText(source.capture_mode)}</span>
+                <span>自动录制：${source.auto_record_enabled ? '开' : '关'} · ${escapeHtml(scheduleText)}${nextSchedule ? ` · ${escapeHtml(nextSchedule)}` : ''} · 互动采集：${captureModeText(source.capture_mode)} · 清晰度上限：${escapeHtml(qualityText(source.max_qn || 10000))}</span>
             </div>
         </div>
         ${session ? recordingInfoMarkup(session) : ''}
@@ -520,6 +520,8 @@ function renderHistoryBoard(items) {
                     <span>${escapeHtml(item.started_at || '').replace('T', ' ').slice(0, 16)}</span>
                     <span>${formatDuration(item.duration)}</span>
                     <span>${item.file_size ? formatFileSize(item.file_size) : '--'}</span>
+                    ${item.segment_index ? `<span>分段 ${item.segment_index + 1} 个</span>` : ''}
+                    ${item.restart_attempts ? `<span>重启 ${item.restart_attempts} 次</span>` : ''}
                     ${item.error_msg ? `<span>${escapeHtml(item.error_msg)}</span>` : ''}
                 </span>
             </div>
@@ -893,6 +895,7 @@ function openSettingsModal(roomId) {
     document.getElementById('live-source-room-id').value = roomId;
     document.getElementById('live-source-auto').checked = source.auto_record_enabled;
     document.getElementById('live-source-mode').value = source.capture_mode || 'standard';
+    document.getElementById('live-source-quality').value = String(source.max_qn || 10000);
     document.getElementById('live-source-all-day').checked = source.schedule_all_day;
     writeScheduleToEditor(source.weekly_schedule || {});
     toggleScheduleEditor();
@@ -933,6 +936,7 @@ async function saveSource() {
             room_id: roomId,
             auto_record_enabled: autoEnabled,
             capture_mode: document.getElementById('live-source-mode').value,
+            max_qn: parseInt(document.getElementById('live-source-quality').value, 10),
             clear_schedule: finalAllDay,
             weekly_schedule: finalAllDay ? null : schedule,
         });

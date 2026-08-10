@@ -175,6 +175,23 @@ pub struct NewLiveSource {
     pub weekly_schedule: Option<WeeklySchedule>,
     #[serde(default)]
     pub capture_mode: CaptureMode,
+    /// 清晰度上限；缺省为原画 (10000)。
+    #[serde(default = "default_max_qn")]
+    pub max_qn: i32,
+}
+
+pub fn default_max_qn() -> i32 {
+    10000
+}
+
+fn normalize_max_qn(value: i32) -> Result<i32> {
+    // 只接受 B 站直播已知的清晰度档位，避免传入任意 qn 造成请求异常
+    const ALLOWED: [i32; 6] = [10000, 400, 250, 150, 80, 64];
+    if ALLOWED.contains(&value) {
+        Ok(value)
+    } else {
+        bail!("清晰度上限必须是 10000、400、250、150、80 或 64")
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -184,6 +201,7 @@ pub struct UpdateLiveSource {
     pub weekly_schedule: Option<WeeklySchedule>,
     pub clear_schedule: Option<bool>,
     pub capture_mode: Option<CaptureMode>,
+    pub max_qn: Option<i32>,
 }
 
 #[derive(Clone)]
@@ -224,6 +242,7 @@ impl LiveSourceService {
         }
         let now = Local::now().to_rfc3339();
         let schedule = normalize_schedule(value.weekly_schedule)?;
+        let max_qn = normalize_max_qn(value.max_qn)?;
         Ok(live_source::ActiveModel {
             room_id: Set(value.room_id),
             short_id: Set(value.short_id),
@@ -235,6 +254,7 @@ impl LiveSourceService {
             auto_record_enabled: Set(value.auto_record_enabled),
             weekly_schedule: Set(schedule),
             capture_mode: Set(value.capture_mode.as_str().to_owned()),
+            max_qn: Set(max_qn),
             manual_stop_latched: Set(false),
             manual_stop_session_key: Set(None),
             created_at: Set(now.clone()),
@@ -268,6 +288,9 @@ impl LiveSourceService {
         }
         if let Some(mode) = value.capture_mode {
             model.capture_mode = Set(mode.as_str().to_owned());
+        }
+        if let Some(qn) = value.max_qn {
+            model.max_qn = Set(normalize_max_qn(qn)?);
         }
         model.updated_at = Set(Local::now().to_rfc3339());
         Ok(model.update(&self.db).await?)
@@ -313,6 +336,14 @@ impl LiveSourceService {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    #[test]
+    fn max_qn_only_accepts_known_quality_levels() {
+        for allowed in [10000, 400, 250, 150, 80, 64] {
+            assert_eq!(normalize_max_qn(allowed).unwrap(), allowed);
+        }
+        assert!(normalize_max_qn(999).is_err());
+        assert!(normalize_max_qn(0).is_err());
+    }
     #[test]
     fn schedule_supports_cross_midnight() {
         let mut schedule = WeeklySchedule::new();

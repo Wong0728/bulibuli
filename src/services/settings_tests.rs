@@ -34,6 +34,35 @@ fn invalid_archive_settings_are_rejected() {
     assert!(settings.validate().is_err());
 }
 
+#[test]
+fn legacy_settings_fill_live_recording_defaults() {
+    let settings: RuntimeSettings =
+        serde_json::from_value(serde_json::json!({})).expect("deserialize legacy settings");
+    assert_eq!(settings.live.max_concurrent, 2);
+    assert_eq!(settings.live.min_free_space_gib, 10);
+    assert_eq!(settings.live.max_duration_hours, 12);
+    assert_eq!(settings.live.file_name_template, "{room_id}_{title}_{date}");
+}
+
+#[test]
+fn invalid_live_recording_settings_are_rejected() {
+    let mut settings = RuntimeSettings::default();
+    settings.live.max_concurrent = 0;
+    assert!(settings.validate().is_err());
+
+    let mut settings = RuntimeSettings::default();
+    settings.live.min_free_space_gib = 0;
+    assert!(settings.validate().is_err());
+
+    let mut settings = RuntimeSettings::default();
+    settings.live.max_duration_hours = 73;
+    assert!(settings.validate().is_err());
+
+    let mut settings = RuntimeSettings::default();
+    settings.live.file_name_template = "  ".to_string();
+    assert!(settings.validate().is_err());
+}
+
 async fn settings_database() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:")
         .await

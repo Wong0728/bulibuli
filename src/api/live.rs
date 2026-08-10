@@ -61,6 +61,7 @@ struct AddSourceBody {
     auto_record_enabled: Option<bool>,
     weekly_schedule: Option<WeeklySchedule>,
     capture_mode: Option<CaptureMode>,
+    max_qn: Option<i32>,
 }
 
 async fn room_info(
@@ -237,6 +238,7 @@ async fn dashboard(
             "id": source.id, "room_id": source.room_id, "short_id": source.short_id, "uid": source.uid,
             "anchor_name": source.anchor_name, "face": source.face, "title": source.title, "cover": source.cover,
             "auto_record_enabled": source.auto_record_enabled, "capture_mode": source.capture_mode,
+            "max_qn": source.max_qn,
             "weekly_schedule": schedule_from_json(source.weekly_schedule.as_deref()),
             "schedule_all_day": source.weekly_schedule.is_none(), "manual_stop_latched": source.manual_stop_latched,
             "runtime": run,
@@ -307,6 +309,7 @@ async fn add_source(
             auto_record_enabled: body.auto_record_enabled.unwrap_or(false),
             weekly_schedule: body.weekly_schedule,
             capture_mode: body.capture_mode.unwrap_or_default(),
+            max_qn: body.max_qn.unwrap_or(crate::services::live_source::default_max_qn()),
         })
         .await
         .map_err(|e| AppError::Conflict(e.to_string()))?;

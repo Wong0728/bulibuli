@@ -18,6 +18,9 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub weekly_schedule: Option<String>,
     pub capture_mode: String,
+    /// 清晰度上限（B 站 qn：10000 原画 / 400 蓝光 / 250 超清 / 150 高清）。
+    /// 实际可用清晰度仍受账号权限限制，可能被 B 站降级。
+    pub max_qn: i32,
     pub manual_stop_latched: bool,
     pub manual_stop_session_key: Option<String>,
     pub created_at: String,
