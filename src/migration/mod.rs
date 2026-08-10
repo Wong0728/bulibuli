@@ -6,6 +6,8 @@ mod m20260803_000003_add_version_and_operation_log;
 mod m20260807_000004_create_live_recordings;
 mod m20260809_000005_add_session_roles;
 mod m20260810_000006_live_sources_and_interactions;
+mod m20260810_000007_live_recording_reliability;
+mod m20260810_000008_live_merge_jobs;
 
 pub struct Migrator;
 
@@ -19,6 +21,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260807_000004_create_live_recordings::Migration),
             Box::new(m20260809_000005_add_session_roles::Migration),
             Box::new(m20260810_000006_live_sources_and_interactions::Migration),
+            Box::new(m20260810_000007_live_recording_reliability::Migration),
+            Box::new(m20260810_000008_live_merge_jobs::Migration),
         ]
     }
 }

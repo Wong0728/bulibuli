@@ -1,9 +1,23 @@
 //! 直播间 API 响应模型：新版 getRoomPlayInfo / getDanmuInfo 与旧版兼容接口。
 //!
-//! 接口无需 WBI 签名，但登录 Cookie 可用于获取更高画质。
+//! `getDanmuInfo` 自 2025 年起必须使用有效登录态和 WBI 签名；播放接口是否
+//! 需要登录由 B站当前策略决定。
 //! 只声明用到的字段，配合 `#[serde(default)]` 容忍缺失。
 
 use serde::Deserialize;
+use std::collections::HashMap;
+
+/// `get_status_info_by_uids` 的批量直播状态条目。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LiveBatchStatus {
+    pub room_id: i64,
+    pub uid: i64,
+    pub live_status: i32,
+    pub live_time: i64,
+}
+
+pub type LiveBatchStatusMap = HashMap<String, LiveBatchStatus>;
 
 /// `room_init` 响应：短号换长号 + 直播状态。
 ///
@@ -39,6 +53,7 @@ impl LiveRoomInit {
     }
 
     /// 是否轮播中（live_status == 2）。
+    #[allow(dead_code)]
     pub fn is_replay(&self) -> bool {
         self.live_status == 2
     }
@@ -157,9 +172,8 @@ pub struct LiveStreamUrl {
     pub current_qn: i32,
 }
 
-/// `getConf` 响应：弹幕 WebSocket 连接信息（旧版，无需签名）。
-///
-/// `GET https://api.live.bilibili.com/room/v1/Danmu/getConf?room_id={room_id}`
+/// `getDanmuInfo` 响应：弹幕 WebSocket 连接信息。
+/// 新版接口要求有效登录态和 WBI 签名；旧版 `getConf` 不再作为生产回退。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct LiveDanmuConf {

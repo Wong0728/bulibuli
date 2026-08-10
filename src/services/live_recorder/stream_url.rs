@@ -28,6 +28,48 @@ pub fn is_expiring_soon(url: &str, margin_secs: i64) -> bool {
 /// 从 `LivePlayUrl` 响应中选择最佳流 URL。
 ///
 /// 优先选择 `order=1`（主线），URL 中的 `\u0026` 等转义字符需要还原。
+pub fn select_stream_candidates(
+    durl: &[crate::services::bili_api::models::live::LiveStreamUrl],
+) -> Result<Vec<crate::services::bili_api::models::live::LiveStreamUrl>> {
+    let mut sorted = durl
+        .iter()
+        .filter_map(|stream| {
+            let mut candidate = stream.clone();
+            candidate.url = candidate.url.replace("\\u0026", "&").replace("\\/", "/");
+            url::Url::parse(candidate.url.trim())
+                .ok()
+                .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+                .map(|_| candidate)
+        })
+        .collect::<Vec<_>>();
+    sorted.sort_by_key(|stream| {
+        let codec_rank = match stream.codec_name.to_ascii_lowercase().as_str() {
+            "avc" | "avc1" | "h264" => 0,
+            "hevc" | "h265" => 1,
+            _ => 2,
+        };
+        let format_rank = match stream.format_name.to_ascii_lowercase().as_str() {
+            "flv" => 0,
+            "fmp4" => 1,
+            "ts" => 2,
+            _ => 3,
+        };
+        (
+            std::cmp::Reverse(stream.current_qn),
+            codec_rank,
+            format_rank,
+            stream.order,
+        )
+    });
+    let mut seen = std::collections::HashSet::new();
+    sorted.retain(|stream| seen.insert(stream.url.clone()));
+    if sorted.is_empty() {
+        return Err(anyhow!("娴佸湴鍧€鍒楄〃涓虹┖"));
+    }
+    Ok(sorted)
+}
+
+#[allow(dead_code)]
 pub fn select_best_stream(
     durl: &[crate::services::bili_api::models::live::LiveStreamUrl],
 ) -> Result<crate::services::bili_api::models::live::LiveStreamUrl> {
@@ -186,5 +228,36 @@ mod tests {
         ];
         let best = select_best_stream(&streams).expect("best stream");
         assert_eq!(best.url, "https://cdn/high-avc.flv");
+    }
+
+    #[test]
+    fn stream_candidates_rotate_unique_valid_cdns() {
+        let streams = vec![
+            LiveStreamUrl {
+                url: "https://cdn-a/live.flv?x=1\\u0026sign=a".into(),
+                current_qn: 10000,
+                codec_name: "avc".into(),
+                format_name: "flv".into(),
+                ..Default::default()
+            },
+            LiveStreamUrl {
+                url: "https://cdn-a/live.flv?x=1&sign=a".into(),
+                current_qn: 10000,
+                codec_name: "avc".into(),
+                format_name: "flv".into(),
+                ..Default::default()
+            },
+            LiveStreamUrl {
+                url: "https://cdn-b/live.flv".into(),
+                current_qn: 9000,
+                codec_name: "avc".into(),
+                format_name: "flv".into(),
+                ..Default::default()
+            },
+        ];
+        let candidates = select_stream_candidates(&streams).expect("candidates");
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].url, "https://cdn-a/live.flv?x=1&sign=a");
+        assert_eq!(candidates[1].url, "https://cdn-b/live.flv");
     }
 }

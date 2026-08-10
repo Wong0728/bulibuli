@@ -133,3 +133,25 @@ test('frontend uses the canonical video info route', () => {
     assert.equal(frontendSources.every(source => source.includes('/api/video/info?bvid=')), true);
     assert.equal(backendRoutes.includes('"/api/video/info"'), true);
 });
+
+test('live UI defaults saved sources to manual-only and exposes trustworthy status regions', () => {
+    const live = readFileSync(new URL('../static/js/live.js', import.meta.url), 'utf8');
+    const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+    assert.match(live, /auto_record_enabled: false/);
+    assert.match(live, /pendingRooms/);
+    assert.match(live, /\/api\/live\/history\?limit=20/);
+    assert.match(html, /live-health-summary/);
+    assert.match(html, /live-history-list/);
+});
+
+test('live UI exposes bounded polling, schedule validation, and cancellable merge jobs', () => {
+    const live = readFileSync(new URL('../static/js/live.js', import.meta.url), 'utf8');
+    const backend = readFileSync(new URL('../src/api/live.rs', import.meta.url), 'utf8');
+    assert.match(live, /dashboardInFlight/);
+    assert.match(live, /eventsInFlight/);
+    assert.match(live, /visibilitychange/);
+    assert.match(live, /validateScheduleStrict/);
+    assert.match(live, /merge-cancel/);
+    assert.match(backend, /\/api\/live\/merge\/{job_id}\/cancel/);
+    assert.match(backend, /server_timezone/);
+});

@@ -1,9 +1,10 @@
 use crate::models::live_source;
 use crate::services::bili_api::BiliApi;
 use crate::services::live_recorder::{LiveRecorder, RecordingTrigger};
-use crate::services::live_source::{schedule_is_active, CaptureMode, LiveSourceService};
+use crate::services::live_source::{
+    next_schedule_start, schedule_is_active, CaptureMode, LiveSourceService,
+};
 use crate::services::settings::SettingsService;
-use futures::{stream, StreamExt};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,6 +23,17 @@ pub struct LiveSourceRuntime {
     pub risk_limited: bool,
     pub schedule_active: bool,
     pub schedule_overrun: bool,
+    pub next_retry_at: Option<String>,
+    pub next_schedule_at: Option<String>,
+    pub stale: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LiveMonitorHealth {
+    pub running: bool,
+    pub last_heartbeat_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub risk_backoff_until: Option<String>,
 }
 
 struct RuntimeEntry {
@@ -34,6 +46,13 @@ struct RiskBackoff {
     level: usize,
     until: Option<Instant>,
     reason: Option<String>,
+    successful_batches: u32,
+}
+
+#[derive(Default)]
+struct MonitorHealthState {
+    last_heartbeat_at: Option<String>,
+    last_success_at: Option<String>,
 }
 
 #[derive(Clone)]
@@ -51,6 +70,7 @@ struct LiveMonitorInner {
     notify: Notify,
     cancellation: CancellationToken,
     handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    health: Mutex<MonitorHealthState>,
 }
 
 impl LiveMonitor {
@@ -72,6 +92,7 @@ impl LiveMonitor {
                 notify: Notify::new(),
                 cancellation,
                 handle: Mutex::new(None),
+                health: Mutex::new(MonitorHealthState::default()),
             }),
         }
     }
@@ -110,6 +131,9 @@ impl LiveMonitor {
                     risk_limited: false,
                     schedule_active: true,
                     schedule_overrun: false,
+                    next_retry_at: None,
+                    next_schedule_at: None,
+                    stale: true,
                 },
                 next_due: Instant::now(),
             });
@@ -134,6 +158,32 @@ impl LiveMonitor {
             .and_then(|_| risk.reason.clone())
     }
 
+    pub async fn health_snapshot(&self) -> LiveMonitorHealth {
+        let running = self
+            .inner
+            .handle
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished());
+        let health = self.inner.health.lock().await;
+        let risk = self.inner.risk_backoff.lock().await;
+        let risk_backoff_until = risk.until.and_then(|until| {
+            until
+                .checked_duration_since(Instant::now())
+                .map(|remaining| {
+                    (chrono::Utc::now() + chrono::Duration::from_std(remaining).unwrap_or_default())
+                        .to_rfc3339()
+                })
+        });
+        LiveMonitorHealth {
+            running,
+            last_heartbeat_at: health.last_heartbeat_at.clone(),
+            last_success_at: health.last_success_at.clone(),
+            risk_backoff_until,
+        }
+    }
+
     async fn run_loop(&self) {
         let mut tick = tokio::time::interval(Duration::from_secs(2));
         loop {
@@ -146,9 +196,13 @@ impl LiveMonitor {
     }
 
     async fn check_due(&self) {
+        self.inner.health.lock().await.last_heartbeat_at = Some(chrono::Utc::now().to_rfc3339());
         {
             let risk = self.inner.risk_backoff.lock().await;
             if risk.until.is_some_and(|until| until > Instant::now()) {
+                drop(risk);
+                self.mark_all_stale("B站状态检查处于风控退避".to_owned())
+                    .await;
                 return;
             }
         }
@@ -182,6 +236,9 @@ impl LiveMonitor {
                                 chrono::Local::now(),
                             ),
                             schedule_overrun: false,
+                            next_retry_at: None,
+                            next_schedule_at: None,
+                            stale: true,
                         },
                         next_due: now + Duration::from_secs(source.room_id.unsigned_abs() % 30),
                     });
@@ -205,45 +262,45 @@ impl LiveMonitor {
                 return;
             }
         };
-        let api = self.inner.bili_api.clone();
-        let results = stream::iter(due.into_iter().map(|source| {
-            let api = api.clone();
-            let cookies = cookies.clone();
-            async move {
-                let result = api.live_room_init(source.room_id, &cookies).await;
-                (source, result)
-            }
-        }))
-        .buffer_unordered(4)
-        .collect::<Vec<_>>()
-        .await;
-
-        for (source, result) in results {
-            match result {
-                Ok(init) => {
-                    let status = if init.is_live() {
-                        1
-                    } else if init.is_replay() {
-                        2
+        let batch = self
+            .inner
+            .bili_api
+            .live_status_by_uids(
+                &due.iter().map(|source| source.uid).collect::<Vec<_>>(),
+                &cookies,
+            )
+            .await;
+        match batch {
+            Ok(statuses) => {
+                self.inner.health.lock().await.last_success_at =
+                    Some(chrono::Utc::now().to_rfc3339());
+                self.note_successful_batch().await;
+                for source in due {
+                    if let Some(status) = statuses.get(&source.uid) {
+                        self.handle_success(source, status.live_status, status.live_time)
+                            .await;
                     } else {
-                        init.live_status
-                    };
-                    self.handle_success(source, status).await
-                }
-                Err(error) => {
-                    let message = error.to_string();
-                    let limited = is_risk_error(&message);
-                    self.mark_error(source.room_id, message.clone(), limited)
+                        self.mark_error(
+                            source.room_id,
+                            "批量状态响应未包含该直播源".to_owned(),
+                            false,
+                        )
                         .await;
-                    if limited {
-                        self.activate_risk_backoff(message).await;
                     }
+                }
+            }
+            Err(error) => {
+                let message = error.to_string();
+                let limited = is_risk_error(&message);
+                self.mark_batch_error(&due, message.clone(), limited).await;
+                if limited {
+                    self.activate_risk_backoff(message).await;
                 }
             }
         }
     }
 
-    async fn handle_success(&self, source: live_source::Model, live_status: i32) {
+    async fn handle_success(&self, source: live_source::Model, live_status: i32, live_time: i64) {
         let active = schedule_is_active(source.weekly_schedule.as_deref(), chrono::Local::now());
         let recording = self
             .inner
@@ -254,21 +311,27 @@ impl LiveMonitor {
         {
             let mut runtime = self.inner.runtime.lock().await;
             if let Some(entry) = runtime.get_mut(&source.room_id) {
-                entry.next_due = Instant::now() + Duration::from_secs(30);
+                let jitter = (source.room_id.unsigned_abs() % 11) + 25;
+                entry.next_due = Instant::now() + Duration::from_secs(jitter);
                 entry.public.live_status = Some(live_status);
                 entry.public.last_checked_at = Some(chrono::Utc::now().to_rfc3339());
                 entry.public.error = None;
                 entry.public.risk_limited = false;
+                entry.public.stale = false;
+                entry.public.next_retry_at = None;
+                entry.public.next_schedule_at =
+                    next_schedule_start(source.weekly_schedule.as_deref(), chrono::Local::now())
+                        .map(|value| value.to_rfc3339());
                 entry.public.schedule_active = active;
                 entry.public.schedule_overrun = live_status == 1 && recording && !active;
             }
         }
         if live_status != 1 {
-            if source.manual_stop_latched {
+            if source.manual_stop_latched || source.manual_stop_session_key.is_some() {
                 let _ = self
                     .inner
                     .source_service
-                    .set_manual_latch(source.room_id, false)
+                    .set_manual_stop_session(source.room_id, None)
                     .await;
             }
             if recording {
@@ -279,7 +342,11 @@ impl LiveMonitor {
             }
             return;
         }
-        if !recording && source.auto_record_enabled && active && !source.manual_stop_latched {
+        let session_key = (live_time > 0).then(|| format!("{}:{live_time}", source.room_id));
+        let manually_stopped = (source.manual_stop_session_key.is_some()
+            && source.manual_stop_session_key == session_key)
+            || (source.manual_stop_latched && source.manual_stop_session_key.is_none());
+        if !recording && source.auto_record_enabled && active && !manually_stopped {
             let mode = CaptureMode::parse(&source.capture_mode).unwrap_or_default();
             info!(room_id = source.room_id, "检测到开播，自动开始录制");
             if let Err(error) = self
@@ -300,6 +367,9 @@ impl LiveMonitor {
             entry.public.last_checked_at = Some(chrono::Utc::now().to_rfc3339());
             entry.public.error = Some(message);
             entry.public.risk_limited = limited;
+            entry.public.stale = true;
+            entry.public.next_retry_at =
+                Some((chrono::Utc::now() + chrono::Duration::seconds(30)).to_rfc3339());
         }
     }
 
@@ -322,7 +392,36 @@ impl LiveMonitor {
         risk.level = (risk.level + 1).min(delays.len() - 1);
         risk.until = Some(Instant::now() + Duration::from_secs(delay));
         risk.reason = Some(format!("B站状态检查受限，{delay} 秒后重试：{message}"));
+        risk.successful_batches = 0;
         warn!(delay, "B站直播状态检查受限，启用全局退避");
+    }
+
+    async fn note_successful_batch(&self) {
+        let mut risk = self.inner.risk_backoff.lock().await;
+        risk.successful_batches = risk.successful_batches.saturating_add(1);
+        if risk.successful_batches < 3 {
+            return;
+        }
+        risk.successful_batches = 0;
+        risk.level = risk.level.saturating_sub(1);
+        if risk.level == 0 {
+            risk.until = None;
+            risk.reason = None;
+        } else {
+            risk.until = Some(Instant::now() + Duration::from_secs(60));
+        }
+    }
+
+    async fn mark_all_stale(&self, message: String) {
+        let mut runtime = self.inner.runtime.lock().await;
+        for entry in runtime.values_mut() {
+            entry.public.stale = true;
+            entry.public.risk_limited = true;
+            entry.public.error = Some(message.clone());
+            entry.next_due = Instant::now() + Duration::from_secs(60);
+            entry.public.next_retry_at =
+                Some((chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339());
+        }
     }
 }
 

@@ -19,6 +19,7 @@ pub struct Model {
     pub weekly_schedule: Option<String>,
     pub capture_mode: String,
     pub manual_stop_latched: bool,
+    pub manual_stop_session_key: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

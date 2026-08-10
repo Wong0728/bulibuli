@@ -19,7 +19,7 @@ impl MigrationTrait for Migration {
                     face TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL DEFAULT '',
                     cover TEXT NOT NULL DEFAULT '',
-                    auto_record_enabled INTEGER NOT NULL DEFAULT 1,
+                    auto_record_enabled INTEGER NOT NULL DEFAULT 0,
                     weekly_schedule TEXT NULL,
                     capture_mode TEXT NOT NULL DEFAULT 'standard',
                     manual_stop_latched INTEGER NOT NULL DEFAULT 0,

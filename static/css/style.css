@@ -5332,6 +5332,22 @@ progress.download-item-progress-fill {
     }
 }
 /* Live source dashboard and interaction archive */
+.live-health-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--size-2);
+    margin-bottom: var(--size-3);
+}
+
+.live-health-summary span {
+    padding: var(--size-1) var(--size-2);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    background: var(--surface);
+    font-size: var(--text-sm);
+}
+
 .live-sync-state {
     margin-left: auto;
     font-size: var(--text-xs, 0.75rem);
@@ -5633,6 +5649,102 @@ progress.download-item-progress-fill {
     margin-top: var(--size-4);
 }
 
+.nav-tab {
+    border: 0;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    cursor: pointer;
+}
+
+.nav-tab:focus-visible,
+.live-source-actions button:focus-visible,
+.live-recording-actions button:focus-visible {
+    outline: 3px solid var(--brand);
+    outline-offset: 2px;
+}
+
+.live-source-status[data-state="risk"],
+.live-source-status[data-state="stale"],
+.recording-state-recording,
+.interaction-state-unavailable,
+.interaction-state-degraded {
+    color: var(--warning, #e5a83b);
+}
+
+.live-source-status[data-state="live"],
+.recording-state-completed,
+.recording-state-stopped,
+.interaction-state-capturing {
+    color: var(--success, #22c55e);
+}
+
+.live-source-status[data-state="unknown"],
+.recording-state-failed {
+    color: var(--error, #e85d75);
+}
+
+.live-source-checked {
+    display: block;
+    margin-top: var(--size-2);
+    color: var(--text-muted);
+}
+
+.live-schedule-day {
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    gap: var(--size-2);
+    align-items: center;
+}
+
+.live-schedule-window {
+    display: flex;
+    gap: var(--size-1);
+    align-items: center;
+    margin-bottom: var(--size-1);
+}
+
+.live-schedule-window input[type="time"] {
+    min-width: 0;
+    flex: 1;
+}
+
+.live-source-dialog {
+    overflow: auto;
+}
+
+.live-source-dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--size-2);
+}
+
+.live-dialog-actions {
+    position: sticky;
+    bottom: 0;
+    padding: var(--size-2) 0;
+    background: var(--surface);
+}
+
+@media (max-width: 760px) {
+    .live-query-bar,
+    .live-room-detail,
+    .live-meta {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .live-query-bar .form-control {
+        max-width: none;
+    }
+
+    .live-cover {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 16 / 9;
+    }
+}
+
 @media (max-width: 620px) {
     .live-event-row {
         grid-template-columns: 62px 1fr;
@@ -5660,4 +5772,3 @@ progress.download-item-progress-fill {
         justify-content: flex-start;
     }
 }
-

@@ -52,6 +52,11 @@ pub struct Model {
     pub peak_watched: i64,
     pub dropped_event_count: i64,
     pub estimated_paid_value: f64,
+    pub stop_reason: Option<String>,
+    pub segment_index: i32,
+    pub restart_attempts: i32,
+    pub checkpointed_at: Option<String>,
+    pub is_recoverable: bool,
     /// 创建时间
     pub created_at: String,
     /// 更新时间

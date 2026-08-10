@@ -2,7 +2,7 @@ use super::RecordingInfo;
 use crate::services::danmu_collector::commands::{IncomingLiveCommand, LiveCommand};
 use crate::services::live_source::CaptureMode;
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
@@ -10,9 +10,15 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Mutex};
-use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, Debug, Serialize)]
+const MAX_HEAT_BUCKETS: usize = 1_440;
+const MAX_PAID_MARKERS: usize = 4_096;
+const MAX_LINK_MARKERS: usize = 1_024;
+const MAX_UNIQUE_USERS: usize = 100_000;
+const MAX_GUARD_DEDUPE: usize = 10_000;
+const MAX_CAPTURE_GAPS: usize = 256;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ArchivedLiveEvent {
     pub schema_version: u8,
     pub seq: u64,
@@ -44,7 +50,6 @@ pub struct InteractionWriterArgs {
     pub paths: InteractionPaths,
     pub snapshot: Arc<Mutex<RecordingInfo>>,
     pub recent: Arc<Mutex<VecDeque<ArchivedLiveEvent>>>,
-    pub cancellation: CancellationToken,
     pub reload_tx: mpsc::Sender<()>,
     pub segment_index: Arc<AtomicU32>,
 }
@@ -57,12 +62,6 @@ pub async fn run(
         tokio::fs::create_dir_all(parent).await?;
     }
     let mut jsonl = tokio::fs::File::create(&args.paths.events).await?;
-    let mut legacy = tokio::fs::File::create(&args.paths.legacy).await?;
-    let mut xml = tokio::fs::File::create(&args.paths.xml).await?;
-    legacy.write_all(b"[").await?;
-    xml.write_all(xml_header(args.room_id, &args.title).as_bytes())
-        .await?;
-    let mut first_legacy = true;
     let mut seq = 0_u64;
     let mut since_flush = 0_u32;
     let mut flush_tick = tokio::time::interval(std::time::Duration::from_secs(2));
@@ -71,18 +70,12 @@ pub async fn run(
     let mut link_markers = Vec::<Value>::new();
     let mut unique_users = HashSet::<i64>::new();
     let mut guard_dedupe = HashSet::<String>::new();
+    let mut capture_gaps = Vec::<Value>::new();
 
     loop {
         tokio::select! {
-            _ = args.cancellation.cancelled() => {
-                while let Ok(incoming) = rx.try_recv() {
-                    process(&incoming, &args, &mut jsonl, &mut legacy, &mut xml, &mut first_legacy,
-                        &mut seq, &mut heat, &mut paid_markers, &mut link_markers, &mut unique_users, &mut guard_dedupe).await?;
-                }
-                break;
-            }
             _ = flush_tick.tick() => {
-                jsonl.flush().await?; legacy.flush().await?; xml.flush().await?; since_flush = 0;
+                jsonl.flush().await?; since_flush = 0;
             }
             incoming = rx.recv() => {
                 let Some(incoming) = incoming else { break };
@@ -90,19 +83,16 @@ pub async fn run(
                     let _ = args.reload_tx.try_send(());
                     continue;
                 }
-                process(&incoming, &args, &mut jsonl, &mut legacy, &mut xml, &mut first_legacy,
-                    &mut seq, &mut heat, &mut paid_markers, &mut link_markers, &mut unique_users, &mut guard_dedupe).await?;
+                process(&incoming, &args, &mut jsonl, &mut seq, &mut heat, &mut paid_markers,
+                    &mut link_markers, &mut unique_users, &mut guard_dedupe, &mut capture_gaps).await?;
                 since_flush += 1;
-                if since_flush >= 100 { jsonl.flush().await?; legacy.flush().await?; xml.flush().await?; since_flush = 0; }
+                if since_flush >= 100 { jsonl.flush().await?; since_flush = 0; }
             }
         }
     }
 
-    legacy.write_all(b"\n]\n").await?;
-    xml.write_all(b"</i>\n").await?;
     jsonl.flush().await?;
-    legacy.flush().await?;
-    xml.flush().await?;
+    archive_legacy_and_xml(&args.paths, args.room_id, &args.title).await?;
     let snapshot = args.snapshot.lock().await.clone();
     let summary = json!({
         "schema_version": 1, "room_id": args.room_id, "title": args.title,
@@ -111,7 +101,7 @@ pub async fn run(
         "free_gift_count": snapshot.free_gift_count, "paid_gift_count": snapshot.paid_gift_count,
         "sc_count": snapshot.sc_count, "guard_count": snapshot.guard_count,
         "peak_watched": snapshot.peak_watched, "estimated_paid_value": snapshot.estimated_paid_value,
-        "dropped_event_count": snapshot.dropped_event_count, "capture_gaps": [],
+        "dropped_event_count": snapshot.dropped_event_count, "capture_gaps": capture_gaps,
         "danmaku_density_30s": heat, "paid_markers": paid_markers, "link_mic_pk_markers": link_markers,
     });
     tokio::fs::write(&args.paths.summary, serde_json::to_vec_pretty(&summary)?).await?;
@@ -123,15 +113,13 @@ async fn process(
     incoming: &IncomingLiveCommand,
     args: &InteractionWriterArgs,
     jsonl: &mut tokio::fs::File,
-    legacy: &mut tokio::fs::File,
-    xml: &mut tokio::fs::File,
-    first_legacy: &mut bool,
     seq: &mut u64,
     heat: &mut Vec<u64>,
     paid_markers: &mut Vec<Value>,
     link_markers: &mut Vec<Value>,
     unique_users: &mut HashSet<i64>,
     guard_dedupe: &mut HashSet<String>,
+    capture_gaps: &mut Vec<Value>,
 ) -> Result<()> {
     if incoming.cmd == "DANMU_CONNECTION_STATUS" {
         let mut snapshot = args.snapshot.lock().await;
@@ -169,7 +157,7 @@ async fn process(
     } else {
         normalize(&incoming.command, &incoming.cmd)
     };
-    if uid > 0 {
+    if uid > 0 && unique_users.len() < MAX_UNIQUE_USERS {
         unique_users.insert(uid);
     }
     let is_link = is_link_command(&incoming.cmd);
@@ -188,13 +176,6 @@ async fn process(
     };
     jsonl.write_all(&serde_json::to_vec(&event)?).await?;
     jsonl.write_all(b"\n").await?;
-    if !*first_legacy {
-        legacy.write_all(b",").await?;
-    }
-    *first_legacy = false;
-    legacy.write_all(b"\n").await?;
-    legacy.write_all(&serde_json::to_vec(&data)?).await?;
-    write_xml(xml, &incoming.command, media_time_ms).await?;
 
     {
         let mut snapshot = args.snapshot.lock().await;
@@ -204,6 +185,7 @@ async fn process(
             LiveCommand::Danmaku { .. } => {
                 snapshot.danmaku_count += 1;
                 let bucket = (media_time_ms / 30_000) as usize;
+                let bucket = bucket.min(MAX_HEAT_BUCKETS.saturating_sub(1));
                 if heat.len() <= bucket {
                     heat.resize(bucket + 1, 0);
                 }
@@ -218,7 +200,11 @@ async fn process(
                 if let Some(value) = gift_paid_value(coin_type, *total_coin) {
                     snapshot.paid_gift_count += i64::from(*num);
                     snapshot.estimated_paid_value += value;
-                    paid_markers.push(json!({"time_ms":media_time_ms,"type":"gift"}));
+                    push_bounded(
+                        paid_markers,
+                        json!({"time_ms":media_time_ms,"type":"gift"}),
+                        MAX_PAID_MARKERS,
+                    );
                 } else {
                     snapshot.free_gift_count += i64::from(*num);
                 }
@@ -226,7 +212,11 @@ async fn process(
             LiveCommand::SuperChat { price, .. } => {
                 snapshot.sc_count += 1;
                 snapshot.estimated_paid_value += f64::from(*price);
-                paid_markers.push(json!({"time_ms":media_time_ms,"type":"sc"}));
+                push_bounded(
+                    paid_markers,
+                    json!({"time_ms":media_time_ms,"type":"sc"}),
+                    MAX_PAID_MARKERS,
+                );
             }
             LiveCommand::GuardBuy {
                 uid,
@@ -241,10 +231,19 @@ async fn process(
                 } else {
                     order_id.clone()
                 };
+                if guard_dedupe.len() >= MAX_GUARD_DEDUPE {
+                    if let Some(oldest) = guard_dedupe.iter().next().cloned() {
+                        guard_dedupe.remove(&oldest);
+                    }
+                }
                 if guard_dedupe.insert(key) {
                     snapshot.guard_count += i64::from(*num);
                     snapshot.estimated_paid_value += f64::from(*price) / 1000.0;
-                    paid_markers.push(json!({"time_ms":media_time_ms,"type":"guard"}));
+                    push_bounded(
+                        paid_markers,
+                        json!({"time_ms":media_time_ms,"type":"guard"}),
+                        MAX_PAID_MARKERS,
+                    );
                 }
             }
             LiveCommand::WatchedChange { count } => {
@@ -253,6 +252,11 @@ async fn process(
             _ => {}
         }
         if incoming.cmd == "CAPTURE_GAP" {
+            push_bounded(
+                capture_gaps,
+                incoming.raw.get("data").cloned().unwrap_or(Value::Null),
+                MAX_CAPTURE_GAPS,
+            );
             snapshot.dropped_event_count += incoming
                 .raw
                 .pointer("/data/dropped")
@@ -261,7 +265,11 @@ async fn process(
         }
     }
     if is_link {
-        link_markers.push(json!({"time_ms":media_time_ms,"cmd":incoming.cmd}));
+        push_bounded(
+            link_markers,
+            json!({"time_ms":media_time_ms,"cmd":incoming.cmd}),
+            MAX_LINK_MARKERS,
+        );
     }
     let mut recent = args.recent.lock().await;
     recent.push_back(event);
@@ -269,6 +277,84 @@ async fn process(
         recent.pop_front();
     }
     Ok(())
+}
+
+fn push_bounded(values: &mut Vec<Value>, value: Value, limit: usize) {
+    values.push(value);
+    if values.len() > limit {
+        let overflow = values.len() - limit;
+        values.drain(..overflow);
+    }
+}
+
+async fn archive_legacy_and_xml(paths: &InteractionPaths, room_id: i64, title: &str) -> Result<()> {
+    let raw = tokio::fs::read_to_string(&paths.events).await?;
+    let mut events = Vec::<ArchivedLiveEvent>::new();
+    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+        if let Ok(event) = serde_json::from_str::<ArchivedLiveEvent>(line) {
+            events.push(event);
+        }
+    }
+    let legacy = json!({
+        "schema_version": 2,
+        "room_id": room_id,
+        "title": title,
+        "event_count": events.len(),
+        "events": events,
+    });
+    tokio::fs::write(&paths.legacy, serde_json::to_vec_pretty(&legacy)?).await?;
+
+    let mut xml = String::new();
+    xml.push_str(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<live_archive schema_version="2" room_id=""#,
+    );
+    xml.push_str(&room_id.to_string());
+    xml.push_str(r#"" title=""#);
+    xml.push_str(&escape_xml(title));
+    xml.push_str(
+        r#"">
+<metadata><source>jsonl-archive</source><uid_policy>redacted</uid_policy></metadata>
+"#,
+    );
+    for event in events {
+        let data = redact_uid_fields(event.data);
+        xml.push_str(&format!(
+            "<event seq=\"{}\" ts=\"{}\" type=\"{}\" segment=\"{}\"><data>{}</data></event>\n",
+            event.seq,
+            event.media_time_ms,
+            escape_xml(&event.event_type),
+            event.segment_index,
+            escape_xml(&data.to_string()),
+        ));
+    }
+    xml.push_str("</live_archive>\n");
+    tokio::fs::write(&paths.xml, xml).await?;
+    Ok(())
+}
+
+fn redact_uid_fields(mut value: Value) -> Value {
+    match &mut value {
+        Value::Object(object) => {
+            for key in ["uid", "user_id", "ruid", "sender_uid", "guard_uid"] {
+                if object.contains_key(key) {
+                    object.insert(key.to_owned(), Value::String("redacted".to_owned()));
+                }
+            }
+            for child in object.values_mut() {
+                let replacement = redact_uid_fields(std::mem::take(child));
+                *child = replacement;
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                let replacement = redact_uid_fields(std::mem::take(child));
+                *child = replacement;
+            }
+        }
+        _ => {}
+    }
+    value
 }
 
 fn normalize(command: &LiveCommand, cmd: &str) -> (&'static str, Value, i64) {
@@ -323,34 +409,6 @@ fn is_link_command(cmd: &str) -> bool {
         .any(|prefix| base.starts_with(prefix))
 }
 
-async fn write_xml(
-    file: &mut tokio::fs::File,
-    command: &LiveCommand,
-    media_time_ms: i64,
-) -> Result<()> {
-    let seconds = media_time_ms as f64 / 1000.0;
-    let line = match command {
-        LiveCommand::Danmaku { uid, text, mode, font_size, color, .. } => format!("<d p=\"{seconds:.3},{mode},{font_size},{color},0,0,{uid},0\">{}</d>\n", escape_xml(text)),
-        LiveCommand::Gift { uid, uname, gift_name, num, total_coin, coin_type, .. } => format!("<gift ts=\"{seconds:.3}\" uid=\"{uid}\" user=\"{}\" giftname=\"{}\" giftcount=\"{num}\" total_coin=\"{total_coin}\" coin_type=\"{}\" />\n", escape_xml(uname), escape_xml(gift_name), escape_xml(coin_type)),
-        LiveCommand::SuperChat { uid, uname, message, price, duration, .. } => format!("<sc ts=\"{seconds:.3}\" uid=\"{uid}\" user=\"{}\" price=\"{price}\" time=\"{duration}\">{}</sc>\n", escape_xml(uname), escape_xml(message)),
-        LiveCommand::GuardBuy { uid, uname, guard_level, price, num, .. } => format!("<guard ts=\"{seconds:.3}\" uid=\"{uid}\" user=\"{}\" level=\"{guard_level}\" price=\"{price}\" num=\"{num}\" />\n", escape_xml(uname)),
-        _ => return Ok(()),
-    };
-    file.write_all(line.as_bytes()).await?;
-    Ok(())
-}
-
-fn xml_header(room_id: i64, title: &str) -> String {
-    format!(
-        r##"<?xml version="1.0" encoding="UTF-8"?>
-<?xml-stylesheet type="text/xsl" href="#style"?>
-<i><chatserver>live.bilibili.com</chatserver><chatid>{room_id}</chatid><mission>0</mission><maxlimit>0</maxlimit><state>0</state><real_name>0</real_name><source>k-v</source><title>{}</title>
-<xsl:stylesheet id="style" version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/"><html><head><meta charset="utf-8"/><style>body{{font:14px sans-serif;background:#111;color:#eee}}table{{border-collapse:collapse;width:100%}}td,th{{padding:6px;border-bottom:1px solid #333;text-align:left}}</style></head><body><h2>直播互动档案</h2><table><tr><th>时间</th><th>类型</th><th>内容</th></tr><xsl:for-each select="i/*[self::d or self::gift or self::sc or self::guard]"><tr><td><xsl:value-of select="@ts|substring-before(@p, ',')"/></td><td><xsl:value-of select="name()"/></td><td><xsl:value-of select="."/><xsl:value-of select="@giftname"/></td></tr></xsl:for-each></table></body></html></xsl:template></xsl:stylesheet>
-"##,
-        escape_xml(title)
-    )
-}
-
 fn escape_xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -367,6 +425,42 @@ fn gift_paid_value(coin_type: &str, total_coin: i64) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    fn test_recording_info() -> RecordingInfo {
+        RecordingInfo {
+            room_id: 1,
+            title: "tail drain".to_owned(),
+            status: super::super::RecordingStatus::Recording,
+            output_path: String::new(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            duration_secs: 0,
+            file_size: 0,
+            error_msg: None,
+            danmu_unavailable: false,
+            stream_quality: None,
+            stream_protocol: None,
+            stream_format: None,
+            stream_codec: None,
+            trigger: "manual".to_owned(),
+            capture_mode: "standard".to_owned(),
+            interaction_capture_status: "capturing".to_owned(),
+            interaction_error: None,
+            event_path: None,
+            xml_path: None,
+            summary_path: None,
+            danmaku_count: 0,
+            unique_user_count: 0,
+            free_gift_count: 0,
+            paid_gift_count: 0,
+            sc_count: 0,
+            guard_count: 0,
+            peak_watched: 0,
+            dropped_event_count: 0,
+            estimated_paid_value: 0.0,
+            last_event_seq: 0,
+        }
+    }
     #[test]
     fn identifies_link_commands() {
         assert!(is_link_command("PK_BATTLE_START_NEW"));
@@ -381,5 +475,50 @@ mod tests {
         assert_eq!(gift_paid_value("silver", 1000), None);
         assert_eq!(gift_paid_value("gold", 0), None);
         assert_eq!(gift_paid_value("gold", 2500), Some(2.5));
+    }
+
+    #[tokio::test]
+    async fn writer_drains_tail_event_after_collector_sender_closes() {
+        let temp = tempdir().expect("temporary directory");
+        let paths = InteractionPaths {
+            legacy: temp.path().join("danmu.json"),
+            events: temp.path().join("events.jsonl"),
+            xml: temp.path().join("danmaku.xml"),
+            summary: temp.path().join("summary.json"),
+        };
+        let (tx, mut rx) = mpsc::channel(4);
+        let (reload_tx, _reload_rx) = mpsc::channel(1);
+        let args = InteractionWriterArgs {
+            room_id: 1,
+            title: "tail drain".to_owned(),
+            mode: CaptureMode::Standard,
+            started_at: chrono::Utc::now(),
+            paths: paths.clone(),
+            snapshot: Arc::new(Mutex::new(test_recording_info())),
+            recent: Arc::new(Mutex::new(VecDeque::new())),
+            reload_tx,
+            segment_index: Arc::new(AtomicU32::new(0)),
+        };
+        let writer = tokio::spawn(async move { run(&mut rx, args).await });
+        tx.send(IncomingLiveCommand::from_json(serde_json::json!({
+            "cmd": "DANMU_MSG", "info": [[], "tail event", [42, "tester"]]
+        })))
+        .await
+        .expect("queue tail event");
+        drop(tx);
+        writer.await.expect("writer task").expect("writer result");
+
+        let jsonl = tokio::fs::read_to_string(&paths.events)
+            .await
+            .expect("events archive");
+        let legacy = tokio::fs::read_to_string(&paths.legacy)
+            .await
+            .expect("legacy archive");
+        let xml = tokio::fs::read_to_string(&paths.xml)
+            .await
+            .expect("xml archive");
+        assert!(jsonl.contains("tail event"));
+        assert!(legacy.contains("tail event"));
+        assert!(xml.contains("tail event"));
     }
 }

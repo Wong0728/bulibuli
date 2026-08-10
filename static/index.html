@@ -48,15 +48,15 @@
     </div>
 
     <nav class="nav-tabs">
-        <div class="nav-tab active" data-tab="search"><i class="fa-solid fa-user-plus"></i> 博主搜索</div>
-        <div class="nav-tab" data-tab="manual"><i class="fa-solid fa-search"></i> 手动查询</div>
-        <div class="nav-tab" data-tab="auto"><i class="fa-solid fa-bolt"></i> 自动任务</div>
-        <div class="nav-tab" data-tab="history">
+        <button type="button" class="nav-tab active" data-tab="search" role="tab" aria-selected="true"><i class="fa-solid fa-user-plus"></i> 博主搜索</button>
+        <button type="button" class="nav-tab" data-tab="manual" role="tab" aria-selected="false"><i class="fa-solid fa-search"></i> 手动查询</button>
+        <button type="button" class="nav-tab" data-tab="auto" role="tab" aria-selected="false"><i class="fa-solid fa-bolt"></i> 自动任务</button>
+        <button type="button" class="nav-tab" data-tab="history" role="tab" aria-selected="false">
             <i class="fa-solid fa-history"></i> 下载管理
             <span id="aria2-status-dot" class="aria2-dot disconnected" title="正在检测 Aria2 状态..."></span>
-        </div>
-        <div class="nav-tab" data-tab="live"><i class="fa-solid fa-tower-broadcast"></i> 直播</div>
-        <div class="nav-tab" data-tab="settings"><i class="fa-solid fa-cog"></i> 设置</div>
+        </button>
+        <button type="button" class="nav-tab" data-tab="live" role="tab" aria-selected="false"><i class="fa-solid fa-tower-broadcast"></i> 直播</button>
+        <button type="button" class="nav-tab" data-tab="settings" role="tab" aria-selected="false"><i class="fa-solid fa-cog"></i> 设置</button>
     </nav>
 
     <!-- 博主搜索 Tab -->
@@ -287,6 +287,9 @@
 
     <!-- 直播录制 Tab -->
     <section id="tab-live" class="tab-panel">
+        <div class="live-health-summary" id="live-health-summary" aria-live="polite">
+            <span>监控：等待检查</span><span>B站状态：等待检查</span><span>录制：0</span>
+        </div>
         <div class="card">
             <div class="card-title">
                 <i class="fa-solid fa-tower-broadcast"></i>
@@ -331,7 +334,17 @@
             </div>
         </div>
 
-        <details class="card live-interaction-card" open>
+        <div class="card">
+            <div class="card-title"><i class="fa-solid fa-clock-rotate-left"></i><span>最近录制</span></div>
+            <div id="live-history-list" class="live-recording-list"><p class="empty-hint">正在加载录制历史</p></div>
+        </div>
+
+        <div class="card" id="live-recovery-card">
+            <div class="card-title"><i class="fa-solid fa-life-ring"></i><span>待恢复分段与后台任务</span></div>
+            <div id="live-recovery-list" class="live-recording-list"><p class="empty-hint">暂无待恢复任务</p></div>
+        </div>
+
+        <details class="card live-interaction-card">
             <summary class="card-title"><i class="fa-solid fa-comments"></i><span>实时互动</span><span id="live-interaction-room" class="live-interaction-room"></span></summary>
             <div id="live-interaction-stats" class="live-stats-grid"></div>
             <div id="live-sc-pins" class="live-sc-pins"></div>
@@ -341,9 +354,11 @@
                     <option value="all">全部互动</option><option value="danmaku">弹幕</option><option value="gift">礼物</option>
                     <option value="super_chat">SC</option><option value="guard">上舰</option><option value="link_mic_pk">连麦 / PK</option>
                 </select>
+                <span id="live-events-status" class="live-events-status" role="status">实时互动状态：等待检查</span>
             </div>
             <div id="live-heat-bar" class="live-heat-bar" aria-label="30秒弹幕热度"></div>
             <div id="live-event-timeline" class="live-event-timeline"><p class="empty-hint">录制开始后在这里显示互动</p></div>
+            <p class="form-note">实时互动显示最近 100 条；热度按 30 秒桶统计。观看人数是 B 站累计口径，互动人数按可识别事件 UID 估算，金额为非结算估算值。</p>
         </details>
 
         <dialog id="live-source-dialog" class="live-source-dialog">

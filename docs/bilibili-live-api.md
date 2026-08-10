@@ -987,3 +987,22 @@ Auth OK!
 | 60004 | 直播间不存在 |
 | 19002003 | 房间信息不存在 |
 | 1002002 | 参数错误 |
+
+## Current implementation contract (2026-08-10)
+
+The historical `getConf` examples above are retained for protocol research only.
+The production recorder does not call that endpoint or use it as a fallback. It
+calls `getDanmuInfo` with a WBI signature and a valid authenticated account
+(`uid > 0` plus the account cookie). Missing login state is an explicit
+interaction-degraded state; it is never represented as guest WebSocket auth.
+
+The WebSocket client first builds a standard tungstenite client request (which
+generates `Sec-WebSocket-Key` and `Sec-WebSocket-Version`), then adds the
+`Origin`, `User-Agent`, and account `Cookie` headers. It sends `op=7`, requires
+an `op=8` reply with `code=0`, and applies bounded reconnects with host
+rotation and circuit-breaker state. Error messages exposed to APIs are redacted
+and must not contain cookies, tokens, signatures, or local filesystem paths.
+
+For recorder behavior and the archive data contract, see
+`docs/live-archive-schema.md` and
+`docs/live-audit-remediation-2026-08-10.md`.

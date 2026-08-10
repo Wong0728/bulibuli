@@ -1,6 +1,6 @@
 use crate::models::live_source;
 use anyhow::{bail, Result};
-use chrono::{Datelike, Local, NaiveTime, Timelike};
+use chrono::{Datelike, Local, NaiveDateTime, NaiveTime, TimeZone, Timelike};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
 };
@@ -41,17 +41,50 @@ pub type WeeklySchedule = BTreeMap<String, Vec<String>>;
 pub fn normalize_schedule(value: Option<WeeklySchedule>) -> Result<Option<String>> {
     let Some(value) = value else { return Ok(None) };
     let mut normalized = WeeklySchedule::new();
+    let mut all_windows = Vec::<(usize, NaiveTime, NaiveTime)>::new();
     for day in WEEKDAYS {
         let windows = value.get(day).cloned().unwrap_or_default();
         if windows.len() > 6 {
-            bail!("每天最多配置 6 个录制时段");
+            bail!("a day may contain at most 6 schedule windows");
         }
         let mut clean = Vec::with_capacity(windows.len());
         for window in windows {
             let (start, end) = parse_window(&window)?;
             clean.push(format!("{}-{}", start.format("%H:%M"), end.format("%H:%M")));
         }
+        clean.sort_by_key(|window| parse_window(window).map(|(start, _)| start).unwrap());
+        let parsed = clean
+            .iter()
+            .map(|window| parse_window(window))
+            .collect::<Result<Vec<_>>>()?;
+        let day_index = WEEKDAYS.iter().position(|item| *item == day).unwrap_or(0);
+        all_windows.extend(parsed.iter().map(|(start, end)| (day_index, *start, *end)));
+        for pair in parsed.windows(2) {
+            let (_, previous_end) = pair[0];
+            let (next_start, _) = pair[1];
+            if previous_end > next_start {
+                bail!("schedule windows overlap");
+            }
+        }
         normalized.insert(day.to_owned(), clean);
+    }
+    let week_minutes = 7 * 24 * 60;
+    let mut intervals = Vec::<(i32, i32)>::new();
+    for (day, start, end) in all_windows {
+        let start = day as i32 * 24 * 60 + start.hour() as i32 * 60 + start.minute() as i32;
+        let mut end = day as i32 * 24 * 60 + end.hour() as i32 * 60 + end.minute() as i32;
+        if end <= start {
+            end += 24 * 60;
+        }
+        for offset in [-week_minutes, 0, week_minutes] {
+            intervals.push((start + offset, end + offset));
+        }
+    }
+    intervals.sort_unstable_by_key(|(start, _)| *start);
+    for pair in intervals.windows(2) {
+        if pair[0].1 > pair[1].0 {
+            bail!("schedule windows overlap across midnight");
+        }
     }
     Ok(Some(serde_json::to_string(&normalized)?))
 }
@@ -84,6 +117,34 @@ pub fn schedule_is_active(schedule: Option<&str>, now: chrono::DateTime<Local>) 
     })
 }
 
+pub fn next_schedule_start(
+    schedule: Option<&str>,
+    now: chrono::DateTime<Local>,
+) -> Option<chrono::DateTime<Local>> {
+    let schedule = schedule_from_json(schedule);
+    for offset in 0..=7_i64 {
+        let date = now.date_naive() + chrono::Days::new(offset as u64);
+        let weekday = date.weekday().num_days_from_monday() as usize;
+        let day = WEEKDAYS[weekday];
+        let mut starts = schedule
+            .get(day)
+            .into_iter()
+            .flatten()
+            .filter_map(|window| parse_window(window).ok().map(|(start, _)| start))
+            .collect::<Vec<_>>();
+        starts.sort_unstable();
+        for start in starts {
+            let candidate = Local
+                .from_local_datetime(&NaiveDateTime::new(date, start))
+                .single()?;
+            if candidate > now {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 fn parse_window(value: &str) -> Result<(NaiveTime, NaiveTime)> {
     let (start, end) = value
         .trim()
@@ -109,7 +170,7 @@ pub struct NewLiveSource {
     pub title: String,
     #[serde(default)]
     pub cover: String,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub auto_record_enabled: bool,
     pub weekly_schedule: Option<WeeklySchedule>,
     #[serde(default)]
@@ -123,10 +184,6 @@ pub struct UpdateLiveSource {
     pub weekly_schedule: Option<WeeklySchedule>,
     pub clear_schedule: Option<bool>,
     pub capture_mode: Option<CaptureMode>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Clone)]
@@ -155,7 +212,15 @@ impl LiveSourceService {
             bail!("直播间号必须为正整数");
         }
         if self.find(value.room_id).await?.is_some() {
-            bail!("该直播源已存在");
+            bail!("live source already exists");
+        }
+        if value.auto_record_enabled
+            && value
+                .weekly_schedule
+                .as_ref()
+                .is_some_and(|schedule| schedule.values().all(Vec::is_empty))
+        {
+            bail!("auto recording requires a schedule or all-day mode");
         }
         let now = Local::now().to_rfc3339();
         let schedule = normalize_schedule(value.weekly_schedule)?;
@@ -171,6 +236,7 @@ impl LiveSourceService {
             weekly_schedule: Set(schedule),
             capture_mode: Set(value.capture_mode.as_str().to_owned()),
             manual_stop_latched: Set(false),
+            manual_stop_session_key: Set(None),
             created_at: Set(now.clone()),
             updated_at: Set(now),
             ..Default::default()
@@ -185,6 +251,14 @@ impl LiveSourceService {
             .ok_or_else(|| anyhow::anyhow!("直播源不存在"))?;
         let mut model: live_source::ActiveModel = current.into();
         if let Some(enabled) = value.auto_record_enabled {
+            if enabled
+                && value
+                    .weekly_schedule
+                    .as_ref()
+                    .is_some_and(|schedule| schedule.values().all(Vec::is_empty))
+            {
+                bail!("auto recording cannot use an empty schedule");
+            }
             model.auto_record_enabled = Set(enabled);
         }
         if value.clear_schedule.unwrap_or(false) {
@@ -210,6 +284,24 @@ impl LiveSourceService {
         if let Some(current) = self.find(room_id).await? {
             let mut model: live_source::ActiveModel = current.into();
             model.manual_stop_latched = Set(value);
+            if !value {
+                model.manual_stop_session_key = Set(None);
+            }
+            model.updated_at = Set(Local::now().to_rfc3339());
+            model.update(&self.db).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn set_manual_stop_session(
+        &self,
+        room_id: i64,
+        session_key: Option<String>,
+    ) -> Result<()> {
+        if let Some(current) = self.find(room_id).await? {
+            let mut model: live_source::ActiveModel = current.into();
+            model.manual_stop_latched = Set(session_key.is_some());
+            model.manual_stop_session_key = Set(session_key);
             model.updated_at = Set(Local::now().to_rfc3339());
             model.update(&self.db).await?;
         }
@@ -238,5 +330,19 @@ mod tests {
     #[test]
     fn absent_schedule_means_all_day() {
         assert!(schedule_is_active(None, Local::now()));
+    }
+
+    #[test]
+    fn next_schedule_start_finds_the_next_window() {
+        let mut schedule = WeeklySchedule::new();
+        schedule.insert("mon".into(), vec!["18:00-23:00".into()]);
+        let raw = normalize_schedule(Some(schedule)).unwrap().unwrap();
+        let now = Local.with_ymd_and_hms(2026, 8, 10, 12, 0, 0).unwrap();
+        assert_eq!(
+            next_schedule_start(Some(&raw), now)
+                .expect("next window")
+                .hour(),
+            18
+        );
     }
 }
