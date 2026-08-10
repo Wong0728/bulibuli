@@ -308,6 +308,13 @@ export async function loadSettingsFromServer() {
                 document.getElementById('setting-per-blogger-retain-default').value = s.storage.per_blogger_retain_default;
             }
 
+            if (s.live) {
+                document.getElementById('setting-live-max-concurrent').value = s.live.max_concurrent ?? 2;
+                document.getElementById('setting-live-min-free-space').value = s.live.min_free_space_gib ?? 10;
+                document.getElementById('setting-live-max-duration').value = s.live.max_duration_hours ?? 12;
+                document.getElementById('setting-live-file-template').value = s.live.file_name_template ?? '{room_id}_{title}_{date}';
+            }
+
             if (s.download_path) {
                 document.getElementById('setting-auto-organize').checked = s.download_path.auto_organize;
                 document.getElementById('setting-path-template').value = s.download_path.path_template ?? '{uid}/{title}';
@@ -487,6 +494,13 @@ export async function saveSettings(btn) {
             periodic_batch: parseInt(document.getElementById('setting-verify-periodic-batch').value),
         });
         settings.board.show_relative_path = document.getElementById('setting-show-relative-path').checked;
+        settings.live = {
+            ...(settings.live || {}),
+            max_concurrent: parseInt(document.getElementById('setting-live-max-concurrent').value),
+            min_free_space_gib: parseInt(document.getElementById('setting-live-min-free-space').value),
+            max_duration_hours: parseInt(document.getElementById('setting-live-max-duration').value),
+            file_name_template: document.getElementById('setting-live-file-template').value.trim(),
+        };
         settings.monitor.detect_reupload = document.getElementById('setting-detect-reupload').checked;
         const mpModeEl = document.getElementById('setting-multi-page-mode');
         if (mpModeEl) settings.monitor.multi_page_mode = mpModeEl.value;
