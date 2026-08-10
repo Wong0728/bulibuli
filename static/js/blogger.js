@@ -107,6 +107,7 @@ export function computeNextCheckDisplay(state) {
 
 // 就地更新倒计时，避免每秒重建侧边栏并丢失滚动或焦点。
 export function tickSidebarCountdowns() {
+    updateAutoBoardSummary();
     const sidebar = document.getElementById('blogger-sidebar-list');
     if (!sidebar) return;
     const items = sidebar.querySelectorAll('.blogger-list-item[data-blogger-id]');
@@ -129,9 +130,23 @@ export function tickSidebarCountdowns() {
     if (needFullRender) renderBloggerSidebar();
 }
 
+// 看板标题右侧概览：与其他页面顶栏一样提供一眼可见的状态摘要。
+export function updateAutoBoardSummary() {
+    const node = document.getElementById('auto-board-summary');
+    if (!node) return;
+    const total = _state.bloggers.length;
+    if (!total) {
+        node.textContent = '暂无监控博主';
+        return;
+    }
+    const running = _state.bloggers.filter(b => (_state.bloggerStates[b.id] || {}).isRunning).length;
+    node.textContent = `${total} 位博主 · ${running} 个监控运行中`;
+}
+
 export function renderBloggerSidebar() {
     const sidebar = document.getElementById('blogger-sidebar-list');
     if (!sidebar) return;
+    updateAutoBoardSummary();
 
     if (_state.bloggers.length === 0) {
         sidebar.innerHTML = `
