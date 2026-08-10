@@ -15,6 +15,8 @@ use tracing::{debug, error, info, warn};
 const MAX_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 const MIN_MERGED_DURATION_RATIO: f64 = 0.90;
 const MERGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// 合并预检的额外安全余量：除输出体积（约等于输入分段总和）外保留的空间。
+const MERGE_FREE_SPACE_MARGIN_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug)]
 struct MediaProbe {
@@ -219,6 +221,29 @@ async fn merge_segments_to_mp4_inner(
         .first()
         .expect("segments checked above")
         .to_path_buf();
+    // 合并输出会占用与输入分段总量相当的磁盘空间；启动前预检，避免长时间
+    // 写入后才因磁盘写满产出损坏的 MP4。源分段在合并成功前不会被删除。
+    let total_segment_bytes: u64 = segments
+        .iter()
+        .filter_map(|path| std::fs::metadata(path).ok())
+        .map(|metadata| metadata.len())
+        .sum();
+    if total_segment_bytes > 0 {
+        let target_dir = first
+            .parent()
+            .filter(|dir| dir.is_dir())
+            .unwrap_or_else(|| Path::new("."));
+        if let Ok(available) = fs2::available_space(target_dir) {
+            let required = total_segment_bytes + MERGE_FREE_SPACE_MARGIN_BYTES;
+            if available < required {
+                return Err(anyhow!(
+                    "磁盘空间不足：合并约需额外 {} MB，当前可用 {} MB，已取消本次合并（源分段仍保留）",
+                    required / (1024 * 1024),
+                    available / (1024 * 1024)
+                ));
+            }
+        }
+    }
     let output = first.with_extension("mp4");
     let partial_output = first.with_extension("mp4.partial");
     let list_path = first.with_file_name(format!(

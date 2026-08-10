@@ -376,7 +376,7 @@ impl LiveRecorder {
         let selected_stream = stream_candidates
             .first()
             .cloned()
-            .ok_or_else(|| anyhow!("娴佸湴鍧€鍒楄〃涓虹┖"))?;
+            .ok_or_else(|| anyhow!("流地址列表为空"))?;
         let stream_url = selected_stream.url.clone();
 
         let (ffmpeg_path, _) = self.inner.video_processor.detect_ffmpeg("auto", None).await;
@@ -1436,11 +1436,32 @@ impl RecordingWorker {
             .await
             .context("刷新直播流地址失败")?;
         let candidates = select_stream_candidates(&playurl.durl)?;
+        // 分段切换时优先选择与当前录制相同的容器/编码组合：concat 合并无法
+        // 混合不同格式的分段。仅在同格式线路都不可用时才跨格式降级。
+        let (current_format, current_codec) = {
+            let snapshot = self.snapshot.lock().await;
+            (snapshot.stream_format.clone(), snapshot.stream_codec.clone())
+        };
+        let same_profile = |stream: &LiveStreamUrl| {
+            current_format
+                .as_deref()
+                .map_or(true, |format| stream.format_name.eq_ignore_ascii_case(format))
+                && current_codec
+                    .as_deref()
+                    .map_or(true, |codec| stream.codec_name.eq_ignore_ascii_case(codec))
+        };
         let selected_index = candidates
             .iter()
             .enumerate()
-            .find(|(_, stream)| stream.url != self.current_url)
+            .find(|(_, stream)| stream.url != self.current_url && same_profile(stream))
             .map(|(index, _)| index)
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .enumerate()
+                    .find(|(_, stream)| stream.url != self.current_url)
+                    .map(|(index, _)| index)
+            })
             .unwrap_or_else(|| {
                 if candidates.is_empty() {
                     0
@@ -1451,7 +1472,7 @@ impl RecordingWorker {
         let selected_stream = candidates
             .get(selected_index)
             .cloned()
-            .ok_or_else(|| anyhow!("娴佸湴鍧€鍒楄〃涓虹┖"))?;
+            .ok_or_else(|| anyhow!("流地址列表为空"))?;
         self.stream_candidates = candidates;
         self.candidate_index = selected_index;
         let new_url = selected_stream.url.clone();
