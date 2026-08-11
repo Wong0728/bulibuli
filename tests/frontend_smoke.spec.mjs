@@ -119,7 +119,7 @@ test('drawer gates directory access and reports open-directory failure', async (
     await expect(card).toBeVisible();
     await card.click();
     await expect(page.locator('#video-drawer')).toHaveClass(/active/);
-    await expect(page.locator('#drawer-file-list')).toContainText('评论');
+    await expect(page.locator('#video-drawer .drawer-sidecar-browser')).toContainText('评论');
     await expect(page.locator('#video-drawer [data-action="open-history-directory"]')).toHaveCount(0);
 });
 
@@ -127,8 +127,8 @@ test('directory capability allows the action and surfaces backend errors', async
     await openApp(page, { canOpenDirectory: true });
     await page.locator('.nav-tab[data-tab="history"]').click();
     await page.locator(`[data-action="open-video"][data-bvid="${bvid}"]`).click();
-    const button = page.locator('#video-drawer [data-action="open-history-directory"]');
-    await expect(button).toHaveCount(1);
+    const button = page.locator('#video-drawer [data-action="open-history-directory"]').first();
+    await expect(button).toBeVisible();
     await button.click();
     await expect(page.locator('.toast')).toContainText('目录打开失败');
 });
