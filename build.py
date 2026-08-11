@@ -24,6 +24,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 APP_SLUG = "bulibuli"
 APP_DISPLAY_NAME = "补哩补哩"
 APP_SLOGAN = "下架之前，先下为敬。"

@@ -39,6 +39,8 @@ jobs:
           python-version: '3.12'
       - run: npm ci --ignore-scripts
         working-directory: static/js
+      - name: Expose frontend test dependencies
+        run: ln -s static/js/node_modules node_modules
       - run: npm run build
         working-directory: static/js
       - run: npx playwright install --with-deps chromium
@@ -94,11 +96,11 @@ jobs:
             platform: linux
             arch: x86_64
             target: x86_64-unknown-linux-gnu
-          - os: macos-14
+          - os: macos-13
             platform: macos
             arch: x86_64
             target: x86_64-apple-darwin
-          - os: macos-14-arm64
+          - os: macos-14
             platform: macos
             arch: arm64
             target: aarch64-apple-darwin

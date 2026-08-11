@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 #[cfg(not(windows))]
 const FORMAT_AES_GCM: u8 = 1;
+#[cfg(windows)]
 const FORMAT_DPAPI: u8 = 2;
 
 #[derive(Clone)]
