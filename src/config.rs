@@ -254,3 +254,13 @@ where
         .parse()
         .map_err(|error| anyhow::anyhow!("环境变量 {key} 的值无效: {error}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AppConfig;
+
+    #[test]
+    fn tls_verification_defaults_to_enabled() {
+        assert!(AppConfig::default().tls_verify);
+    }
+}

@@ -11,6 +11,7 @@ BilibiliUIDBuildownloader 构建脚本
 """
 
 import argparse
+import hashlib
 import re
 import shutil
 import subprocess
@@ -234,6 +235,62 @@ def _quality_error(message):
     return False
 
 
+def check_resource_hashes():
+    """Verify built-in resources against the hashes documented in resources/README.md."""
+    manifest = ROOT / "resources" / "README.md"
+    if not manifest.is_file():
+        return _quality_error("resource hash manifest is missing")
+
+    expected = {}
+    in_code_block = False
+    for raw_line in manifest.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line == "```":
+            in_code_block = not in_code_block
+            continue
+        if not in_code_block:
+            continue
+        match = re.fullmatch(r"(\S+)\s+([0-9A-Fa-f]{64})", line)
+        if match:
+            expected[match.group(1)] = match.group(2).upper()
+
+    if not expected:
+        return _quality_error("resource hash manifest has no SHA-256 entries")
+
+    ok = True
+    for relative_path, wanted in expected.items():
+        resource = ROOT / "resources" / relative_path
+        if not resource.is_file():
+            ok = _quality_error(f"resource is missing: resources/{relative_path}") and ok
+            continue
+        digest = hashlib.sha256()
+        with resource.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        actual = digest.hexdigest().upper()
+        if actual != wanted:
+            ok = _quality_error(
+                f"resource hash mismatch: resources/{relative_path} "
+                f"(expected {wanted}, got {actual})"
+            ) and ok
+    return ok
+
+
+def check_portable_bundle_contract(bundle):
+    """Ensure the bundled frontend keeps the portable-directory capability contract."""
+    bundle_text = bundle.read_text(encoding="utf-8")
+    required_strings = (
+        "can_open_directory",
+        "open-history-directory",
+        "path_display_mode",
+    )
+    ok = True
+    for required in required_strings:
+        if required not in bundle_text:
+            ok = _quality_error(f"frontend bundle is missing contract field: {required}") and ok
+    return ok
+
+
 def run_quality_checks():
     """Run the mandatory formatting, lint, test and source-policy gates."""
     print("[check] running mandatory quality gates")
@@ -297,7 +354,9 @@ def run_quality_checks():
             print(f"  [错误] JavaScript 语法检查失败: {path.relative_to(ROOT)}")
             raise SystemExit(1)
 
-    build_frontend_bundle()
+    bundle = build_frontend_bundle()
+    ok = check_resource_hashes() and ok
+    ok = check_portable_bundle_contract(bundle) and ok
 
     rust_source = "\n".join(path.read_text(encoding="utf-8") for path in rust_files)
     js_source = "\n".join(path.read_text(encoding="utf-8") for path in first_party_js)

@@ -365,7 +365,7 @@ async fn archive_legacy_and_xml(
     )
     .await?;
     // 同时生成标准 B 站弹幕 XML（PotPlayer 可识别）
-    write_standard_bilibili_xml(&paths).await?;
+    write_standard_bilibili_xml(paths).await?;
     Ok(truncated)
 }
 

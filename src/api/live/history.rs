@@ -1,6 +1,7 @@
 use super::{EventsQuery, HistoryQuery};
 use crate::error::{ApiResponse, AppError};
 use crate::services::live_recorder::ArchivedLiveEvent;
+use crate::services::security_config::can_open_directory;
 use crate::state::SharedState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
@@ -76,6 +77,134 @@ fn event_category(event: &ArchivedLiveEvent) -> &'static str {
     }
 }
 
+pub(super) async fn history(
+    State(state): State<SharedState>,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let can_open_directory = can_open_directory(&state.bili.security.current().mode);
+    let rows = state
+        .media
+        .live_recorder
+        .history(query.limit.unwrap_or(30))
+        .await?;
+    let items = stream::iter(rows.iter().cloned())
+        .map(move |row| async move { history_view(&row, can_open_directory).await })
+        .buffered(8)
+        .collect::<Vec<_>>()
+        .await;
+    Ok(Json(ApiResponse::success(json!({ "items": items }))))
+}
+
+pub(super) async fn history_item(
+    State(state): State<SharedState>,
+    Path(recording_id): Path<i32>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let can_open_directory = can_open_directory(&state.bili.security.current().mode);
+    let row = state
+        .media
+        .live_recorder
+        .history_item(recording_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("录制历史不存在".into()))?;
+    Ok(Json(ApiResponse::success(
+        history_view(&row, can_open_directory).await,
+    )))
+}
+
+pub(super) async fn recovery(
+    State(state): State<SharedState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let items = state.media.live_recorder.recovery_items().await?;
+    Ok(Json(ApiResponse::success(json!({ "items": items }))))
+}
+
+pub(super) async fn open_history_directory(
+    State(state): State<SharedState>,
+    Path(recording_id): Path<i32>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    if !can_open_directory(&state.bili.security.current().mode) {
+        return Err(AppError::BadRequest("仅本机访问支持打开所在目录".into()));
+    }
+    let row = state
+        .media
+        .live_recorder
+        .history_item(recording_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("录制历史不存在".into()))?;
+    let output = row
+        .output_path
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("该录制没有可打开的输出文件".into()))?;
+    let directory = std::path::Path::new(output)
+        .parent()
+        .ok_or_else(|| AppError::BadRequest("录制输出路径无效".into()))?;
+    if !directory.is_dir() {
+        return Err(AppError::NotFound("录制输出目录不存在".into()));
+    }
+    open::that(directory)
+        .map_err(|_| AppError::Internal("open recording directory failed".to_owned()))?;
+    Ok(Json(ApiResponse::with_message(
+        json!({"recording_id": recording_id}),
+        "已打开录制目录",
+    )))
+}
+
+pub(super) async fn history_view(
+    row: &crate::models::live_recording::Model,
+    can_open_directory: bool,
+) -> serde_json::Value {
+    let output_path = row.output_path.as_deref().map(FsPath::new);
+    let event_path = row.event_path.as_deref().map(FsPath::new);
+    let burned_path = row.output_path.as_deref().and_then(|path| {
+        let source = FsPath::new(path);
+        source
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| source.with_file_name(format!("{stem}_弹幕版.mp4")))
+    });
+    let (has_output, has_events, has_burned) = tokio::join!(
+        path_exists(output_path),
+        path_exists(event_path),
+        path_exists(burned_path.as_deref()),
+    );
+    json!({
+        "id": row.id, "room_id": row.room_id, "title": row.title, "cover": row.cover,
+        "status": row.status, "started_at": row.started_at, "ended_at": row.ended_at,
+        "duration": row.duration, "file_size": row.file_size, "error_msg": row.error_msg.as_deref().map(public_error),
+        "trigger": row.trigger, "capture_mode": row.capture_mode,
+        "interaction_status": row.interaction_status, "interaction_error": row.interaction_error.as_deref().map(public_error),
+        "danmaku_count": row.danmaku_count, "unique_user_count": row.unique_user_count,
+        "segment_index": row.segment_index, "restart_attempts": row.restart_attempts,
+        "stop_reason": row.stop_reason, "is_recoverable": row.is_recoverable,
+        "has_output": has_output,
+        "can_open_directory": can_open_directory,
+        "has_events": has_events,
+        "has_burned": has_burned,
+    })
+}
+
+async fn path_exists(path: Option<&FsPath>) -> bool {
+    match path {
+        Some(path) => tokio::fs::try_exists(path).await.unwrap_or(false),
+        None => false,
+    }
+}
+
+pub(super) fn public_error(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.contains("://") {
+        return crate::services::live_recorder::ffmpeg_session::redact_diagnostics(trimmed);
+    }
+    let bytes = trimmed.as_bytes();
+    let windows_absolute =
+        bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/');
+    if trimmed.starts_with('/') || trimmed.starts_with("\\\\") || windows_absolute {
+        "diagnostic redacted".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod event_tests {
     use super::*;
@@ -109,121 +238,5 @@ mod event_tests {
             event_view(&event("ONLINE_RANK_V3", "unknown"))["event_visible"],
             false
         );
-    }
-}
-
-pub(super) async fn history(
-    State(state): State<SharedState>,
-    Query(query): Query<HistoryQuery>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let rows = state
-        .media
-        .live_recorder
-        .history(query.limit.unwrap_or(30))
-        .await?;
-    let items = stream::iter(rows.iter().map(history_view))
-        .buffered(8)
-        .collect::<Vec<_>>()
-        .await;
-    Ok(Json(ApiResponse::success(json!({ "items": items }))))
-}
-
-pub(super) async fn history_item(
-    State(state): State<SharedState>,
-    Path(recording_id): Path<i32>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let row = state
-        .media
-        .live_recorder
-        .history_item(recording_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("录制历史不存在".into()))?;
-    Ok(Json(ApiResponse::success(history_view(&row).await)))
-}
-
-pub(super) async fn recovery(
-    State(state): State<SharedState>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let items = state.media.live_recorder.recovery_items().await?;
-    Ok(Json(ApiResponse::success(json!({ "items": items }))))
-}
-
-pub(super) async fn open_history_directory(
-    State(state): State<SharedState>,
-    Path(recording_id): Path<i32>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let row = state
-        .media
-        .live_recorder
-        .history_item(recording_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("录制历史不存在".into()))?;
-    let output = row
-        .output_path
-        .as_deref()
-        .ok_or_else(|| AppError::BadRequest("该录制没有可打开的输出文件".into()))?;
-    let directory = std::path::Path::new(output)
-        .parent()
-        .ok_or_else(|| AppError::BadRequest("录制输出路径无效".into()))?;
-    if !directory.is_dir() {
-        return Err(AppError::NotFound("录制输出目录不存在".into()));
-    }
-    open::that(directory)
-        .map_err(|_| AppError::Internal("open recording directory failed".to_owned()))?;
-    Ok(Json(ApiResponse::with_message(
-        json!({"recording_id": recording_id}),
-        "已打开录制目录",
-    )))
-}
-
-pub(super) async fn history_view(row: &crate::models::live_recording::Model) -> serde_json::Value {
-    let output_path = row.output_path.as_deref().map(FsPath::new);
-    let event_path = row.event_path.as_deref().map(FsPath::new);
-    let burned_path = row.output_path.as_deref().and_then(|path| {
-        let source = FsPath::new(path);
-        source
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|stem| source.with_file_name(format!("{stem}_弹幕版.mp4")))
-    });
-    let (has_output, has_events, has_burned) = tokio::join!(
-        path_exists(output_path),
-        path_exists(event_path),
-        path_exists(burned_path.as_deref()),
-    );
-    json!({
-        "id": row.id, "room_id": row.room_id, "title": row.title, "cover": row.cover,
-        "status": row.status, "started_at": row.started_at, "ended_at": row.ended_at,
-        "duration": row.duration, "file_size": row.file_size, "error_msg": row.error_msg.as_deref().map(public_error),
-        "trigger": row.trigger, "capture_mode": row.capture_mode,
-        "interaction_status": row.interaction_status, "interaction_error": row.interaction_error.as_deref().map(public_error),
-        "danmaku_count": row.danmaku_count, "unique_user_count": row.unique_user_count,
-        "segment_index": row.segment_index, "restart_attempts": row.restart_attempts,
-        "stop_reason": row.stop_reason, "is_recoverable": row.is_recoverable,
-        "has_output": has_output,
-        "has_events": has_events,
-        "has_burned": has_burned,
-    })
-}
-
-async fn path_exists(path: Option<&FsPath>) -> bool {
-    match path {
-        Some(path) => tokio::fs::try_exists(path).await.unwrap_or(false),
-        None => false,
-    }
-}
-
-pub(super) fn public_error(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.contains("://") {
-        return crate::services::live_recorder::ffmpeg_session::redact_diagnostics(trimmed);
-    }
-    let bytes = trimmed.as_bytes();
-    let windows_absolute =
-        bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/');
-    if trimmed.starts_with('/') || trimmed.starts_with("\\\\") || windows_absolute {
-        "diagnostic redacted".to_owned()
-    } else {
-        trimmed.to_owned()
     }
 }

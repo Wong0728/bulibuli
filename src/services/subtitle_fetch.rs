@@ -9,6 +9,7 @@ use crate::services::bili_api::models::SubtitleInfo;
 use crate::services::bili_api::BiliApi;
 use crate::services::danmaku::{archive_sidecar_files, SidecarArchivePolicy};
 use crate::services::file_safety::{ensure_existing_within_root, validate_uid};
+use crate::services::live_recorder::ffmpeg_session::redact_diagnostics;
 use crate::services::settings::SubtitleSettings;
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
@@ -272,7 +273,13 @@ impl SubtitleFetchService {
                 .timeout(std::time::Duration::from_secs(15))
                 .send()
                 .await
-                .map_err(|e| anyhow!("请求字幕 JSON 失败 url={current}: {e}"))?;
+                .map_err(|e| {
+                    let diagnostics = redact_diagnostics(&e.to_string());
+                    anyhow!(
+                        "请求字幕 JSON 失败 url={}: {diagnostics}",
+                        redact_diagnostics(current.as_str()),
+                    )
+                })?;
             if response.status().is_redirection() {
                 if redirect_count >= 5 {
                     return Err(anyhow!("字幕重定向超过 5 次限制"));
@@ -297,8 +304,9 @@ impl SubtitleFetchService {
         };
         if !resp.status().is_success() {
             return Err(anyhow!(
-                "字幕 JSON 返回 HTTP {} url={current}",
-                resp.status()
+                "字幕 JSON 返回 HTTP {} url={}",
+                resp.status(),
+                redact_diagnostics(current.as_str())
             ));
         }
         let content_type = resp
@@ -318,8 +326,13 @@ impl SubtitleFetchService {
             }
             bytes.extend_from_slice(&chunk);
         }
-        let body: SubtitleBody = serde_json::from_slice(&bytes)
-            .map_err(|e| anyhow!("解析字幕 JSON 失败 url={current}: {e}"))?;
+        let body: SubtitleBody = serde_json::from_slice(&bytes).map_err(|e| {
+            let diagnostics = redact_diagnostics(&e.to_string());
+            anyhow!(
+                "解析字幕 JSON 失败 url={}: {diagnostics}",
+                redact_diagnostics(current.as_str()),
+            )
+        })?;
 
         Ok(convert_to_srt(&body.body))
     }

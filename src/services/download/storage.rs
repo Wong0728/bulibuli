@@ -1,7 +1,9 @@
 //! 下载目录派生与文件归位：目录模板渲染、任务目录回退与 MD5 去重。
 
 use crate::models::{download_task, history};
-use crate::services::file_safety::{atomic_replace, render_path_template, sanitize_filename};
+use crate::services::file_safety::{
+    atomic_replace, render_path_template, sanitize_filename, validate_uid,
+};
 use anyhow::{anyhow, Result};
 use chrono::Local;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -29,18 +31,25 @@ impl DownloadManager {
     }
 
     pub async fn download_dir(&self, uid: Option<&str>) -> PathBuf {
-        match uid.filter(|u| !u.is_empty() && u.chars().all(|c| c.is_ascii_digit())) {
-            Some(u) => {
-                let dir = self.paths.download_dir.join(u);
+        let validated_uid = match uid {
+            Some(raw) => match validate_uid(raw) {
+                Ok(uid) => Some(uid),
+                Err(error) => {
+                    warn!("拒绝将非法 UID 用作目录名 {raw:?}: {error}");
+                    None
+                }
+            },
+            None => None,
+        };
+        match validated_uid {
+            Some(uid) => {
+                let dir = self.paths.download_dir.join(uid.as_str());
                 if let Err(e) = tokio::fs::create_dir_all(&dir).await {
                     warn!("创建博主下载目录失败 {}: {e}", dir.display());
                 }
                 dir
             }
             None => {
-                if let Some(invalid_uid) = uid {
-                    warn!("拒绝将非法 UID 用作目录名: {invalid_uid:?}");
-                }
                 // 手动下载无关联博主时，使用按日期分类的 manual 目录
                 let today = chrono::Local::now().format("%Y-%m-%d").to_string();
                 let dir = self.paths.download_dir.join("manual").join(&today);

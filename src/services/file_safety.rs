@@ -324,9 +324,11 @@ mod tests {
     #[test]
     fn uid_validation_rejects_path_like_values() {
         assert_eq!(ValidatedUid::parse("12345").unwrap().as_str(), "12345");
+        assert_eq!(ValidatedUid::parse(" 12345 ").unwrap().as_str(), "12345");
         for value in [
             "",
             "0",
+            "123456789012345678901",
             "../123",
             r"..\123",
             r"C:\123",

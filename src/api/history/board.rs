@@ -2,7 +2,7 @@
 
 use crate::error::{ApiResponse, AppError};
 use crate::models::{blogger, download_task, history};
-use crate::services::security_config::AccessMode;
+use crate::services::security_config::can_open_directory;
 use crate::state::business::BusinessState;
 use crate::state::infra::InfraState;
 use crate::state::SharedState;
@@ -31,12 +31,13 @@ pub(super) async fn list_history(
 
     // 单视频详情查询：返回该 bvid 的 history + sidecar + 最新 download_task 状态
     if let Some(bvid) = q.bvid.as_deref() {
+        let can_open_directory = can_open_directory(&state.bili.security.current().mode);
         let data = build_single_video_response(
             &state.business,
             &state.infra,
             bvid.trim(),
             server_time,
-            matches!(state.bili.security.current().mode, AccessMode::Local),
+            can_open_directory,
         )
         .await?;
         return Ok(Json(ApiResponse::success(data)));
@@ -45,6 +46,7 @@ pub(super) async fn list_history(
     let tab = q.tab.as_deref().unwrap_or("completed");
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(50).clamp(1, 50);
+    let can_open_directory = can_open_directory(&state.bili.security.current().mode);
     let board = build_board_response(
         &state.business,
         &state.infra,
@@ -52,7 +54,7 @@ pub(super) async fn list_history(
         server_time,
         page,
         page_size,
-        matches!(state.bili.security.current().mode, AccessMode::Local),
+        can_open_directory,
     )
     .await?;
     Ok(Json(ApiResponse::success(board)))
@@ -66,7 +68,7 @@ async fn build_board_response(
     server_time: i64,
     page: u64,
     page_size: u64,
-    allow_absolute_path: bool,
+    can_open_directory: bool,
 ) -> Result<Value, AppError> {
     let board_page = business
         .history_service
@@ -113,7 +115,7 @@ async fn build_board_response(
         } else {
             settings.board.path_display_mode.clone()
         };
-    let path_display_mode = if configured_path_display_mode == "absolute" && !allow_absolute_path {
+    let path_display_mode = if configured_path_display_mode == "absolute" && !can_open_directory {
         "relative".to_string()
     } else {
         configured_path_display_mode
@@ -139,8 +141,14 @@ async fn build_board_response(
         // 未监控博主（bloggers 表查不到，如手动下载的 UP 主）：用 history 里的 owner 快照兜底
         let fallback_name = videos.iter().find_map(|v| v.owner_name.clone());
         let fallback_face = videos.iter().find_map(|v| v.owner_face.clone());
-        let video_list =
-            build_video_list(business, videos, &task_by_bvid, &path_display_mode).await;
+        let video_list = build_video_list(
+            business,
+            videos,
+            &task_by_bvid,
+            &path_display_mode,
+            can_open_directory,
+        )
+        .await;
         result_groups.push(json!({
             "uid": uid,
             "name": b.and_then(|b| b.name.clone()).or(fallback_name),
@@ -190,6 +198,7 @@ async fn build_video_list(
     videos: &[history::Model],
     task_by_bvid: &HashMap<String, Vec<download_task::Model>>,
     path_display_mode: &str,
+    can_open_directory: bool,
 ) -> Vec<Value> {
     stream::iter(videos.iter().cloned())
         .map(|h| async move {
@@ -218,6 +227,7 @@ async fn build_video_list(
                 "cover_local_path": display_path_for(&business.history_service, h.cover_local_path.as_deref(), path_display_mode),
                 "file_path": filepath,
                 "relative_path": h.file_path.as_deref().and_then(|path| business.history_service.to_relative_path(path)),
+                "can_open_directory": can_open_directory,
                 "reupload_of": h.reupload_of,
                 "pay_note": h.pay_note,
                 "md5": h.md5,
@@ -249,7 +259,7 @@ async fn build_single_video_response(
     infra: &InfraState,
     bvid: &str,
     server_time: i64,
-    allow_absolute_path: bool,
+    can_open_directory: bool,
 ) -> Result<Value, AppError> {
     let h = business.history_service.find_by_bvid(bvid).await;
     let Ok(Some(h)) = h else {
@@ -320,7 +330,7 @@ async fn build_single_video_response(
         } else {
             settings.board.path_display_mode.clone()
         };
-    let path_display_mode = if configured_path_display_mode == "absolute" && !allow_absolute_path {
+    let path_display_mode = if configured_path_display_mode == "absolute" && !can_open_directory {
         "relative".to_string()
     } else {
         configured_path_display_mode
@@ -359,6 +369,7 @@ async fn build_single_video_response(
             "cover_local_path": cover_local_path,
             "file_path": file_path,
             "relative_path": relative_path,
+            "can_open_directory": can_open_directory,
             "reupload_of": h.reupload_of,
             "pay_note": h.pay_note,
             "md5": h.md5,

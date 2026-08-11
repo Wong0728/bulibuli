@@ -2,6 +2,7 @@
 
 use crate::error::{ApiResponse, AppError};
 use crate::services::file_safety::ensure_existing_within_root;
+use crate::services::security_config::can_open_directory;
 use crate::state::SharedState;
 use axum::{extract::Query, extract::State, Json};
 use serde::Deserialize;
@@ -46,6 +47,11 @@ pub(super) async fn open_directory(
     State(state): State<SharedState>,
     Json(req): Json<OpenDirectoryRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
+    if !can_open_directory(&state.bili.security.current().mode) {
+        return Err(AppError::BadRequest(
+            "仅本机访问支持打开所在目录".to_string(),
+        ));
+    }
     let bvid = req.bvid.trim();
     if bvid.is_empty() {
         return Err(AppError::BadRequest("请提供视频BV号".to_string()));

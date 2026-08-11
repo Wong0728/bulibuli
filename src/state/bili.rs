@@ -58,7 +58,6 @@ impl BiliState {
                 secret_store,
                 infra.config.user_agent.clone(),
                 infra.config.referer.clone(),
-                infra.config.tls_verify,
                 infra.config.bili_api_timeout,
             )
             .context("初始化 CookieManager 失败")?,
@@ -79,6 +78,7 @@ impl BiliState {
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(60))
+            .danger_accept_invalid_certs(false)
             .build()
             .context("初始化资源代理 HTTP 客户端失败")?;
 

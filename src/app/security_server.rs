@@ -79,11 +79,9 @@ pub async fn bind_main_listener(
 ) -> anyhow::Result<(tokio::net::TcpListener, u16)> {
     let security = state.bili.security.current();
     if !state.infra.config.tls_verify {
-        warn!("高危配置：TLS 证书验证已关闭，下载凭据可能暴露；禁止进入 proxy 模式");
+        warn!("高危配置：匿名兼容请求已关闭 TLS 证书验证；带登录态请求仍严格校验，仅建议用于 Local/LAN 故障排查");
     }
-    if security.mode == AccessMode::Proxy && !state.infra.config.tls_verify {
-        anyhow::bail!("proxy 模式禁止关闭 TLS 证书验证");
-    }
+    validate_tls_policy(&security.mode, state.infra.config.tls_verify)?;
     let (host, port) = match security.mode {
         AccessMode::Local => ("127.0.0.1", state.infra.config.port),
         AccessMode::Lan => ("[::]", state.infra.config.port),
@@ -105,6 +103,13 @@ pub async fn bind_main_listener(
         actual_port.to_string(),
     )?;
     Ok((listener, actual_port))
+}
+
+fn validate_tls_policy(mode: &AccessMode, tls_verify: bool) -> anyhow::Result<()> {
+    if *mode == AccessMode::Proxy && !tls_verify {
+        anyhow::bail!("proxy 模式禁止关闭 TLS 证书验证");
+    }
+    Ok(())
 }
 
 async fn build_router(state: SharedState) -> anyhow::Result<Router> {
@@ -390,29 +395,60 @@ fn effective_client_ip(
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, 400, "客户端地址无效"))
 }
 
+fn parse_host_authority(raw: &str) -> Option<(String, Option<u16>)> {
+    let url = url::Url::parse(&format!("http://{raw}")).ok()?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let host = url
+        .host_str()?
+        .trim_matches(&['[', ']'][..])
+        .to_ascii_lowercase();
+    let explicit_port = if let Some(rest) = raw.strip_prefix('[') {
+        let (_, suffix) = rest.split_once(']')?;
+        suffix.strip_prefix(':')
+    } else {
+        raw.rsplit_once(':')
+            .and_then(|(host, port)| (!host.contains(':')).then_some(port))
+    };
+    let port = explicit_port
+        .map(str::parse)
+        .transpose()
+        .ok()
+        .flatten()
+        .or(url.port());
+    if port == Some(0) {
+        return None;
+    }
+    Some((host, port))
+}
+
 fn host_allowed(mode: &AccessMode, domain: Option<&str>, headers: &HeaderMap) -> bool {
-    let Some(host) = headers
+    let Some(raw_host) = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
     else {
         return false;
     };
+    let Some((host, port)) = parse_host_authority(raw_host) else {
+        return false;
+    };
     match mode {
-        AccessMode::Proxy => {
-            domain.is_some_and(|domain| host == domain || host == format!("{domain}:443"))
-        }
+        AccessMode::Proxy => domain.is_some_and(|domain| {
+            host.eq_ignore_ascii_case(domain) && (port.is_none() || port == Some(443))
+        }),
         AccessMode::Local => {
-            host.starts_with("127.0.0.1:")
-                || host.starts_with("localhost:")
-                || host.starts_with("[::1]:")
+            (host == "127.0.0.1" || host == "localhost" || host == "::1")
+                && port.is_none_or(|value| value > 0)
         }
         AccessMode::Lan => {
-            let without_port = host
-                .strip_prefix('[')
-                .and_then(|value| value.split_once(']').map(|pair| pair.0))
-                .or_else(|| host.rsplit_once(':').map(|pair| pair.0))
-                .unwrap_or(host);
-            without_port == "localhost" || without_port.parse::<IpAddr>().is_ok()
+            (host == "localhost" || host.parse::<IpAddr>().is_ok())
+                && port.is_none_or(|value| value > 0)
         }
     }
 }
@@ -580,7 +616,9 @@ async fn bind_with_port_fallback(
             }
         }
     }
-    Err(anyhow::anyhow!("端口 {start_port} 起连续 100 个端口均不可用"))
+    Err(anyhow::anyhow!(
+        "端口 {start_port} 起连续 100 个端口均不可用"
+    ))
 }
 
 async fn bind_lan_with_port_fallback(start_port: u16) -> anyhow::Result<tokio::net::TcpListener> {
@@ -610,7 +648,9 @@ async fn bind_lan_with_port_fallback(start_port: u16) -> anyhow::Result<tokio::n
             }
         }
     }
-    Err(anyhow::anyhow!("端口 {start_port} 起连续 100 个双栈端口均不可用"))
+    Err(anyhow::anyhow!(
+        "端口 {start_port} 起连续 100 个双栈端口均不可用"
+    ))
 }
 
 async fn shutdown_signal(cancellation: tokio_util::sync::CancellationToken) {
@@ -684,5 +724,72 @@ mod role_tests {
             .unwrap();
         assert!(authorize_session(&request, &session(SessionRole::Viewer)).is_err());
         assert!(authorize_session(&request, &session(SessionRole::Operator)).is_ok());
+    }
+
+    #[test]
+    fn proxy_requires_tls_verification() {
+        assert!(validate_tls_policy(&AccessMode::Local, false).is_ok());
+        assert!(validate_tls_policy(&AccessMode::Lan, false).is_ok());
+        assert!(validate_tls_policy(&AccessMode::Proxy, true).is_ok());
+        assert!(validate_tls_policy(&AccessMode::Proxy, false).is_err());
+    }
+
+    fn host_header(value: &'static str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static(value));
+        headers
+    }
+
+    #[test]
+    fn host_authority_matching_rejects_lookalike_hosts_and_bad_ports() {
+        assert!(host_allowed(
+            &AccessMode::Local,
+            None,
+            &host_header("127.0.0.1:8080")
+        ));
+        assert!(host_allowed(
+            &AccessMode::Local,
+            None,
+            &host_header("localhost")
+        ));
+        assert!(host_allowed(
+            &AccessMode::Lan,
+            None,
+            &host_header("[::1]:5000")
+        ));
+        assert!(!host_allowed(
+            &AccessMode::Local,
+            None,
+            &host_header("127.0.0.1.evil:8080")
+        ));
+        assert!(!host_allowed(
+            &AccessMode::Local,
+            None,
+            &host_header("127.0.0.1:not-a-port")
+        ));
+    }
+
+    #[test]
+    fn proxy_host_accepts_only_configured_domain_and_https_port() {
+        assert!(host_allowed(
+            &AccessMode::Proxy,
+            Some("example.com"),
+            &host_header("example.com")
+        ));
+        assert!(host_allowed(
+            &AccessMode::Proxy,
+            Some("example.com"),
+            &host_header("example.com:443")
+        ));
+        assert!(!host_allowed(
+            &AccessMode::Proxy,
+            Some("example.com"),
+            &host_header("example.com:80")
+        ));
+        assert!(!host_allowed(
+            &AccessMode::Lan,
+            None,
+            &host_header("evil.example:5000")
+        ));
     }
 }

@@ -260,7 +260,7 @@ export function renderBoardVideoCard(v) {
             <i class="fa-solid fa-file-video"></i>
             <span>${escapeHtml(v.file_path || '路径已隐藏')}</span>
             ${v.file_path ? `<button class="btn btn-sm btn-ghost" data-copy-path="${escapeHtml(v.file_path)}" title="复制路径"><i class="fa-solid fa-copy"></i></button>` : ''}
-            ${v.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${bvid}" data-path="${escapeHtml(v.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
+            ${v.can_open_directory && v.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${bvid}" data-path="${escapeHtml(v.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
         </div>
     ` : '';
 

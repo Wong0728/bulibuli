@@ -1841,7 +1841,7 @@ tr:hover {
     background: var(--surface);
 }
 
-.section-collapsible .section-header h4 {
+.section-collapsible .section-header h2 {
     font-size: var(--size-14);
     font-weight: 600;
     color: var(--text);
@@ -3461,8 +3461,9 @@ tr:hover {
     color: var(--brand);
 }
 .drawer-file-item {
-    display: flex;
-    align-items: center;
+    display: grid;
+    grid-template-columns: var(--size-36) minmax(0, 1fr);
+    align-items: start;
     gap: var(--size-10);
     padding: var(--size-10) var(--size-12);
     background: var(--surface);
@@ -3515,11 +3516,14 @@ tr:hover {
     border-radius: var(--size-4);
 }
 .drawer-file-actions {
+    grid-column: 2;
     display: flex;
     align-items: center;
     gap: var(--size-6);
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
+    padding-top: var(--size-8);
+    border-top: var(--size-1) solid var(--divider);
 }
 .drawer-file-actions .btn-sm {
     height: var(--size-30);
@@ -4282,6 +4286,10 @@ tr:hover {
     border-bottom: var(--size-1) solid var(--divider);
 }
 
+.drawer-info-row-spaced {
+    margin-top: var(--size-12);
+}
+
 .drawer-info-item {
     display: flex;
     flex-direction: column;
@@ -4302,6 +4310,10 @@ tr:hover {
 /* 区块标题 */
 .drawer-section {
     margin-bottom: var(--size-24);
+}
+
+.drawer-section-spaced {
+    margin-top: var(--size-16);
 }
 
 .drawer-section-title {
@@ -4594,12 +4606,8 @@ tr:hover {
         grid-template-columns: 1fr;
     }
 
-    .drawer-file-item {
-        flex-wrap: wrap;
-    }
-
     .drawer-file-actions {
-        width: 100%;
+        width: auto;
         justify-content: flex-start;
         margin-top: var(--size-6);
     }
@@ -5778,10 +5786,22 @@ progress.download-item-progress-fill {
 
 .live-heat-bar button i {
     width: 100%;
-    height: calc(5px + 28px * var(--heat, 0));
+    height: var(--size-5);
     border-radius: 2px 2px 0 0;
     background: var(--brand);
     opacity: 0.35;
+}
+
+.live-heat-bar button.live-heat-level-1 i {
+    height: var(--size-10);
+}
+
+.live-heat-bar button.live-heat-level-2 i {
+    height: var(--size-20);
+}
+
+.live-heat-bar button.live-heat-level-3 i {
+    height: var(--size-30);
 }
 
 .live-heat-bar button.hot i {
@@ -5916,10 +5936,65 @@ progress.download-item-progress-fill {
     accent-color: var(--brand);
 }
 
+.live-progress-text {
+    font-size: var(--size-12);
+}
+
 /* 直播源设置弹窗：周排期编辑器 */
 .live-settings-form {
     display: grid;
     gap: var(--size-14);
+}
+
+.form-label-muted {
+    font-size: var(--size-11);
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.live-schedule-mode {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--size-10);
+    margin-top: var(--size-8);
+}
+
+.live-schedule-mode-option {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--size-8);
+    padding: var(--size-12);
+    border: var(--size-1) solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.live-schedule-mode-option:has(input:checked) {
+    border-color: var(--brand);
+    background: var(--brand-soft);
+}
+
+.live-schedule-mode-option input {
+    margin-top: var(--size-3);
+    accent-color: var(--brand);
+}
+
+.live-schedule-mode-option span {
+    display: flex;
+    flex-direction: column;
+    gap: var(--size-3);
+}
+
+.live-schedule-mode-option strong {
+    font-size: var(--size-13);
+    color: var(--text);
+}
+
+.live-schedule-mode-option small {
+    font-size: var(--size-11);
+    color: var(--text-muted);
 }
 
 .live-add-textarea {
@@ -5947,11 +6022,27 @@ progress.download-item-progress-fill {
     background: var(--bg);
 }
 
+.live-schedule-header,
 .live-schedule-day {
     display: grid;
-    grid-template-columns: var(--size-40) 1fr 1fr;
+    grid-template-columns: var(--size-48) repeat(2, minmax(0, 1fr));
     gap: var(--size-8);
     align-items: center;
+}
+
+.live-schedule-header {
+    padding: 0 var(--size-8) var(--size-4);
+    color: var(--text-muted);
+    font-size: var(--size-11);
+}
+
+.live-schedule-day {
+    padding: var(--size-4) var(--size-8);
+    border-radius: var(--radius-sm);
+}
+
+.live-schedule-day:hover {
+    background: var(--surface-hover);
 }
 
 .live-schedule-day > span {
@@ -5990,6 +6081,11 @@ progress.download-item-progress-fill {
     cursor: pointer;
     padding: var(--size-4);
     border-radius: var(--radius-sm);
+}
+
+.live-schedule-window .live-schedule-clear:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
 }
 
 .live-schedule-window .live-schedule-clear:hover {
@@ -6034,7 +6130,24 @@ progress.download-item-progress-fill {
         aspect-ratio: 16 / 9;
     }
 
+    .live-schedule-mode {
+        grid-template-columns: 1fr;
+    }
+
+    .live-schedule-header {
+        display: none;
+    }
+
     .live-schedule-day {
         grid-template-columns: var(--size-40) 1fr;
+        gap: var(--size-8);
+    }
+
+    .live-schedule-window {
+        grid-column: 2;
+    }
+
+    .live-schedule-window + .live-schedule-window {
+        grid-row: auto;
     }
 }

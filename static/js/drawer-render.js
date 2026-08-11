@@ -14,6 +14,7 @@ export function renderDrawerContent(video, bvid) {
     const sidecar = video.sidecar || {};
     const blogger = video.blogger || (video.blogger_uid ? { uid: video.blogger_uid } : null) || null;
     const artifactSource = video.source === 'manual' ? 'manual' : 'auto';
+    const canOpenDirectory = video.can_open_directory === true;
 
     // 封面统一走 /api/cover/{bvid}（本地优先 + 兜底下载）
     const coverUrl = `/api/cover/${encodeURIComponent(bvid)}`;
@@ -41,7 +42,7 @@ export function renderDrawerContent(video, bvid) {
             <i class="fa-solid fa-file-video"></i>
             <span>${escapeHtml(video.file_path || '路径已隐藏')}</span>
             ${video.file_path ? `<button class="btn btn-sm btn-ghost copy-path-btn" data-copy-path="${escapeHtml(video.file_path)}" title="复制路径"><i class="fa-solid fa-copy"></i></button>` : ''}
-            ${video.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-path="${escapeHtml(video.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
+            ${canOpenDirectory && video.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-path="${escapeHtml(video.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
         </div>
     ` : '';
 
@@ -161,9 +162,9 @@ export function renderDrawerContent(video, bvid) {
         <!-- 全部产物：同时展示 manual / 自动目录 / 历史归档 -->
         <div class="drawer-section">
             <div class="drawer-section-title">全部产物</div>
-            ${renderArtifactOverview(video.files)}
+            ${renderArtifactOverview(primaryArtifactFiles(video.files))}
             <div class="drawer-file-list" id="drawer-file-list">
-                ${renderDrawerFiles(video.files, bvid, video.burned, sidecar)}
+                ${renderDrawerFiles(video.files, bvid, video.burned, sidecar, canOpenDirectory)}
             </div>
         </div>
 
@@ -233,12 +234,18 @@ export function renderDrawerContent(video, bvid) {
 
 /// 渲染抽屉"已下载文件"列表。
 /// files: 后端扫描返回的文件数组；burned: { danmaku, subtitle }；sidecar: 无文件明细时的侧车状态。
-export function renderDrawerFiles(files, bvid, burned, sidecar) {
+function primaryArtifactFiles(files) {
+    if (!Array.isArray(files)) return [];
+    return files.filter(file => !['danmaku', 'comment'].includes(file.file_type || file.type));
+}
+
+export function renderDrawerFiles(files, bvid, burned, sidecar, canOpenDirectory = false) {
     burned = burned || {};
+    const primaryFiles = primaryArtifactFiles(files);
     // 优先使用后端返回的真实文件列表
-    if (files && Array.isArray(files) && files.length > 0) {
+    if (primaryFiles.length > 0) {
         const groups = new Map();
-        files.forEach(file => {
+        primaryFiles.forEach(file => {
             const location = file.location || 'other';
             if (!groups.has(location)) groups.set(location, []);
             groups.get(location).push(file);
@@ -249,9 +256,12 @@ export function renderDrawerFiles(files, bvid, burned, sidecar) {
                     <span><i class="fa-solid fa-folder"></i> ${escapeHtml(locationLabel(location))}</span>
                     <span>${entries.length} 个文件</span>
                 </div>
-                ${entries.map(file => renderDrawerFileItem(file, bvid, burned)).join('')}
+                ${entries.map(file => renderDrawerFileItem(file, bvid, burned, canOpenDirectory)).join('')}
             </div>
         `).join('');
+    }
+    if (Array.isArray(files) && files.some(file => ['danmaku', 'comment'].includes(file.file_type || file.type))) {
+        return '<div class="drawer-files-empty"><i class="fa-solid fa-layer-group"></i>弹幕与评论版本请从下方入口查看</div>';
     }
     // 没有文件明细时，用聚合状态提供只读摘要。
     if (sidecar) {
@@ -260,7 +270,7 @@ export function renderDrawerFiles(files, bvid, burned, sidecar) {
     return `<div class="drawer-files-empty"><i class="fa-solid fa-inbox"></i> 暂无本地文件记录</div>`;
 }
 
-export function renderDrawerFileItem(f, bvid, burned) {
+export function renderDrawerFileItem(f, bvid, burned, canOpenDirectory = false) {
     // `file_type` 是当前接口字段，`type` 用于读取已有缓存数据。
     const type = f.file_type || f.type || 'other';
     const safeBvid = escapeHtml(bvid || '');
@@ -289,13 +299,8 @@ export function renderDrawerFileItem(f, bvid, burned) {
 
     let actions = f.display_path
         ? `<button class="btn btn-sm btn-ghost" data-copy-path="${path}" title="复制文件路径"><i class="fa-solid fa-copy"></i> 路径</button>` : '';
-    if (f.path) {
+    if (canOpenDirectory && f.path) {
         actions += `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-path="${internalPath}" title="打开所在目录"><i class="fa-solid fa-folder-open"></i> 打开</button>`;
-    }
-    if (type === 'comment') {
-        actions += `<button class="btn btn-sm btn-primary" data-action="load-drawer-comments" data-bvid="${safeBvid}" data-path="${internalPath}"><i class="fa-solid fa-eye"></i> 查看</button>`;
-    } else if (type === 'danmaku') {
-        actions += `<button class="btn btn-sm btn-primary" data-action="load-drawer-danmaku" data-bvid="${safeBvid}" data-path="${internalPath}"><i class="fa-solid fa-eye"></i> 查看</button>`;
     }
     if (type === 'video') {
         if (burned.danmaku) {

@@ -1,6 +1,7 @@
 //! 历史记录同步：完成任务写入 history、MD5 记录、封面落盘与历史清理。
 
 use crate::models::history;
+use crate::services::live_recorder::ffmpeg_session::redact_diagnostics;
 use anyhow::Result;
 use chrono::{DateTime, Local};
 use sea_orm::{
@@ -248,6 +249,7 @@ impl DownloadManager {
         // 获取视频信息（包含封面URL）
         let info = self.bili_api.get_video_info(bvid, "").await?;
         let pic_url = info.pic.as_str();
+        let safe_pic_url = redact_diagnostics(pic_url);
         if pic_url.is_empty() {
             return Err(anyhow::anyhow!("未找到封面URL"));
         }
@@ -273,7 +275,10 @@ impl DownloadManager {
             .headers(headers)
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("请求封面失败 {bvid} url={pic_url}: {e}"))?;
+            .map_err(|e| {
+                let diagnostics = redact_diagnostics(&e.to_string());
+                anyhow::anyhow!("请求封面失败 {bvid} url={safe_pic_url}: {diagnostics}")
+            })?;
 
         let status_code = resp.status();
         let content_type = resp
@@ -284,7 +289,7 @@ impl DownloadManager {
             .to_string();
         if !status_code.is_success() {
             return Err(anyhow::anyhow!(
-                "下载封面失败 {bvid}: HTTP {} content-type={content_type} url={pic_url}",
+                "下载封面失败 {bvid}: HTTP {} content-type={content_type} url={safe_pic_url}",
                 status_code
             ));
         }

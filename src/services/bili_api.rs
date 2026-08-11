@@ -64,7 +64,7 @@ pub struct BiliApi {
     /// 始终严格校验 TLS，防止中间人窃取 Cookie/凭据。
     api_client: Client,
     /// 下载流 CDN 域名（*.bilivideo.com / *.hdslb.com）专用客户端，
-    /// 按配置 `tls_verify` 决定是否校验证书，以兼容部分 MCDN 节点证书问题。
+    /// 始终严格校验 TLS；带 Cookie 的 CDN 请求不得关闭证书校验。
     stream_client: Client,
     /// 无 Cookie 的兼容客户端，仅用于公开 b23/资源解析；凭据请求不得使用它。
     anonymous_client: Client,
@@ -88,12 +88,14 @@ impl BiliApi {
     ) -> Result<Self> {
         let api_client = Client::builder()
             .cookie_store(true)
+            .danger_accept_invalid_certs(false)
             .timeout(std::time::Duration::from_secs(config.bili_api_timeout))
             .build()
             .context("创建 B站 API HTTP 客户端失败")?;
         let stream_client = Client::builder()
             .cookie_store(true)
             .redirect(reqwest::redirect::Policy::none())
+            .danger_accept_invalid_certs(false)
             .timeout(std::time::Duration::from_secs(config.bili_api_timeout))
             .build()
             .context("创建 B站流 CDN HTTP 客户端失败")?;
@@ -127,8 +129,7 @@ impl BiliApi {
         })
     }
 
-    /// 按 URL 所属域名选择合适的 HTTP 客户端。
-    /// B站 API 域名强制严格 TLS；CDN/流域名按配置放行。
+    /// 按 URL 所属域名选择合适的严格 TLS 客户端。
     pub fn client_for(&self, url: &str) -> &Client {
         if is_api_host(url) {
             &self.api_client
@@ -137,8 +138,8 @@ impl BiliApi {
         }
     }
 
-    /// 兼容性方法：默认返回流 CDN 客户端。
-    /// 新代码请使用 `client_for(url)` 按域名选择。
+    /// 返回无 Cookie 的公开资源兼容客户端。
+    /// 新代码请使用 `client_for(url)`，凭据请求不得使用此客户端。
     pub fn client(&self) -> &Client {
         &self.anonymous_client
     }
