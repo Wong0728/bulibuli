@@ -130,5 +130,5 @@ test('directory capability allows the action and surfaces backend errors', async
     const button = page.locator('#video-drawer [data-action="open-history-directory"]').first();
     await expect(button).toBeVisible();
     await button.click();
-    await expect(page.locator('.toast')).toContainText('目录打开失败');
+    await expect(page.locator('.msg-toast')).toContainText('目录打开失败');
 });
