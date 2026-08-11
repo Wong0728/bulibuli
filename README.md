@@ -52,6 +52,7 @@ Termux 首次运行会使用本机 Rust 编译，并通过 `pkg` 安装 aria2、
 
 ## 文档
 
+- [文档索引](docs/README.md)
 - [代码规范](代码规范.md)
 - [审查报告](AUDIT_REPORT.md)
 - [问题归因与优化方案](docs/问题归因与优化方案.md)
