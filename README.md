@@ -2,6 +2,10 @@
 
 > 下架之前，先下为敬。
 
+<p align="center">
+  <img src="docs/hero/bulibuli_hero_preview.svg" alt="补哩补哩 bulibuli Hero 矢量预览" width="100%">
+</p>
+
 补哩补哩是一个基于 Rust/Axum 的 B 站视频监控、补档下载与直播录制工具。当前 `main` 是 Rust v2 Alpha 主线；Python v1 仅保留在 `v1-python` 分支、`v1.0` 标签和旧历史中，不属于当前产品。
 
 主线只包含本项目的 Rust 服务、前端、部署脚本、运行资源、测试和文档。外部项目、参考代码和示例目录不属于主线，也不会进入 Release 归档。
@@ -48,7 +52,7 @@ Termux 首次运行会使用本机 Rust 编译，并通过 `pkg` 安装 aria2、
 
 ## Hero 页面
 
-项目的独立静态 Hero 展示页：[打开 Hero HTML](docs/hero/bulibuli_hero_fully_editable_v2.html)。该页面不参与主程序构建，也不进入二进制 Release；下载 HTML 后可直接用浏览器打开。
+项目的独立静态 Hero 源文件位于 `docs/hero/bulibuli_hero_fully_editable_v2.html`；README 顶部展示的是对应的矢量 SVG 预览。两者都不参与主程序构建，也不进入二进制 Release。
 
 ## 文档
 

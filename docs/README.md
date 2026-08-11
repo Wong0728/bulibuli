@@ -14,7 +14,7 @@
 
 ## 展示与部署
 
-- [Hero 静态页面](hero/bulibuli_hero_fully_editable_v2.html)
+- [Hero SVG 预览](hero/bulibuli_hero_preview.svg)
 - [部署安全说明](../deploy/SECURITY.md)
 - [内置资源清单与校验](../resources/README.md)
 
