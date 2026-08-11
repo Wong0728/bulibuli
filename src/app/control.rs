@@ -2393,7 +2393,9 @@ mod skill_doc_tests {
         let skill_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("docs")
             .join("skill.md");
-        let actual = std::fs::read_to_string(&skill_path).unwrap_or_else(|error| {
+        let actual = std::fs::read_to_string(&skill_path)
+            .map(|content| content.replace("\r\n", "\n"))
+            .unwrap_or_else(|error| {
             panic!(
                 "读取 {} 失败: {error}\n请运行测试前先创建该文件（内容 = generate_skill_markdown() 输出）",
                 skill_path.display()
