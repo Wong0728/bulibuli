@@ -517,11 +517,11 @@ impl AuthService {
             })?;
         let country: maxminddb::geoip2::Country = reader
             .lookup(ip)
-            .map_err(|_| AppError::Unauthorized("无法判断网络区域，已拒绝新配对".to_string()))?;
-        Ok(country
-            .country
-            .and_then(|value| value.iso_code)
-            .is_some_and(|code| code == "CN"))
+            .map_err(|_| AppError::Unauthorized("无法判断网络区域，已拒绝新配对".to_string()))?
+            .decode()
+            .map_err(|_| AppError::Unauthorized("无法判断网络区域，已拒绝新配对".to_string()))?
+            .ok_or_else(|| AppError::Unauthorized("无法判断网络区域，已拒绝新配对".to_string()))?;
+        Ok(country.country.iso_code.is_some_and(|code| code == "CN"))
     }
 
     async fn bootstrap_needed(&self) -> AppResult<bool> {
