@@ -1,7 +1,7 @@
 //! 弹幕命令解析：将 B 站 WebSocket 推送的 JSON 命令转为类型化枚举。
 //!
-//! 覆盖主要命令类型：弹幕、礼物、进场、SC、看过人数、开播/下播、流地址刷新。
-//! 未识别的命令统一归入 `Other`，不丢弃。
+//! 覆盖主要命令类型：弹幕、礼物、进场、点赞、SC、看过人数、房间状态、PK/连麦、流地址刷新。
+//! 未识别的命令统一归入 `Other`，不丢弃；展示层只会把确实没有分类规则的命令显示为未知。
 
 use serde::Serialize;
 use serde_json::Value;
@@ -78,6 +78,28 @@ pub enum LiveCommand {
     },
     /// 看过人数变化（`WATCHED_CHANGE`）。
     WatchedChange { count: i64 },
+    /// 点赞（`LIKE_INFO_V3_CLICK`）。
+    Like {
+        uid: i64,
+        uname: String,
+        text: String,
+    },
+    /// 进场特效（`ENTRY_EFFECT`）。
+    EntryEffect {
+        uid: i64,
+        uname: String,
+        text: String,
+    },
+    /// 在线榜、点赞数等统计更新。
+    Stats {
+        label: String,
+        value: i64,
+        text: String,
+    },
+    /// 房间状态、公告、抽奖等系统事件。
+    System { text: String },
+    /// PK、连麦等互动状态事件。
+    LinkMicPk { text: String },
     /// 直播开始（`LIVE`）。
     LiveStart { room_id: i64, live_time: i64 },
     /// 直播结束 / 准备中（`PREPARING`）。
@@ -108,20 +130,123 @@ impl LiveCommand {
 
         // B 站有时会在 cmd 后面加数字后缀（如 DANMU_MSG:4:0:2:2:2:0），
         // 取冒号前的部分做匹配。
-        let cmd_base = cmd.split(':').next().unwrap_or(&cmd);
+        let cmd_base = command_base(&cmd);
 
         match cmd_base {
             "DANMU_MSG" => parse_danmaku(value),
-            "SEND_GIFT" => parse_gift(value),
-            "SUPER_CHAT_MESSAGE" => parse_super_chat(value),
-            "INTERACT_WORD" => parse_interact(value),
+            "SEND_GIFT" | "SEND_GIFT_V2" | "COMBO_SEND" => parse_gift(value),
+            "SUPER_CHAT_MESSAGE" | "SUPER_CHAT_MESSAGE_JPN" => parse_super_chat(value),
+            "INTERACT_WORD" | "INTERACT_WORD_V2" | "INTERACT_WORD_V3" | "WELCOME"
+            | "WELCOME_GUARD" => parse_interact(value),
             "WATCHED_CHANGE" => parse_watched(value),
+            "LIKE_INFO_V3_CLICK" => parse_like(value),
+            "ENTRY_EFFECT" => parse_entry_effect(value),
+            "ONLINE_RANK_V3" | "ONLINE_RANK_V2" | "ONLINE_RANK_TOP3" | "ONLINE_RANK_COUNT" => {
+                parse_stats(value, "在线榜数据更新")
+            }
+            "LIKE_INFO_V3_UPDATE" => parse_stats(value, "点赞数更新"),
             "LIVE" => parse_live_start(value),
             "PREPARING" => parse_live_end(value),
             "PLAYURL_RELOAD" | "PLAYURL_RELOAD_V2" => LiveCommand::PlayurlReload,
-            "GUARD_BUY" => parse_guard_buy(value),
+            "GUARD_BUY" | "USER_TOAST_MSG" => parse_guard_buy(value),
+            _ if is_link_command(cmd_base) => parse_link_mic(value, cmd_base),
+            _ if is_stats_command(cmd_base) => parse_stats(value, "统计更新"),
+            _ if is_system_command(cmd_base) => parse_system(value, system_event_label(cmd_base)),
             _ => LiveCommand::Other { cmd },
         }
+    }
+
+    pub fn is_low_priority(&self) -> bool {
+        matches!(
+            self,
+            LiveCommand::WatchedChange { .. }
+                | LiveCommand::Interact { .. }
+                | LiveCommand::Like { .. }
+                | LiveCommand::EntryEffect { .. }
+                | LiveCommand::Stats { .. }
+                | LiveCommand::System { .. }
+                | LiveCommand::Other { .. }
+        )
+    }
+}
+
+pub fn command_base(cmd: &str) -> &str {
+    cmd.split(':').next().unwrap_or(cmd)
+}
+
+pub fn is_link_command(cmd: &str) -> bool {
+    let base = command_base(cmd);
+    ["VOICE_JOIN", "LINK_MIC", "PK_", "LIVE_MULTI_VIEW"]
+        .iter()
+        .any(|prefix| base.starts_with(prefix))
+}
+
+pub fn is_stats_command(cmd: &str) -> bool {
+    let base = command_base(cmd);
+    matches!(
+        base,
+        "ONLINE_RANK_V3"
+            | "ONLINE_RANK_V2"
+            | "ONLINE_RANK_TOP3"
+            | "ONLINE_RANK_COUNT"
+            | "ROOM_REAL_TIME_MESSAGE_UPDATE"
+            | "HOT_RANK_CHANGED"
+            | "AREA_RANK_CHANGED"
+    )
+}
+
+pub fn is_system_command(cmd: &str) -> bool {
+    let base = command_base(cmd);
+    matches!(
+        base,
+        "ROOM_CHANGE"
+            | "ROOM_LOCK"
+            | "ROOM_BLOCK_MSG"
+            | "ROOM_SILENT_ON"
+            | "ROOM_SILENT_OFF"
+            | "CUT_OFF"
+            | "STOP_LIVE_ROOM_LIST"
+            | "NOTICE_MSG"
+            | "COMMON_NOTICE_DANMAKU"
+            | "DANMU_AGGREGATION"
+            | "DM_INTERACTION"
+            | "SUPER_CHAT_MESSAGE_DELETE"
+            | "SUPER_CHAT_ENTRANCE"
+            | "WIDGET_BANNER"
+            | "LIVE_INTERACTIVE_GAME"
+            | "GIFT_STAR_PROCESS"
+            | "GUARD_HONOR_THOUSAND"
+            | "RING_STATUS_CHANGE"
+            | "RING_STATUS_CHANGE_V2"
+            | "PLAY_TOGETHER_ICON_CHANGE"
+    ) || base.starts_with("ANCHOR_LOT_")
+        || base.starts_with("POPULARITY_RED_POCKET_")
+}
+
+pub fn system_event_label(cmd: &str) -> &'static str {
+    match command_base(cmd) {
+        "ROOM_CHANGE" => "房间信息更新",
+        "ROOM_LOCK" => "房间状态更新",
+        "ROOM_BLOCK_MSG" => "房间封禁通知",
+        "ROOM_SILENT_ON" => "全员禁言开启",
+        "ROOM_SILENT_OFF" => "全员禁言关闭",
+        "CUT_OFF" => "直播被切断",
+        "STOP_LIVE_ROOM_LIST" => "直播结束通知",
+        "NOTICE_MSG" => "直播间公告",
+        "COMMON_NOTICE_DANMAKU" => "系统公告",
+        "DANMU_AGGREGATION" => "弹幕聚合更新",
+        "DM_INTERACTION" => "弹幕互动更新",
+        "SUPER_CHAT_MESSAGE_DELETE" => "SC 删除通知",
+        "SUPER_CHAT_ENTRANCE" => "SC 入口更新",
+        "WIDGET_BANNER" => "直播组件更新",
+        "LIVE_INTERACTIVE_GAME" => "互动游戏更新",
+        "GIFT_STAR_PROCESS" => "礼物星球更新",
+        "GUARD_HONOR_THOUSAND" => "千舰荣耀更新",
+        "RING_STATUS_CHANGE" | "RING_STATUS_CHANGE_V2" => "响铃状态更新",
+        "PLAY_TOGETHER_ICON_CHANGE" => "一起玩状态更新",
+        base if base.starts_with("ANCHOR_LOT_") => "天选时刻更新",
+        base if base.starts_with("POPULARITY_RED_POCKET_") => "人气红包更新",
+        _ => "系统事件",
     }
 }
 
@@ -239,112 +364,145 @@ fn extract_user_from_danmu(info: Option<&Value>) -> (i64, String) {
     (0, String::new())
 }
 
+fn value_as_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_str().and_then(|value| value.parse::<i64>().ok()))
+}
+
+fn read_i64(value: Option<&Value>, keys: &[&str]) -> i64 {
+    keys.iter()
+        .find_map(|key| {
+            value
+                .and_then(|value| value.get(*key))
+                .and_then(value_as_i64)
+        })
+        .unwrap_or(0)
+}
+
+fn read_string(value: Option<&Value>, keys: &[&str]) -> String {
+    keys.iter()
+        .find_map(|key| {
+            value
+                .and_then(|value| value.get(*key))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_default()
+}
+
 fn parse_gift(value: &Value) -> LiveCommand {
     let data = value.get("data");
     LiveCommand::Gift {
-        uid: data
-            .and_then(|d| d.get("uid"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        uname: data
-            .and_then(|d| d.get("uname"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        gift_name: data
-            .and_then(|d| d.get("giftName"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        num: data
-            .and_then(|d| d.get("num"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32,
-        price: data
-            .and_then(|d| d.get("price"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32,
-        total_coin: data
-            .and_then(|d| d.get("total_coin"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        coin_type: data
-            .and_then(|d| d.get("coin_type"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
-        gift_id: data
-            .and_then(|d| d.get("giftId"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
+        uid: read_i64(data, &["uid", "user_id"]),
+        uname: read_string(data, &["uname", "username", "user_name"]),
+        gift_name: read_string(data, &["giftName", "gift_name", "name"]),
+        num: read_i64(data, &["num", "quantity"]) as i32,
+        price: read_i64(data, &["price"]) as i32,
+        total_coin: read_i64(data, &["total_coin", "totalCoin"]),
+        coin_type: read_string(data, &["coin_type", "coinType"]),
+        gift_id: read_i64(data, &["giftId", "gift_id"]),
     }
 }
 
 fn parse_super_chat(value: &Value) -> LiveCommand {
     let data = value.get("data");
     LiveCommand::SuperChat {
-        uid: data
-            .and_then(|d| d.get("uid"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
+        uid: read_i64(data, &["uid", "user_id"]),
         uname: data
-            .and_then(|d| d.get("user_info"))
-            .and_then(|u| u.get("uname"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        message: data
-            .and_then(|d| d.get("message"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        price: data
-            .and_then(|d| d.get("price"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32,
-        duration: data
-            .and_then(|d| d.get("time"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32,
-        id: data
-            .and_then(|d| d.get("id_str"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
+            .and_then(|data| data.get("user_info"))
+            .map(|user_info| read_string(Some(user_info), &["uname", "username"]))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| read_string(data, &["uname", "username"])),
+        message: read_string(data, &["message", "msg", "text"]),
+        price: read_i64(data, &["price"]) as i32,
+        duration: read_i64(data, &["time", "duration"]) as i32,
+        id: read_string(data, &["id_str", "id"]),
     }
 }
 
 fn parse_interact(value: &Value) -> LiveCommand {
     let data = value.get("data");
     LiveCommand::Interact {
-        uid: data
-            .and_then(|d| d.get("uid"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        uname: data
-            .and_then(|d| d.get("uname"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        msg_type: data
-            .and_then(|d| d.get("msg_type"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32,
+        uid: read_i64(data, &["uid", "user_id"]),
+        uname: read_string(data, &["uname", "username", "user_name"]),
+        msg_type: read_i64(data, &["msg_type", "msgType"]) as i32,
+    }
+}
+
+fn parse_like(value: &Value) -> LiveCommand {
+    let data = value.get("data");
+    LiveCommand::Like {
+        uid: read_i64(data, &["uid", "user_id"]),
+        uname: read_string(data, &["uname", "username", "user_name"]),
+        text: read_string(data, &["like_text", "likeText", "msg", "message"]),
+    }
+}
+
+fn parse_entry_effect(value: &Value) -> LiveCommand {
+    let data = value.get("data");
+    LiveCommand::EntryEffect {
+        uid: read_i64(data, &["uid", "user_id"]),
+        uname: read_string(data, &["uname", "username", "user_name"]),
+        text: read_string(data, &["copy_writing", "copy_writing_v2", "msg", "message"]),
+    }
+}
+
+fn parse_stats(value: &Value, label: &str) -> LiveCommand {
+    let data = value.get("data");
+    let value = read_i64(
+        data,
+        &["num", "count", "online", "watched_num", "online_rank_count"],
+    );
+    let text = read_string(data, &["text", "message", "msg", "copy_writing"]);
+    LiveCommand::Stats {
+        label: label.to_owned(),
+        value,
+        text: if text.is_empty() {
+            label.to_owned()
+        } else {
+            text
+        },
+    }
+}
+
+fn parse_system(value: &Value, label: &str) -> LiveCommand {
+    let data = value.get("data");
+    let text = read_string(
+        data,
+        &["text", "message", "msg", "notice", "title", "copy_writing"],
+    );
+    LiveCommand::System {
+        text: if text.is_empty() {
+            label.to_owned()
+        } else {
+            text
+        },
+    }
+}
+
+fn parse_link_mic(value: &Value, cmd: &str) -> LiveCommand {
+    let data = value.get("data");
+    let text = read_string(data, &["text", "message", "msg", "copy_writing", "status"]);
+    LiveCommand::LinkMicPk {
+        text: if text.is_empty() {
+            format!("连麦 / PK：{cmd}")
+        } else {
+            text
+        },
     }
 }
 
 fn parse_watched(value: &Value) -> LiveCommand {
-    let count = value
-        .get("data")
-        .and_then(|d| d.get("num"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    let count = read_i64(value.get("data"), &["num", "count"]);
     LiveCommand::WatchedChange { count }
 }
 
 fn parse_live_start(value: &Value) -> LiveCommand {
-    let room_id = value.get("roomid").and_then(|v| v.as_i64()).unwrap_or(0);
-    let live_time = value.get("live_time").and_then(|v| v.as_i64()).unwrap_or(0);
+    let room_id = read_i64(Some(value), &["roomid", "room_id"]);
+    let live_time = read_i64(Some(value), &["live_time"]);
     LiveCommand::LiveStart { room_id, live_time }
 }
 
@@ -362,32 +520,12 @@ fn parse_live_end(value: &Value) -> LiveCommand {
 fn parse_guard_buy(value: &Value) -> LiveCommand {
     let data = value.get("data");
     LiveCommand::GuardBuy {
-        uid: data
-            .and_then(|d| d.get("uid"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        uname: data
-            .and_then(|d| d.get("username"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        guard_level: data
-            .and_then(|d| d.get("guard_level"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32,
-        price: data
-            .and_then(|d| d.get("price"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32,
-        num: data
-            .and_then(|d| d.get("num"))
-            .and_then(Value::as_i64)
-            .unwrap_or(1) as i32,
-        order_id: data
-            .and_then(|d| d.get("order_id"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
+        uid: read_i64(data, &["uid", "user_id"]),
+        uname: read_string(data, &["username", "uname", "user_name"]),
+        guard_level: read_i64(data, &["guard_level", "guardLevel"]) as i32,
+        price: read_i64(data, &["price"]) as i32,
+        num: read_i64(data, &["num", "quantity"]).max(1) as i32,
+        order_id: read_string(data, &["order_id", "orderId"]),
     }
 }
 
@@ -529,6 +667,48 @@ mod tests {
         assert!(matches!(
             LiveCommand::from_json(&json),
             LiveCommand::PlayurlReload
+        ));
+    }
+
+    #[test]
+    fn parse_additional_user_and_system_commands() {
+        let like = serde_json::json!({
+            "cmd": "LIKE_INFO_V3_CLICK",
+            "data": {"uid": 7, "uname": "点赞用户", "like_text": "点了个赞"}
+        });
+        assert!(matches!(
+            LiveCommand::from_json(&like),
+            LiveCommand::Like { uid: 7, text, .. } if text == "点了个赞"
+        ));
+
+        let entry = serde_json::json!({
+            "cmd": "ENTRY_EFFECT",
+            "data": {"uid": 8, "uname": "进场用户", "copy_writing": "欢迎 <%进场用户%>"}
+        });
+        assert!(matches!(
+            LiveCommand::from_json(&entry),
+            LiveCommand::EntryEffect { uid: 8, text, .. } if text.contains("进场用户")
+        ));
+
+        let stats = serde_json::json!({
+            "cmd": "ONLINE_RANK_COUNT",
+            "data": {"count": 1234}
+        });
+        assert!(matches!(
+            LiveCommand::from_json(&stats),
+            LiveCommand::Stats { value: 1234, .. }
+        ));
+
+        let system = serde_json::json!({"cmd": "ROOM_SILENT_ON"});
+        assert!(matches!(
+            LiveCommand::from_json(&system),
+            LiveCommand::System { text } if text == "全员禁言开启"
+        ));
+
+        let pk = serde_json::json!({"cmd": "PK_BATTLE_START_NEW"});
+        assert!(matches!(
+            LiveCommand::from_json(&pk),
+            LiveCommand::LinkMicPk { .. }
         ));
     }
 

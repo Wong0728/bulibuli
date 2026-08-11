@@ -5763,20 +5763,53 @@ progress.download-item-progress-fill {
     color: var(--error-text);
 }
 
+.live-heat-wrap {
+    margin-bottom: var(--size-10);
+    padding: var(--size-8) var(--size-10) 0;
+    border: var(--size-1) solid var(--divider);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+}
+
+.live-heat-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--size-8);
+    color: var(--text-secondary);
+    font-size: var(--size-11);
+}
+
+.live-heat-heading > span:first-child {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-5);
+    font-weight: 600;
+}
+
+.live-heat-heading i {
+    color: var(--brand);
+}
+
+.live-heat-heading > span:last-child {
+    color: var(--text-muted);
+}
+
 .live-heat-bar {
     display: flex;
     align-items: flex-end;
-    gap: 2px;
-    min-height: 38px;
-    padding: var(--size-5) 0 var(--size-10);
+    gap: 3px;
+    min-height: 40px;
+    padding: var(--size-6) 0 var(--size-8);
     overflow-x: auto;
 }
 
 .live-heat-bar button {
-    flex: 1 1 0;
+    flex: 0 0 var(--size-10);
+    width: var(--size-10);
+    height: var(--size-30);
     min-width: var(--size-10);
-    /* 外层 padding 扩大命中区，内层 i 才是可见柱体 */
-    padding: 0 1px;
+    padding: 0 2px;
     border: 0;
     background: transparent;
     cursor: pointer;
@@ -5789,7 +5822,7 @@ progress.download-item-progress-fill {
     height: var(--size-5);
     border-radius: 2px 2px 0 0;
     background: var(--brand);
-    opacity: 0.35;
+    opacity: 0.28;
 }
 
 .live-heat-bar button.live-heat-level-1 i {
@@ -5805,7 +5838,16 @@ progress.download-item-progress-fill {
 }
 
 .live-heat-bar button.hot i {
-    opacity: 0.9;
+    opacity: 0.78;
+}
+
+.live-heat-empty {
+    display: block;
+    width: 100%;
+    padding: var(--size-8) 0;
+    color: var(--text-muted);
+    font-size: var(--size-11);
+    text-align: center;
 }
 
 .live-event-timeline {

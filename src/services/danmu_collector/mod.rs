@@ -362,8 +362,8 @@ impl DanmuCollector {
                                             if let commands::LiveCommand::Danmaku { uid, text, .. } = &cmd.command {
                                                 if !insert_seen_key(seen, history_key(&cmd.raw, *uid, text)) { continue; }
                                             }
-                                            let low_priority = matches!(cmd.command, commands::LiveCommand::WatchedChange { .. } | commands::LiveCommand::Interact { .. })
-                                                || matches!(&cmd.command, commands::LiveCommand::Other { cmd } if !["VOICE_JOIN", "LINK_MIC", "PK_", "LIVE_MULTI_VIEW"].iter().any(|prefix| cmd.starts_with(prefix)));
+                                            let low_priority = cmd.command.is_low_priority()
+                                                && !commands::is_link_command(&cmd.cmd);
                                             let sent = if low_priority {
                                                 match tx.try_send(cmd) {
                                                     Ok(()) => true,
