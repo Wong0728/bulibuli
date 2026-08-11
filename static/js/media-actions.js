@@ -337,6 +337,9 @@ export function renderDrawerCommentCard(c) {
     const total = c.total_replies || 0;
     const time = fmtTime(c.ctime);
     const message = escapeHtml(c.message || '');
+    const vip = Number(c.vip_status || 0) > 0
+        ? `<span class="cmt-vip">${escapeHtml(c.vip_label || '大会员')}</span>` : '';
+    const userStyle = /^#[0-9a-f]{6}$/i.test(c.name_color || '') ? ` style="color:${escapeHtml(c.name_color)}"` : '';
     let repliesHtml = '';
     if (Array.isArray(c.replies) && c.replies.length) {
         repliesHtml = `<div class="cmt-replies"><div class="cmt-replies-title">回复 · 显示 ${c.replies.length}/${total} 条</div>${c.replies.map(r => {
@@ -345,10 +348,12 @@ export function renderDrawerCommentCard(c) {
             const rlike = r.like || 0;
             const rt = fmtTime(r.ctime);
             const rmsg = escapeHtml(r.message || '');
-            return `<div class="cmt-reply"><div class="cmt-line"><span class="cmt-user">${ru}</span><span class="cmt-lv">Lv${rlv}</span><span class="cmt-meta"><i class="fa-solid fa-thumbs-up"></i> ${rlike} · ${rt}</span></div><div class="cmt-text">${rmsg}</div></div>`;
+            const rvip = Number(r.vip_status || 0) > 0 ? `<span class="cmt-vip">${escapeHtml(r.vip_label || '大会员')}</span>` : '';
+            const rstyle = /^#[0-9a-f]{6}$/i.test(r.name_color || '') ? ` style="color:${escapeHtml(r.name_color)}"` : '';
+            return `<div class="cmt-reply"><div class="cmt-line"><span class="cmt-user"${rstyle}>${ru}</span>${rvip}<span class="cmt-lv">Lv${rlv}</span><span class="cmt-meta"><i class="fa-solid fa-thumbs-up"></i> ${rlike} · ${rt}</span></div><div class="cmt-text">${rmsg}</div></div>`;
         }).join('')}</div>`;
     }
-    return `<div class="cmt-card"><div class="cmt-line"><span class="cmt-user">${uname}</span><span class="cmt-lv">Lv${level}</span><span class="cmt-meta"><i class="fa-solid fa-thumbs-up"></i> ${like} · <i class="fa-solid fa-comment"></i> ${total} · ${time}</span></div><div class="cmt-text">${message}</div>${repliesHtml}</div>`;
+    return `<div class="cmt-card"><div class="cmt-line"><span class="cmt-user"${userStyle}>${uname}</span>${vip}<span class="cmt-lv">Lv${level}</span><span class="cmt-meta"><i class="fa-solid fa-thumbs-up"></i> ${like} · <i class="fa-solid fa-comment"></i> ${total} · ${time}</span></div><div class="cmt-text">${message}</div>${repliesHtml}</div>`;
 }
 
 // 渲染抽屉内容（手动查询版本）
@@ -925,4 +930,14 @@ export function fallbackCopy(text) {
         showToast('复制失败', 'error');
     }
     document.body.removeChild(textarea);
+}
+
+export async function openHistoryDirectory(bvid, path = '') {
+    if (!bvid) return;
+    try {
+        await apiPost('/api/history/open-directory', { bvid, path: path || null });
+        showToast('已打开文件所在目录', 'success');
+    } catch (error) {
+        showToast(`打开目录失败：${error.message}`, 'error');
+    }
 }

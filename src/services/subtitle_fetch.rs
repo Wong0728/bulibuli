@@ -11,6 +11,8 @@ use crate::services::danmaku::{archive_sidecar_files, SidecarArchivePolicy};
 use crate::services::file_safety::{ensure_existing_within_root, validate_uid};
 use crate::services::settings::SubtitleSettings;
 use anyhow::{anyhow, Result};
+use futures::StreamExt;
+use reqwest::header::{HeaderMap, HeaderValue, LOCATION};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -152,7 +154,7 @@ impl SubtitleFetchService {
         let mut saved_files: Vec<PathBuf> = Vec::new();
         let mut primary_path: Option<PathBuf> = None;
         for (idx, sub) in filtered.iter().enumerate() {
-            let srt_content = match self.fetch_and_convert_srt(&sub.subtitle_url).await {
+            let srt_content = match self.fetch_and_convert_srt(&sub.subtitle_url, cookies).await {
                 Ok(content) => content,
                 Err(e) => {
                     warn!("[字幕] 下载/转换失败 {bvid} lan={}: {e}", sub.lan);
@@ -213,6 +215,15 @@ impl SubtitleFetchService {
             }));
         }
 
+        // 6. 额外复制主语言 SRT 到视频旁边（{bvid}.srt），供 PotPlayer 自动挂载
+        if let Some(ref primary) = primary_path {
+            let player_path = save_dir.join(format!("{bvid}.srt"));
+            match tokio::fs::copy(primary, &player_path).await {
+                Ok(_) => info!("[字幕] 已复制到视频旁边: {}", player_path.display()),
+                Err(e) => warn!("[字幕] 复制到视频旁边失败 {}: {e}", player_path.display()),
+            }
+        }
+
         let file_names: Vec<String> = saved_files
             .iter()
             .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
@@ -231,33 +242,84 @@ impl SubtitleFetchService {
 
     /// 下载字幕 JSON 并转换为 SRT 文本。
     /// `subtitle_url` 可能为 `//` 开头的协议相对路径，自动补 `https:`。
-    async fn fetch_and_convert_srt(&self, subtitle_url: &str) -> Result<String> {
+    async fn fetch_and_convert_srt(&self, subtitle_url: &str, cookies: &str) -> Result<String> {
         let url = fix_subtitle_url(subtitle_url);
         if url.is_empty() {
             return Err(anyhow!("字幕 URL 为空"));
         }
 
-        let resp = self
-            .bili_api
-            .client()
-            .get(&url)
-            .header(
-                "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            )
-            .header("Referer", "https://www.bilibili.com/")
-            .send()
+        const MAX_SUBTITLE_BYTES: usize = 2 * 1024 * 1024;
+        let mut current = crate::services::bili_url_policy::validate(&url)
             .await
-            .map_err(|e| anyhow!("请求字幕 JSON 失败 url={url}: {e}"))?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!("字幕 JSON 返回 HTTP {} url={url}", resp.status()));
+            .map_err(|e| anyhow!("字幕 URL 不受支持: {e}"))?;
+        let mut headers = HeaderMap::new();
+        headers.insert("User-Agent", HeaderValue::from_static("Mozilla/5.0"));
+        headers.insert(
+            "Referer",
+            HeaderValue::from_static("https://www.bilibili.com/"),
+        );
+        if !cookies.trim().is_empty() {
+            let enriched = self.bili_api.enrich_cookies_public(cookies).await?;
+            headers.insert("Cookie", HeaderValue::from_str(&enriched)?);
         }
-
-        let body: SubtitleBody = resp
-            .json()
-            .await
-            .map_err(|e| anyhow!("解析字幕 JSON 失败 url={url}: {e}"))?;
+        let mut redirect_count = 0u8;
+        let resp = loop {
+            let response = self
+                .bili_api
+                .client_for(current.as_str())
+                .get(current.as_str())
+                .headers(headers.clone())
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await
+                .map_err(|e| anyhow!("请求字幕 JSON 失败 url={current}: {e}"))?;
+            if response.status().is_redirection() {
+                if redirect_count >= 5 {
+                    return Err(anyhow!("字幕重定向超过 5 次限制"));
+                }
+                redirect_count += 1;
+                let location = response
+                    .headers()
+                    .get(LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or_else(|| anyhow!("字幕重定向缺少 Location"))?;
+                current = current
+                    .join(location)
+                    .map_err(|_| anyhow!("字幕重定向 URL 无效"))?;
+                if !current.path().is_empty() {
+                    current = crate::services::bili_url_policy::validate(current.as_str())
+                        .await
+                        .map_err(|e| anyhow!("字幕重定向 URL 不受支持: {e}"))?;
+                }
+                continue;
+            }
+            break response;
+        };
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "字幕 JSON 返回 HTTP {} url={current}",
+                resp.status()
+            ));
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !content_type.is_empty() && !content_type.contains("json") {
+            return Err(anyhow!("字幕响应不是 JSON: {content_type}"));
+        }
+        let mut bytes = Vec::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_SUBTITLE_BYTES {
+                return Err(anyhow!("字幕 JSON 超过 2 MiB 限制"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let body: SubtitleBody = serde_json::from_slice(&bytes)
+            .map_err(|e| anyhow!("解析字幕 JSON 失败 url={current}: {e}"))?;
 
         Ok(convert_to_srt(&body.body))
     }

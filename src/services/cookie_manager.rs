@@ -63,12 +63,11 @@ impl CookieManager {
         secret_store: Arc<SecretStore>,
         user_agent: String,
         referer: String,
-        tls_verify: bool,
+        _tls_verify: bool,
         api_timeout: u64,
     ) -> Result<Self> {
         let client = reqwest::Client::builder()
             .cookie_store(true)
-            .danger_accept_invalid_certs(!tls_verify)
             .timeout(Duration::from_secs(api_timeout))
             .build()
             .context("创建 CookieManager HTTP 客户端失败")?;

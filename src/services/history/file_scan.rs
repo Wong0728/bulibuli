@@ -63,11 +63,11 @@ impl HistoryService {
     }
 
     /// 把绝对路径转成相对 `data/downloads/` 的路径。
-    pub fn to_relative_path(&self, abs: &str) -> String {
+    pub fn to_relative_path(&self, abs: &str) -> Option<String> {
         let path = PathBuf::from(abs);
         match path.strip_prefix(&self.paths.download_dir) {
-            Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
-            Err(_) => abs.replace('\\', "/"),
+            Ok(relative) => Some(relative.to_string_lossy().replace('\\', "/")),
+            Err(_) => None,
         }
     }
 
@@ -209,10 +209,8 @@ impl HistoryService {
         } else {
             parent_is_current && version.is_none()
         };
-        Some(
-            self.file_entry(file_type, name, path, Some(&extension), is_current, version)
-                .await,
-        )
+        self.file_entry(file_type, name, path, Some(&extension), is_current, version)
+            .await
     }
 
     async fn file_entry(
@@ -223,7 +221,7 @@ impl HistoryService {
         format: Option<&str>,
         is_current: bool,
         version: Option<String>,
-    ) -> FileEntry {
+    ) -> Option<FileEntry> {
         let metadata = tokio::fs::metadata(path).await.ok();
         let size = metadata
             .as_ref()
@@ -233,8 +231,8 @@ impl HistoryService {
             .and_then(|value| value.modified().ok())
             .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
             .and_then(|value| i64::try_from(value.as_secs()).ok());
-        let relative = self.to_relative_path(&path.to_string_lossy());
-        FileEntry {
+        let relative = self.to_relative_path(&path.to_string_lossy())?;
+        Some(FileEntry {
             file_type: file_type.to_string(),
             name: name.to_string(),
             location: file_location(&relative),
@@ -244,7 +242,7 @@ impl HistoryService {
             is_current,
             version,
             modified_at,
-        }
+        })
     }
 }
 

@@ -59,7 +59,7 @@ pub struct BiliApiError {
 impl BiliApiError {
     pub fn classify(code: i64, message: impl Into<String>) -> Self {
         let kind = match code {
-            -352 | -403 => BiliErrorKind::RiskControl,
+            -352 | -403 | -412 | -799 => BiliErrorKind::RiskControl,
             -101 => BiliErrorKind::Unauthorized,
             -404 | 62002 => BiliErrorKind::NotFound,
             87007 => BiliErrorKind::ChargeRequired,

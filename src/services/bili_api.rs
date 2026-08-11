@@ -27,13 +27,14 @@ use crate::services::wbi::WbiKeysCache;
 use crate::ws::WebSocketManager;
 use anyhow::{Context, Result};
 use reqwest::Client;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
-use self::models::user::UserVideosPage;
+use self::models::{user::UserVideosPage, video::VideoInfo};
 
 pub const QUALITY_NAMES: &[(i32, &str)] = &[
     (127, "8K 超高清"),
@@ -53,7 +54,9 @@ pub const QUALITY_NAMES: &[(i32, &str)] = &[
 const VIDEO_LIST_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// 缓存 key：(uid, page, page_size)
-type VideoListCacheKey = (i64, i32, i32);
+type VideoListCacheKey = (String, i64, i32, i32);
+type VideoInfoCacheKey = (String, String);
+type QrCodeSession = (HashMap<String, String>, Instant);
 
 #[derive(Clone)]
 pub struct BiliApi {
@@ -63,6 +66,8 @@ pub struct BiliApi {
     /// 下载流 CDN 域名（*.bilivideo.com / *.hdslb.com）专用客户端，
     /// 按配置 `tls_verify` 决定是否校验证书，以兼容部分 MCDN 节点证书问题。
     stream_client: Client,
+    /// 无 Cookie 的兼容客户端，仅用于公开 b23/资源解析；凭据请求不得使用它。
+    anonymous_client: Client,
     config: Arc<AppConfig>,
     cookie_manager: Arc<CookieManager>,
     wbi_keys: WbiKeysCache,
@@ -71,6 +76,8 @@ pub struct BiliApi {
     bad_cdns: Arc<BadCdnRegistry>,
     /// 视频列表内存缓存：key = (uid, page, page_size)，value = (响应, 写入时刻)。
     video_list_cache: Arc<RwLock<HashMap<VideoListCacheKey, (UserVideosPage, Instant)>>>,
+    video_info_cache: Arc<RwLock<HashMap<VideoInfoCacheKey, (VideoInfo, Instant)>>>,
+    qrcode_sessions: Arc<Mutex<HashMap<String, QrCodeSession>>>,
 }
 
 impl BiliApi {
@@ -86,13 +93,21 @@ impl BiliApi {
             .context("创建 B站 API HTTP 客户端失败")?;
         let stream_client = Client::builder()
             .cookie_store(true)
-            .danger_accept_invalid_certs(!config.tls_verify)
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(config.bili_api_timeout))
             .build()
             .context("创建 B站流 CDN HTTP 客户端失败")?;
+        let anonymous_client = Client::builder()
+            .cookie_store(false)
+            .redirect(reqwest::redirect::Policy::none())
+            .danger_accept_invalid_certs(!config.tls_verify)
+            .timeout(std::time::Duration::from_secs(config.bili_api_timeout))
+            .build()
+            .context("创建 B站匿名兼容 HTTP 客户端失败")?;
         Ok(Self {
             api_client,
             stream_client,
+            anonymous_client,
             config,
             cookie_manager,
             ws,
@@ -107,6 +122,8 @@ impl BiliApi {
                 ),
             )),
             video_list_cache: Arc::new(RwLock::new(HashMap::new())),
+            video_info_cache: Arc::new(RwLock::new(HashMap::new())),
+            qrcode_sessions: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -123,7 +140,13 @@ impl BiliApi {
     /// 兼容性方法：默认返回流 CDN 客户端。
     /// 新代码请使用 `client_for(url)` 按域名选择。
     pub fn client(&self) -> &Client {
-        &self.stream_client
+        &self.anonymous_client
+    }
+
+    pub(crate) async fn invalidate_session_caches(&self) {
+        self.video_list_cache.write().await.clear();
+        self.video_info_cache.write().await.clear();
+        self.wbi_keys.invalidate().await;
     }
 
     /// 坏 CDN host 熔断注册表：与流选择共享同一实例，
@@ -131,6 +154,12 @@ impl BiliApi {
     pub(crate) fn bad_cdns(&self) -> &BadCdnRegistry {
         &self.bad_cdns
     }
+}
+
+pub(crate) fn session_fingerprint(cookies: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(cookies.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// 判断 URL 是否属于 B站 API 域名（强制严格 TLS）。
@@ -144,4 +173,17 @@ fn is_api_host(url: &str) -> bool {
     };
     let host = host.to_ascii_lowercase();
     host == "bilibili.com" || host.ends_with(".bilibili.com")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_fingerprint;
+
+    #[test]
+    fn session_fingerprint_is_stable_and_one_way() {
+        let first = session_fingerprint("SESSDATA=one");
+        assert_eq!(first, session_fingerprint("SESSDATA=one"));
+        assert_ne!(first, session_fingerprint("SESSDATA=two"));
+        assert!(!first.contains("one"));
+    }
 }

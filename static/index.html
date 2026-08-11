@@ -7,13 +7,21 @@
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="css/lib/jetbrains-mono.css?v=4">
     <link rel="stylesheet" href="css/lib/fontawesome.min.css?v=4">
-    <link rel="stylesheet" href="css/style.css?v=19">
+    <link rel="stylesheet" href="css/tokens.css?v=1">
+    <link rel="stylesheet" href="css/layout.css?v=1">
+    <link rel="stylesheet" href="css/components.css?v=1">
+    <link rel="stylesheet" href="css/settings.css?v=1">
+    <link rel="stylesheet" href="css/live.css?v=1">
+    <link rel="stylesheet" href="css/drawer.css?v=1">
+    <link rel="stylesheet" href="css/style.css?v=20">
     <!-- Socket.IO 客户端库 - 本地版本，支持离线使用 -->
     <script src="js/socket.io.min.js?v=3"></script>
     <!-- QRCode 库 - 本地版本，支持离线使用 -->
     <script src="js/qrcode.min.js?v=3"></script>
 </head>
 <body>
+
+<a class="skip-link" href="#main-content">跳转到主要内容</a>
 
 <div class="container">
     <header class="header">
@@ -60,7 +68,7 @@
     </nav>
 
     <!-- 博主搜索 Tab -->
-    <main>
+    <main id="main-content">
     <section id="tab-search" class="tab-panel active">
         <div class="card">
             <div class="card-title">
@@ -450,777 +458,23 @@
     </div>
 
     <!-- 系统设置 Tab -->
-    <section id="tab-settings" class="tab-panel">
-        <!-- B站账号登录 -->
-        <div class="section-collapsible" data-section="account">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-user-circle"></i> B站账号登录</h4>
-            </div>
-            <div class="section-body">
-                <div class="form-section">
-                <div class="form-group form-full">
-                        <span class="form-label">当前登录状态</span>
-                    <div id="cookie-login-status" class="login-status-box">
-                        <span class="login-user-sub"><i class="fa-solid fa-spinner fa-spin"></i> 正在检查登录状态...</span>
-                    </div>
-                    <div class="btn-group html-style-10">
-                        <button type="button" class="btn btn-primary" data-action="show-qr-login">
-                            <i class="fa-solid fa-qrcode"></i> 扫码登录 / 切换账号
-                        </button>
-                        <button type="button" class="btn btn-danger" data-action="logout-account">
-                            <i class="fa-solid fa-right-from-bracket"></i> 退出登录
-                        </button>
-                        <button type="button" class="btn btn-ghost" data-action="toggle-manual-cookie">
-                            <i class="fa-solid fa-keyboard"></i> 手动粘贴 Cookie
-                        </button>
-                    </div>
-                    <div class="form-note">推荐扫码登录；登录后 Cookie 由服务器安全保存，页面不再显示明文。切换账号可重新扫码或手动粘贴其他账号的 Cookie。</div>
-
-                    <!-- 手动粘贴（高级，默认折叠，仅用于输入，不回显已保存 Cookie） -->
-                    <div class="html-style-11" id="manual-cookie-box" hidden>
-                        <label class="sr-only" for="manual-cookies">B站 Cookie</label>
-                        <textarea id="manual-cookies" class="form-control" placeholder="粘贴其他账号的 Cookie 字符串（含 SESSDATA），点击“保存并登录”切换账号"></textarea>
-                        <div class="btn-group html-style-12">
-                            <button type="button" class="btn btn-primary" data-action="save-manual-cookie">
-                                <i class="fa-solid fa-save"></i> 保存并登录
-                            </button>
-                            <button type="button" class="btn btn-ghost" data-action="test-download">
-                                <i class="fa-solid fa-bug"></i> 测试下载
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            </div>
-        </div>
-
-        <div class="section-collapsible" data-section="appearance">
-            <div class="section-header"><h4><i class="fa-solid fa-palette"></i> 外观</h4></div>
-            <div class="section-body"><div class="settings-grid"><div class="form-group">
-                <label for="setting-theme">主题</label><select id="setting-theme" class="form-control"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select>
-            </div></div></div>
-        </div>
-
-        <!-- 查询设置 -->
-        <div class="section-collapsible" data-section="query">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-search"></i> 查询设置</h4>
-    
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group">
-                        <label for="setting-manual-query-limit">手动查询视频数量</label>
-                        <input type="number" id="setting-manual-query-limit" class="form-control" min="1" max="50">
-                        <div class="form-note">范围: 1-50，建议 10</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-auto-query-limit">自动下载视频数量</label>
-                        <input type="number" id="setting-auto-query-limit" class="form-control" min="1" max="20">
-                        <div class="form-note">范围: 1-20，建议 3</div>
-                    </div>
-                    <div class="form-group form-full">
-                        <div class="switch-group">
-                            <span class="switch-label">跳过充电专属视频</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-skip-charge-videos">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="form-note">开启后充电视频不占“自动下载视频数量”名额，自动下载最新 N 个非充电视频；充电视频会记录到看板（充电后可手动重试）。关闭后充电视频照常占名额，已充电的会自动下载、无权限的记录为不可下载</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-video-quality">视频质量 (qn)</label>
-                        <select id="setting-video-quality" class="form-control">
-                            <option value="16">360P 流畅</option>
-                            <option value="32">480P 清晰</option>
-                            <option value="64">720P 高清</option>
-                            <option value="80">1080P 高清</option>
-                            <option value="112">1080P+ 高码率</option>
-                            <option value="116">1080P60 帧</option>
-                            <option value="120">4K</option>
-                            <option value="125">HDR</option>
-                            <option value="126">杜比视界</option>
-                            <option value="127">8K</option>
-                        </select>
-                        <div class="form-note">需要相应会员权限</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-video-format">视频格式 (fnval)</label>
-                        <select id="setting-video-format" class="form-control">
-                            <option value="0">FLV</option>
-                            <option value="16">DASH MP4</option>
-                            <option value="4048">全格式支持</option>
-                        </select>
-                        <div class="form-note">建议保持默认</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-min-video-quality">最低允许画质</label>
-                        <select id="setting-min-video-quality" class="form-control">
-                            <option value="16">360P</option><option value="64">720P</option><option value="80">1080P</option>
-                        </select>
-                        <div class="form-note">自动降级不会低于此值</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-codec-preference">编码优先级</label>
-                        <select id="setting-codec-preference" class="form-control">
-                            <option value="av1,hevc,avc">AV1 → HEVC → AVC</option>
-                            <option value="hevc,av1,avc">HEVC → AV1 → AVC</option>
-                            <option value="avc,hevc,av1">AVC → HEVC → AV1</option>
-                        </select>
-                    </div>
-                    <div class="form-group form-full">
-                        <div class="switch-group"><span class="switch-label">允许画质自动降级</span><label class="toggle-switch"><input type="checkbox" id="setting-allow-quality-fallback"><span class="slider"></span></label></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 并行下载设置 -->
-        <div class="section-collapsible" data-section="parallel">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-layer-group"></i> 并行下载设置</h4>
-    
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group">
-                        <label for="setting-max-parallel">最大并行下载数</label>
-                        <input type="number" id="setting-max-parallel" class="form-control" min="1" max="10">
-                        <div class="form-note">范围 1-10。应用层：同时处理的下载任务数（几个视频一起下）</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-wait-slot-timeout">等待槽位超时 (秒)</label>
-                        <input type="number" id="setting-wait-slot-timeout" class="form-control" min="60" max="3600">
-                        <div class="form-note">范围: 60-3600，建议 300</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 弹幕和评论设置 -->
-        <div class="section-collapsible" data-section="danmaku">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-comments"></i> 弹幕和评论下载设置</h4>
-    
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <div class="switch-group">
-                            <span class="switch-label">自动下载弹幕</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-auto-download-danmaku">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="form-note">自动监控时同步下载弹幕</div>
-                    </div>
-                    <div class="form-group form-full">
-                        <div class="switch-group">
-                            <span class="switch-label">自动下载评论</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-auto-download-comments">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="form-note">自动监控时同步下载评论</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-comments-main-limit">主评论数量</label>
-                        <input type="number" id="setting-comments-main-limit" class="form-control" min="1" max="100">
-                        <div class="form-note">范围: 1-100，建议 30</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-comments-reply-mode">每条评论的回复</label>
-                        <select id="setting-comments-reply-mode" class="form-control">
-                            <option value="hot3">仅热门回复（约 3 条，最稳）</option>
-                            <option value="all">全部回复（展开子评论，可能触发风控）</option>
-                        </select>
-                        <div class="form-note" id="comments-reply-mode-note">仅取接口自带的约 3 条热门回复，无额外请求，最不易触发风控。</div>
-                    </div>
-                    <div class="form-group form-full">
-                        <label for="setting-comments-filter-regex">评论正则过滤</label>
-                        <input type="text" id="setting-comments-filter-regex" class="form-control" placeholder="留空表示不过滤，例如: (广告|加群|微信)">
-                        <div class="form-note">命中该正则的评论/回复不会写入结果（作用于评论正文，全局生效）。</div>
-                    </div>
-                    <div class="form-group">
-                        <label>弹幕/评论归档</label>
-                        <select id="setting-sidecar-archive-mode" class="form-control">
-                            <option value="overwrite">仅保留最新文件（默认）</option>
-                            <option value="keep_latest_n">保留最近 N 次归档</option>
-                            <option value="keep_all">永久保留全部归档</option>
-                        </select>
-                        <div class="form-note">固定名文件始终保存最新内容，供查看和烧录使用。</div>
-                    </div>
-                    <div class="form-group" id="sidecar-archive-limit-group" hidden>
-                        <label>归档保留次数</label>
-                        <input type="number" id="setting-sidecar-archive-limit" class="form-control" min="1" max="50">
-                        <div class="form-note">范围: 1-50。固定名最新文件不计入归档次数。</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 智能下载设置 -->
-        <div class="section-collapsible" data-section="smart" id="smart-download-card">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-brain"></i> 智能下载</h4>
-    
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <div class="switch-group">
-                            <span class="switch-label">启用智能下载</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-enable-smart-download">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="form-note">根据视频发布时间智能决定何时下载弹幕和评论，避免新视频弹幕/评论过少的问题</div>
-                    </div>
-                    <div class="form-group" id="smart-download-settings">
-                        <label>最小发布时间（小时）</label>
-                        <input type="number" id="setting-min-publish-hours" class="form-control" min="0" max="72">
-                        <div class="form-note">范围: 0-72，默认 1 小时。视频发布超过此时间后才下载弹幕/评论</div>
-                    </div>
-                    <div class="form-group" id="time-points-settings">
-                        <label>分时下载时间点（小时）</label>
-                        <div id="time-point-chips" class="time-point-chips"></div>
-                        <div class="time-point-add">
-                            <input type="number" id="time-point-input" class="form-control" min="0" max="72" placeholder="小时，如 5">
-                            <button type="button" class="btn btn-sm btn-primary" data-action="add-time-point"><i class="fa-solid fa-plus"></i> 添加</button>
-                        </div>
-                        <div class="form-note">在视频发布后这些小时点分别下载弹幕/评论。范围 0-72，自动去重升序。</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Aria2 下载模式设置 -->
-        <div class="section-collapsible" data-section="aria2">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-download"></i> Aria2 下载设置</h4>
-    
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <label for="setting-download-mode">下载模式</label>
-                        <select id="setting-download-mode" class="form-control">
-                            <option value="embedded">内置 aria2c（推荐）</option>
-                            <option value="external">RPC 远程连接</option>
-                        </select>
-                        <div class="form-note" id="download-mode-note">
-                            自动启动内置 aria2c 并通过 RPC 控制，无需手动配置
-                        </div>
-                    </div>
-                    <div class="form-group form-full">
-                        <div class="aria2-settings-status">
-                            <span><span class="aria2-dot disconnected" data-aria2-status title="正在检测 Aria2 状态..."></span> 保存连接设置后会立即应用，无需重启应用。</span>
-                            <button type="button" class="btn btn-sm" data-action="restart-aria2">
-                                <i class="fa-solid fa-rotate"></i> 重新连接 Aria2
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <div id="rpc-settings-panel" class="rpc-settings-panel" hidden>
-                    <div class="settings-grid">
-                        <div class="form-group">
-                            <label for="setting-aria2-host">主机地址</label>
-                            <input type="text" id="setting-aria2-host" class="form-control">
-                            <div class="form-note">Aria2 RPC 主机地址</div>
-                        </div>
-                        <div class="form-group">
-                            <label for="setting-aria2-port">RPC 端口</label>
-                            <input type="number" id="setting-aria2-port" class="form-control" min="1" max="65535">
-                            <div class="form-note">Aria2 RPC 端口</div>
-                        </div>
-                        <div class="form-group">
-                            <label for="setting-aria2-secret">RPC 密钥</label>
-                            <input type="password" id="setting-aria2-secret" class="form-control">
-                            <div class="form-note">Aria2 RPC 密钥（如果有）</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="rpc-settings-panel">
-                    <h5 class="settings-section-title"><i class="fa-solid fa-rocket"></i> Aria2c 高级参数</h5>
-                    <div class="settings-grid">
-                        <div class="form-group">
-                            <label>每服务器最大连接数</label>
-                            <input type="number" id="setting-max-conn-per-server" class="form-control" min="1" max="16">
-                            <div class="form-note">范围: 1-16，建议 16</div>
-                        </div>
-                        <div class="form-group">
-                            <label>分片数量</label>
-                            <input type="number" id="setting-split" class="form-control" min="1" max="16">
-                            <div class="form-note">范围: 1-16，建议与连接数相同</div>
-                        </div>
-                        <div class="form-group">
-                            <label>最小分片大小</label>
-                            <select id="setting-min-split-size" class="form-control">
-                                <option value="1M">1 MB</option>
-                                <option value="5M">5 MB</option>
-                                <option value="10M">10 MB</option>
-                            </select>
-                            <div class="form-note">小文件可增大</div>
-                        </div>
-                        <div class="form-group">
-                            <label>最大重试次数</label>
-                            <input type="number" id="setting-max-tries" class="form-control" min="3" max="10">
-                            <div class="form-note">范围: 3-10，建议 5</div>
-                        </div>
-                        <div class="form-group">
-                            <label>重试等待时间 (秒)</label>
-                            <input type="number" id="setting-retry-wait" class="form-control" min="1" max="30">
-                            <div class="form-note">范围: 1-30，建议 5</div>
-                        </div>
-                        <div class="form-group">
-                            <label>最大同时下载数</label>
-                            <input type="number" id="setting-max-concurrent-downloads" class="form-control" min="1" max="32">
-                            <div class="form-note">范围 1-32，与上面的并行数保持同步</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- FFmpeg 设置 -->
-        <div class="section-collapsible" data-section="ffmpeg">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-film"></i> FFmpeg 设置</h4>
-    
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <label for="setting-ffmpeg-mode">FFmpeg 模式</label>
-                        <select id="setting-ffmpeg-mode" class="form-control">
-                            <option value="auto">自动检测（推荐）</option>
-                            <option value="system">系统 PATH</option>
-                            <option value="embedded">内置 ffmpeg.exe</option>
-                            <option value="custom">手动指定路径</option>
-                        </select>
-                        <div class="form-note" id="ffmpeg-mode-note">
-                            自动检测：系统 PATH > 内置 ffmpeg.exe > 自定义路径
-                        </div>
-                    </div>
-                    <div class="form-group form-full" id="ffmpeg-detected-path-group">
-                        <label>当前检测到的路径</label>
-                        <div id="ffmpeg-detected-path" class="path-preview-box">
-                            <i class="fa-solid fa-spinner fa-spin"></i> 检测中...
-                        </div>
-                    </div>
-                    <div class="form-group form-full" id="ffmpeg-custom-path-group" hidden>
-                        <label for="setting-ffmpeg-path">自定义 FFmpeg 路径</label>
-                        <div class="btn-group btn-group-stretch">
-                            <input type="text" id="setting-ffmpeg-path" class="form-control" placeholder="请输入 FFmpeg 完整路径">
-                            <button type="button" class="btn" data-action="browse-ffmpeg-path">
-                                <i class="fa-solid fa-folder-open"></i> 浏览
-                            </button>
-                        </div>
-                        <div class="form-note">指定自定义的 FFmpeg 可执行文件路径</div>
-                    </div>
-                    <div class="form-group form-full">
-                        <div class="btn-group">
-                            <button type="button" class="btn" data-action="test-ffmpeg">
-                                <i class="fa-solid fa-vial"></i> 测试 FFmpeg
-                            </button>
-                            <span id="ffmpeg-test-result" class="test-result-hint"></span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 弹幕烧录参数设置 -->
-        <div class="section-collapsible" data-section="burn">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-closed-captioning"></i> 弹幕烧录参数</h4>
-
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group">
-                        <label>弹幕透明度</label>
-                        <input type="number" id="setting-burn-opacity" class="form-control" min="0.1" max="1" step="0.1">
-                        <div class="form-note">范围: 0.1~1.0，默认 0.6</div>
-                    </div>
-                    <div class="form-group">
-                        <label>字号缩放</label>
-                        <input type="number" id="setting-burn-font-size-scale" class="form-control" min="0.5" max="2" step="0.1">
-                        <div class="form-note">范围: 0.5~2.0，默认 1.0</div>
-                    </div>
-                    <div class="form-group">
-                        <label>滚动弹幕时长（秒）</label>
-                        <input type="number" id="setting-burn-scroll-time" class="form-control" min="1" max="60" step="0.5">
-                        <div class="form-note">范围: 1~60，默认 8</div>
-                    </div>
-                    <div class="form-group">
-                        <label>固定弹幕时长（秒）</label>
-                        <input type="number" id="setting-burn-fix-time" class="form-control" min="1" max="60" step="0.5">
-                        <div class="form-note">范围: 1~60，默认 4</div>
-                    </div>
-                    <div class="form-group">
-                        <label>底部保留高度（像素）</label>
-                        <input type="number" id="setting-burn-bottom-reserve" class="form-control" min="0" max="200" step="1">
-                        <div class="form-note">范围: 0~200，默认 50；避免弹幕遮挡字幕</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- CC 字幕设置 -->
-        <div class="section-collapsible" data-section="subtitle">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-closed-captioning"></i> CC 字幕</h4>
-
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <div class="switch-group">
-                            <span class="switch-label">自动下载 CC 字幕</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-subtitle-enabled">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                    </div>
-                    <div class="form-group form-full">
-                        <div class="switch-group">
-                            <span class="switch-label">接受 AI 自动生成字幕</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-subtitle-accept-ai">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="form-note">关闭时跳过 lan 以 ai- 开头的字幕</div>
-                    </div>
-                    <div class="form-group form-full">
-                        <label>语言过滤（逗号分隔，留空下载全部）</label>
-                        <input type="text" id="setting-subtitle-languages" class="form-control" placeholder="zh-CN,zh-Hans">
-                        <div class="form-note">例如 zh-CN,zh-Hans；留空表示下载全部语言</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 下载路径设置 -->
-        <div class="section-collapsible" data-section="path">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-folder-open"></i> 下载目录整理</h4>
-    
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <label>自动分文件夹</label>
-                        <div class="switch-group">
-                            <span class="switch-label">按博主UID自动创建子文件夹</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-auto-organize">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                    </div>
-                    <div class="form-group form-full">
-                        <label for="setting-path-template">目录模板</label>
-                        <input id="setting-path-template" class="form-control" placeholder="{uid}/{title}">
-                        <div class="form-note">可用变量：{up}、{uid}、{date}、{title}、{bvid}、{quality}、{codec}、{page}、{type}</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-conflict-strategy">同名不同内容时</label>
-                        <select id="setting-conflict-strategy" class="form-control"><option value="suffix">保留并加时间戳</option><option value="skip">跳过新文件</option><option value="overwrite">覆盖已有文件</option></select>
-                    </div>
-                    <div class="form-group form-full">
-                        <label>当前下载路径预览</label>
-                        <div id="path-preview" class="path-preview-box">
-                            <i class="fa-solid fa-file-video"></i>
-                            <span id="path-preview-text">./data/downloads/{博主UID}/{视频标题}.mp4</span>
-                        </div>
-                        <div class="form-note">下载路径固定在 data/downloads 文件夹下</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 存储设置 -->
-        <div class="section-collapsible" data-section="storage">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-hdd"></i> 存储设置</h4>
-
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group">
-                        <label>历史记录上限</label>
-                        <input type="number" id="setting-history-limit" class="form-control" min="100" max="5000">
-                        <div class="form-note">范围: 100-5000，建议 1000</div>
-                    </div>
-                    <div class="form-group">
-                        <label>UID历史上限</label>
-                        <input type="number" id="setting-uid-history-limit" class="form-control" min="5" max="50">
-                        <div class="form-note">范围: 5-50，建议 10</div>
-                    </div>
-                    <div class="form-group">
-                        <label>日志上限</label>
-                        <input type="number" id="setting-log-limit" class="form-control" min="50" max="500">
-                        <div class="form-note">范围: 50-500，建议 100</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 视频保留数（全局默认，统一生效） -->
-        <div class="section-collapsible" data-section="retain">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-database"></i> 视频保留数</h4>
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <label>全局默认保留数</label>
-                        <input type="number" id="setting-per-blogger-retain-default" class="form-control" min="0" max="1000">
-                        <div class="form-note">0 = 不限制；≥1 时每个博主只保留最新 N 条视频（超出的按发布时间删除文件 + 记录），对所有博主统一生效。</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- MD5 校验设置 -->
-        <div class="section-collapsible" data-section="verify">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-fingerprint"></i> MD5 完整性校验</h4>
-
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <label>校验模式</label>
-                        <select id="setting-verify-mode" class="form-control">
-                            <option value="off">关闭</option>
-                            <option value="on_completion">下载完成时校验一次</option>
-                            <option value="periodic">周期校验（按天数）</option>
-                        </select>
-                        <div class="form-note">下载完成时算一次 MD5 存库；周期模式另起后台 worker 定时复核</div>
-                    </div>
-                    <div class="form-group" id="verify-periodic-group" hidden>
-                        <label>校验间隔（天）</label>
-                        <input type="number" id="setting-verify-periodic-days" class="form-control" min="1" max="90">
-                        <div class="form-note">范围: 1-90，建议 7</div>
-                    </div>
-                    <div class="form-group" id="verify-batch-group" hidden>
-                        <label>单次批量</label>
-                        <input type="number" id="setting-verify-periodic-batch" class="form-control" min="1" max="200">
-                        <div class="form-note">范围: 1-200，建议 20。每 60 秒扫一批最久未校验的</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 看板设置 -->
-        <div class="section-collapsible" data-section="board">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-chalkboard"></i> 看板显示</h4>
-
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <div class="switch-group">
-                            <span class="switch-label">显示文件相对路径</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-show-relative-path">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="form-note">开启后看板卡片与抽屉显示相对 data/downloads/ 的路径（如 123456/BV1xxx.m4s）；关闭则完全隐藏路径</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 基础配置只读摘要；编辑入口只存在于本机 Setup Web / TUI。 -->
-        <div class="section-collapsible" data-section="foundation-summary">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-shield-halved"></i> 基础配置摘要</h4>
-            </div>
-            <div class="section-body">
-                <div id="foundation-summary-content">
-                    <p class="form-note">正在读取基础配置状态...</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- AI Skill（只读状态；开关仅在基础配置 Web 中提供） -->
-        <div class="section-collapsible" data-section="ai-skill">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-robot"></i> AI Skill</h4>
-            </div>
-            <div class="section-body">
-                <div id="ai-skill-content">
-                    <div class="form-group form-full">
-                        <div class="switch-group">
-                            <span class="switch-label">启用 AI Skill 模式</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-ai-skill-enabled" disabled>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="form-note">启用后，本机 AI 可通过命令编排下载/查询/管理。</div>
-                    </div>
-                    <div id="ai-skill-path-box" hidden>
-                        <p>AI Skill 文件路径：</p>
-                        <div class="path-preview-box" style="display:flex;align-items:center;gap:0.5rem;">
-                            <code id="ai-skill-path-text">docs/skill.md</code>
-                            <button class="btn btn-sm" id="copy-ai-skill-path-btn"><i class="fa-solid fa-copy"></i> 复制路径</button>
-                        </div>
-                        <div class="form-note" style="margin-top:0.5rem;">
-                            使用方法：复制路径 → 发给 AI → 让它阅读该文件并学习如何使用
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 基础配置入口（不会从主 Web 打开，避免远程 Web 误导到本机地址） -->
-        <div class="section-collapsible" data-section="setup-wizard">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-wand-magic-sparkles"></i> 设置向导</h4>
-            </div>
-            <div class="section-body">
-                <p class="form-note">基础配置当前仅允许服务端访问。请在服务器后端 TUI 输入 <code>setup</code>，或通过 SSH 隧道访问基础配置 Web。</p>
-            </div>
-        </div>
-
-        <!-- 不想开网页？ -->
-        <div class="section-collapsible" data-section="no-browser">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-circle-question"></i> 不想开网页？</h4>
-            </div>
-            <div class="section-body">
-                <p class="form-note">所有配置都保存在服务器端。你可以：</p>
-                <ol style="padding-left:1.25rem;margin:0.5rem 0;font-size:0.85rem;color:var(--text-secondary);">
-                    <li>先在网页中完成所有设置和添加下载任务</li>
-                    <li>确认一切正常运行后</li>
-                    <li>关闭浏览器，程序会在后台继续工作</li>
-                    <li>需要时再打开网页查看进度</li>
-                </ol>
-                <p class="form-note" style="margin-top:0.5rem;">如果用 AI 模式管理，甚至不需要打开网页：把 Skill 文件交给 AI，让它帮你操作。</p>
-            </div>
-        </div>
-
-        <!-- 监控设置 -->
-        <div class="section-collapsible" data-section="monitor">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-radar"></i> 监控行为</h4>
-
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group form-full">
-                        <div class="switch-group">
-                            <span class="switch-label">重投检测（纯提示）</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-detect-reupload">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="form-note">开启后，发现标题与近 90 天历史高度相似的新视频时，卡片左上角显示红点，抽屉显示"可能是 BVxxx 的重传"。不会自动重下、不会删旧文件</div>
-                    </div>
-                    <div class="form-group form-full">
-                        <label class="form-label" for="setting-multi-page-mode">多P自动下载范围</label>
-                        <select id="setting-multi-page-mode" class="form-control">
-                            <option value="first">仅 P1（保持现状）</option>
-                            <option value="all">全部分P</option>
-                        </select>
-                        <div class="form-note">自动监控发现的多P投稿：选择"仅 P1"只下第一P；选择"全部分P"则每个分P独立入队下载。手动下载不受此项影响，可在抽屉内自选分P</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 刷新设置 -->
-        <div class="section-collapsible" data-section="refresh">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-sync-alt"></i> 数据刷新</h4>
-
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group">
-                        <label>L1 视频数据刷新间隔（分钟）</label>
-                        <input type="number" id="setting-l1-interval-minutes" class="form-control" min="1" max="1440">
-                        <div class="form-note">范围: 1-1440，建议 5。后端每 N 分钟抽 50 条最久未刷的视频更新播放量/状态</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 直播录制设置 -->
-        <div class="section-collapsible" data-section="live-recording">
-            <div class="section-header">
-                <h4><i class="fa-solid fa-tower-broadcast"></i> 直播录制</h4>
-            </div>
-            <div class="section-body">
-                <div class="settings-grid">
-                    <div class="form-group">
-                        <label class="form-label" for="setting-live-max-concurrent">并发录制上限（路）</label>
-                        <input type="number" id="setting-live-max-concurrent" class="form-control" min="1" max="8" value="2">
-                        <div class="form-note">范围 1-8。多房间同时开播时，超出上限的房间不会自动开录</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="setting-live-min-free-space">磁盘余量安全阈值（GiB）</label>
-                        <input type="number" id="setting-live-min-free-space" class="form-control" min="1" max="1024" value="10">
-                        <div class="form-note">启动和录制过程中可用空间低于该值时安全停录，避免磁盘写满</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="setting-live-max-duration">单场录制时长上限（小时）</label>
-                        <input type="number" id="setting-live-max-duration" class="form-control" min="1" max="72" value="12">
-                        <div class="form-note">范围 1-72。防止忘关的异常直播永久占用磁盘</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="setting-live-file-template">录制文件名模板</label>
-                        <input type="text" id="setting-live-file-template" class="form-control" value="{room_id}_{title}_{date}">
-                        <div class="form-note">可用占位符：{room_id} 房间号、{title} 直播标题、{date} 日期、{time} 时间；系统会自动追加时间戳与短后缀避免重名</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 设置操作按钮 -->
-        <div class="card">
-            <div class="settings-actions">
-                <button class="btn btn-primary" data-action="save-settings">
-                    <i class="fa-solid fa-save"></i> 保存所有设置
-                </button>
-                <button class="btn btn-danger" data-action="reset-settings">
-                    <i class="fa-solid fa-undo"></i> 恢复默认
-                </button>
-                <button class="btn" data-action="load-settings">
-                    <i class="fa-solid fa-redo"></i> 刷新
-                </button>
-            </div>
-        </div>
-    </section>
+    <section id="tab-settings" class="tab-panel" role="tabpanel" aria-label="设置">
+        <div id="settings-fragment-mount"></div>
     </main>
 </div>
 
 <!-- 添加博主模态框 -->
-<div id="add-blogger-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="add-blogger-title">
+<div id="blogger-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="blogger-modal-title">
     <div class="modal-container modal-container-wide">
         <div class="modal-header">
             <i class="fa-solid fa-user-plus"></i>
-            <span id="add-blogger-title">添加监控博主</span>
-            <button type="button" class="modal-close-btn" data-action="close-add-blogger-modal" aria-label="关闭">
+            <span id="blogger-modal-title">添加监控博主</span>
+            <button type="button" class="modal-close-btn" data-action="close-blogger-modal" aria-label="关闭">
                 <i class="fa-solid fa-times"></i>
             </button>
         </div>
         <div class="form-section">
+            <input type="hidden" id="modal-blogger-id">
             <div class="form-group form-full">
                 <label for="modal-known-blogger-select"><i class="fa-solid fa-bookmark"></i> 从现有博主载入配置（可选）</label>
                 <select id="modal-known-blogger-select" class="blogger-select" data-change-action="load-known-blogger-config">
@@ -1249,26 +503,26 @@
 
             <div class="form-divider"><span>监测时段</span></div>
             <div class="form-group form-full active-window-editor">
-                <label class="choice-row" for="add-all-day">
+                <label class="choice-row" for="blogger-all-day">
                     <span>
                         <strong>全天监测</strong>
                         <small>关闭后可设置最多 6 个监测窗口，使用服务器本地时区。</small>
                     </span>
                     <span class="toggle-switch">
-                        <input type="checkbox" id="add-all-day" checked data-change-action="toggle-active-window-mode" data-scope="add">
+                        <input type="checkbox" id="blogger-all-day" checked data-change-action="toggle-active-window-mode" data-scope="blogger">
                         <span class="slider"></span>
                     </span>
                 </label>
-                <div id="add-active-windows-list"></div>
-                <div id="add-active-window-controls" class="active-window-controls" hidden>
-                    <button type="button" class="btn" data-action="add-active-window" data-scope="add">
+                <div id="blogger-active-windows-list"></div>
+                <div id="blogger-active-window-controls" class="active-window-controls" hidden>
+                    <button type="button" class="btn" data-action="add-active-window" data-scope="blogger">
                         <i class="fa-solid fa-plus"></i> 添加时段
                     </button>
                     <span class="active-window-presets">
                         快捷：
-                        <button type="button" class="btn btn-sm" data-action="active-window-preset" data-scope="add" data-preset="daytime">白天</button>
-                        <button type="button" class="btn btn-sm" data-action="active-window-preset" data-scope="add" data-preset="evening">晚间</button>
-                        <button type="button" class="btn btn-sm" data-action="active-window-preset" data-scope="add" data-preset="overnight">跨夜</button>
+                        <button type="button" class="btn btn-sm" data-action="active-window-preset" data-scope="blogger" data-preset="daytime">白天</button>
+                        <button type="button" class="btn btn-sm" data-action="active-window-preset" data-scope="blogger" data-preset="evening">晚间</button>
+                        <button type="button" class="btn btn-sm" data-action="active-window-preset" data-scope="blogger" data-preset="overnight">跨夜</button>
                     </span>
                 </div>
             </div>
@@ -1294,164 +548,18 @@
             </div>
         </div>
         <div class="modal-footer">
-            <button class="btn" data-action="close-add-blogger-modal">
+            <button class="btn" data-action="close-blogger-modal">
                 <i class="fa-solid fa-times"></i> 取消
             </button>
-            <button class="btn btn-primary" data-action="confirm-add-blogger">
+            <button class="btn btn-primary" data-action="confirm-blogger-modal">
                 <i class="fa-solid fa-check"></i> 确认添加
             </button>
         </div>
     </div>
 </div>
 
-<!-- 编辑博主模态框 -->
-<div id="edit-blogger-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="edit-blogger-title">
-    <div class="modal-container modal-container-wide">
-        <div class="modal-header">
-            <i class="fa-solid fa-user-edit"></i>
-            <span id="edit-blogger-title">编辑博主配置</span>
-            <button type="button" class="modal-close-btn" data-action="close-edit-blogger-modal" aria-label="关闭">
-                <i class="fa-solid fa-times"></i>
-            </button>
-        </div>
-        <div class="form-section">
-            <input type="hidden" id="edit-blogger-id">
-            <div class="form-group">
-                <label><i class="fa-solid fa-id-card"></i> 博主 UID</label>
-                <input type="text" id="edit-blogger-uid" class="form-control" disabled>
-                <div class="form-note">UID 不可修改</div>
-            </div>
-            <div class="form-group">
-                <label><i class="fa-solid fa-user-tag"></i> 博主备注名</label>
-                <input type="text" id="edit-blogger-name" class="form-control" placeholder="设置博主备注名称">
-                <div class="form-note">设置方便识别的名称</div>
-            </div>
-            <div class="form-group">
-                <label><i class="fa-solid fa-sync-alt"></i> 最小检查间隔 (秒)</label>
-                <input type="number" id="edit-min-interval" class="form-control" min="30" max="3600">
-                <div class="form-note">范围: 30-3600，建议 60</div>
-            </div>
-            <div class="form-group">
-                <label><i class="fa-solid fa-sync-alt"></i> 最大检查间隔 (秒)</label>
-                <input type="number" id="edit-max-interval" class="form-control" min="30" max="7200">
-                <div class="form-note">范围: 30-7200，建议 300</div>
-            </div>
-            <div class="form-group form-full">
-                <label class="choice-row choice-row-emphasis" for="edit-monitor-enabled">
-                    <span>
-                        <strong>启用自动监控</strong>
-                        <small>时段外会自动进入等待状态，到下一个监测窗口恢复。</small>
-                    </span>
-                    <span class="toggle-switch">
-                        <input type="checkbox" id="edit-monitor-enabled">
-                        <span class="slider"></span>
-                    </span>
-                </label>
-            </div>
-
-            <div class="form-divider"><span>下载策略</span></div>
-
-            <div class="form-group form-full">
-                <div class="switch-group">
-                    <span class="switch-label">下载视频</span>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="edit-download-video" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
-            <div class="form-group form-full">
-                <div class="switch-group">
-                    <span class="switch-label">下载弹幕</span>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="edit-download-danmaku" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
-            <div class="form-group form-full">
-                <div class="switch-group">
-                    <span class="switch-label">下载评论</span>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="edit-download-comments" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
-            <div class="form-group form-full">
-                <div class="switch-group">
-                    <span class="switch-label">下载封面</span>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="edit-download-cover" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
-            <div class="form-group form-full">
-                <div class="switch-group">
-                    <span class="switch-label">自动烧录弹幕到视频</span>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="edit-burn-danmaku">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                <div class="form-note">合并完成后自动将弹幕烧录进视频画面</div>
-            </div>
-            <div class="form-group form-full">
-                <div class="switch-group">
-                    <span class="switch-label">自动烧录 CC 字幕到视频</span>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="edit-burn-subtitle">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                <div class="form-note">合并完成后自动将 CC 字幕烧录进视频画面</div>
-            </div>
-            <div class="form-group form-full">
-                <label><i class="fa-solid fa-filter"></i> 合集白名单正则</label>
-                <input type="text" id="edit-series-filter-regex" class="form-control" placeholder="留空=全部合集；例如：.*精选.*">
-                <div class="form-note">仅自动下载名称匹配该正则的合集视频（空=全部）</div>
-            </div>
-            <div class="form-divider"><span>监测时段</span></div>
-            <div class="form-group form-full active-window-editor">
-                <label class="choice-row" for="edit-all-day">
-                    <span>
-                        <strong>全天监测</strong>
-                        <small>关闭后可设置最多 6 个监测窗口，使用服务器本地时区。</small>
-                    </span>
-                    <span class="toggle-switch">
-                        <input type="checkbox" id="edit-all-day" checked data-change-action="toggle-active-window-mode" data-scope="edit">
-                        <span class="slider"></span>
-                    </span>
-                </label>
-                <div id="edit-active-windows-list"></div>
-                <div id="edit-active-window-controls" class="active-window-controls" hidden>
-                    <button type="button" class="btn" data-action="add-active-window" data-scope="edit">
-                        <i class="fa-solid fa-plus"></i> 添加时段
-                    </button>
-                    <span class="active-window-presets">
-                        快捷：
-                        <button type="button" class="btn btn-sm" data-action="active-window-preset" data-scope="edit" data-preset="daytime">白天</button>
-                        <button type="button" class="btn btn-sm" data-action="active-window-preset" data-scope="edit" data-preset="evening">晚间</button>
-                        <button type="button" class="btn btn-sm" data-action="active-window-preset" data-scope="edit" data-preset="overnight">跨夜</button>
-                    </span>
-                </div>
-                <div class="form-note">默认只限制监测与新自动任务的发起；已经开始的下载会继续完成。</div>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn" data-action="close-edit-blogger-modal">
-                <i class="fa-solid fa-times"></i> 取消
-            </button>
-            <button class="btn btn-primary" data-action="confirm-edit-blogger">
-                <i class="fa-solid fa-save"></i> 保存修改
-            </button>
-        </div>
-    </div>
-</div>
-
 <!-- 博主资料变更通知模态框 -->
-<div id="blogger-notice-modal" class="modal-overlay">
+<div id="blogger-notice-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="blogger-notice-title">
     <div class="modal-container">
         <div class="modal-header">
             <i class="fa-solid fa-bell"></i>
@@ -1472,7 +580,7 @@
 </div>
 
 <!-- B站扫码登录模态框 -->
-<div id="qrcode-modal" class="modal-overlay">
+<div id="qrcode-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="qrcode-modal-title">
     <div class="modal-container qrcode">
         <div class="modal-header">
             <i class="fa-solid fa-bilibili text-brand"></i>
@@ -1497,7 +605,7 @@
 </div>
 
 <!-- 通用确认对话框 -->
-<div id="confirm-modal" class="modal-overlay">
+<div id="confirm-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
     <div class="modal-container html-style-13">
         <div class="modal-header">
             <i class="fa-solid fa-circle-question"></i>
@@ -1525,7 +633,7 @@
 
 <div id="msg-box"></div>
 
-<script type="module" src="js/app.js?v=23"></script>
+<script type="module" src="js/app.js?v=24"></script>
 
 </body>
 </html>

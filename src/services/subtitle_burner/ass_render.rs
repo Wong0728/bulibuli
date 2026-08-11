@@ -57,7 +57,7 @@ pub(super) async fn generate_ass(
     config: &BurnConfig,
 ) -> Result<()> {
     let alpha = hex_alpha(config.opacity);
-    let font_name = choose_font();
+    let font_name = choose_font(&config.font_family);
     let ori_info = if xml_name.is_empty() {
         "弹幕XML文件"
     } else {
@@ -110,11 +110,16 @@ pub(super) async fn generate_ass(
                 line.poss_y.round() as i64
             ));
         }
-        if line.color != "FFFFFF" {
-            let bgr = rgb_to_bgr(&line.color);
+        let color = if config.color_mode == "uniform" {
+            config.color.as_str()
+        } else {
+            line.color.as_str()
+        };
+        if color != "FFFFFF" {
+            let bgr = rgb_to_bgr(color);
             effect_parts.push(format!("\\c&H{}", bgr));
         }
-        if is_dark_color(&line.color) {
+        if is_dark_color(color) {
             effect_parts.push("\\3c&HFFFFFF".to_string());
         }
         if line.font_size != 25 {
@@ -140,11 +145,13 @@ pub(super) async fn generate_ass(
     Ok(())
 }
 
-pub(super) fn choose_font() -> &'static str {
-    if cfg!(target_os = "linux") {
-        "Noto Sans CJK SC"
-    } else {
-        "Microsoft YaHei UI"
+pub(super) fn choose_font(value: &str) -> &'static str {
+    match value {
+        "Microsoft YaHei UI" => "Microsoft YaHei UI",
+        "Noto Sans CJK SC" => "Noto Sans CJK SC",
+        "Arial" => "Arial",
+        _ if cfg!(target_os = "linux") => "Noto Sans CJK SC",
+        _ => "Microsoft YaHei UI",
     }
 }
 

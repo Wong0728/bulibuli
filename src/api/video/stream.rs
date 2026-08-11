@@ -162,6 +162,7 @@ pub(super) struct GateDownloadRequest {
 pub(super) struct GetVideosRequest {
     uid: String,
     limit: Option<i32>,
+    offset: Option<i64>,
 }
 
 pub(super) async fn get_videos(
@@ -171,7 +172,6 @@ pub(super) async fn get_videos(
     use tracing::info;
 
     let uid = req.uid.trim();
-    let cookies = state.infra.settings_service.cookie_header().await?;
     if uid.is_empty() {
         info!("[API] /api/video/get-videos 请求失败: UID为空");
         return Err(AppError::BadRequest("请输入用户UID".to_string()));
@@ -183,6 +183,7 @@ pub(super) async fn get_videos(
         );
         AppError::BadRequest("UID必须是数字".to_string())
     })?;
+    crate::api::validate_bili_id("UID", uid_int)?;
 
     info!(
         "[API] /api/video/get-videos 请求: uid={}, limit={:?}",
@@ -196,11 +197,25 @@ pub(super) async fn get_videos(
         .query
         .manual_query_limit;
     let limit = req.limit.unwrap_or(default_limit);
+    if !(1..=50).contains(&limit) {
+        return Err(AppError::BadRequest(
+            "视频列表 limit 必须在 1 到 50 之间".to_string(),
+        ));
+    }
+    let offset = req.offset.unwrap_or(0);
+    if offset < 0 || offset % i64::from(limit) != 0 {
+        return Err(AppError::BadRequest(
+            "视频列表 offset 必须是非负 page size 整数倍".to_string(),
+        ));
+    }
+    let page = i32::try_from(offset / i64::from(limit) + 1)
+        .map_err(|_| AppError::BadRequest("视频列表页码超出范围".to_string()))?;
 
+    let cookies = state.infra.settings_service.cookie_header().await?;
     let result = state
         .bili
         .bili_api
-        .get_user_videos(uid_int, &cookies, limit)
+        .get_user_videos_page(uid_int, &cookies, page, limit)
         .await?;
     info!(
         "[API] /api/video/get-videos 成功: uid={}, 返回视频数={}",
@@ -225,10 +240,13 @@ pub(super) async fn get_video_urls(
     use tracing::info;
 
     let bvid = req.bvid.trim();
-    let cookies = state.infra.settings_service.cookie_header().await?;
     if bvid.is_empty() {
         info!("[API] /api/video/get-video-urls 请求失败: BV号为空");
         return Err(AppError::BadRequest("请提供视频BV号".to_string()));
+    }
+
+    if let Some(cid) = req.cid {
+        crate::api::validate_bili_id("CID", cid)?;
     }
 
     info!(
@@ -238,6 +256,8 @@ pub(super) async fn get_video_urls(
 
     let settings = state.infra.settings_service.current();
     let fnval = req.fnval.unwrap_or(settings.query.video_format);
+    crate::api::validate_fnval(fnval)?;
+    let cookies = state.infra.settings_service.cookie_header().await?;
     let preferred_quality = settings.query.video_quality;
     let minimum_quality = settings.query.min_video_quality;
     let codecs = settings.query.prefer_codecs.clone();
@@ -304,10 +324,10 @@ pub(super) async fn get_audio_url(
     Json(req): Json<GetAudioUrlRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let bvid = req.bvid.trim();
-    let cookies = state.infra.settings_service.cookie_header().await?;
     if bvid.is_empty() {
         return Err(AppError::BadRequest("请提供视频BV号".to_string()));
     }
+    let cookies = state.infra.settings_service.cookie_header().await?;
     let preference = state
         .infra
         .settings_service
@@ -336,28 +356,9 @@ pub(super) async fn get_video_info(
     State(state): State<SharedState>,
     axum::extract::Query(q): axum::extract::Query<VideoInfoQuery>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    use std::collections::HashMap;
-    use std::sync::Mutex as StdMutex;
-    use std::time::Instant;
-
     let bvid = q.bvid.trim();
     if bvid.is_empty() {
         return Err(AppError::BadRequest("请提供视频BV号".to_string()));
-    }
-
-    // 5min 内存缓存：static 只初始化一次，进程级共享
-    static CACHE: std::sync::LazyLock<StdMutex<HashMap<String, (Value, Instant)>>> =
-        std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
-    const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
-
-    {
-        // 临界区仅 HashMap 读写不会 panic；即使毒化也取回内部数据继续
-        let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((v, t)) = cache.get(bvid) {
-            if t.elapsed() < CACHE_TTL {
-                return Ok(Json(ApiResponse::success(v.clone())));
-            }
-        }
     }
 
     let cookies = state.infra.settings_service.cookie_header().await?;
@@ -376,21 +377,6 @@ pub(super) async fn get_video_info(
         "rights": info.rights,
         "pages": info.pages,
     });
-
-    {
-        // 临界区仅 HashMap 读写不会 panic；即使毒化也取回内部数据继续
-        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        cache.insert(bvid.to_string(), (result.clone(), Instant::now()));
-        // 批量清理：超过 200 条时清掉最旧的 50 条，避免单条清理低效
-        if cache.len() > 200 {
-            let mut entries: Vec<(String, Instant)> =
-                cache.iter().map(|(k, (_, t))| (k.clone(), *t)).collect();
-            entries.sort_by_key(|(_, t)| *t);
-            for (k, _) in entries.iter().take(50) {
-                cache.remove(k);
-            }
-        }
-    }
 
     Ok(Json(ApiResponse::success(result)))
 }

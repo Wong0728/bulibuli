@@ -32,6 +32,12 @@ impl HistoryService {
 
     /// 看板查询：状态过滤、排序、计数和分页均在数据库完成。
     pub async fn board_page(&self, tab: &str, page: u64, page_size: u64) -> AppResult<BoardPage> {
+        let cache_key = (tab.to_owned(), page, page_size);
+        if let Some((cached, fetched_at)) = self.board_cache.read().await.get(&cache_key) {
+            if fetched_at.elapsed() < super::BOARD_CACHE_TTL {
+                return Ok(cached.clone());
+            }
+        }
         let active_tasks = download_task::Entity::find()
             .select_only()
             .column(download_task::Column::Bvid)
@@ -129,11 +135,15 @@ impl HistoryService {
             }
         }
 
-        Ok(BoardPage {
+        let result = BoardPage {
             histories,
             total,
             counts_by_uid,
-        })
+        };
+        let mut cache = self.board_cache.write().await;
+        cache.retain(|_, (_, fetched_at)| fetched_at.elapsed() < super::BOARD_CACHE_TTL);
+        cache.insert(cache_key, (result.clone(), std::time::Instant::now()));
+        Ok(result)
     }
 
     /// 只查询当前页视频对应的下载任务。

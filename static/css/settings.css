@@ -1,0 +1,14 @@
+.settings-fragment {
+    margin-block-end: 1rem;
+}
+
+.settings-group-switcher {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+}
+
+.settings-group-switcher [aria-pressed="true"] {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+}

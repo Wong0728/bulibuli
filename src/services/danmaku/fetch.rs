@@ -4,6 +4,7 @@ use crate::services::dm_proto;
 use crate::services::wbi;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local};
+use futures::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use tracing::{error, info, warn};
@@ -11,21 +12,56 @@ use tracing::{error, info, warn};
 use super::archive::archive_sidecar_files;
 use super::{cookie_header, cookie_map, DanmakuService, SidecarArchivePolicy, SEGMENT_DURATION};
 
+const MAX_DANMAKU_SEGMENTS: usize = 512;
+const MAX_DANMAKU_SEGMENT_BYTES: usize = 16 * 1024 * 1024;
+
+pub(super) fn capped_segment_count(duration: i64) -> (usize, bool) {
+    let requested = if duration <= 0 {
+        1
+    } else {
+        ((duration + SEGMENT_DURATION - 1) / SEGMENT_DURATION).max(1) as usize
+    };
+    (
+        requested.min(MAX_DANMAKU_SEGMENTS),
+        requested > MAX_DANMAKU_SEGMENTS,
+    )
+}
+
+async fn read_limited_response(response: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    let mut chunks = response.bytes_stream();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk?;
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(anyhow!("danmaku segment exceeds {max_bytes} bytes"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 impl DanmakuService {
     /// 获取视频 cid 与 duration（秒）。复用 BiliApi::get_video_info() 使用 WBI 签名。
     async fn get_video_meta(
         &self,
         bvid: &str,
         cookies: &HashMap<String, String>,
+        page: Option<i32>,
     ) -> Result<(i64, i64)> {
         let info = self
             .bili_api
             .get_video_info(bvid, &cookie_header(cookies))
             .await?;
-        if info.cid <= 0 {
+        let selected = page
+            .and_then(|number| info.pages.iter().find(|item| item.page == number))
+            .or_else(|| info.pages.first());
+        let (cid, duration) = selected
+            .map(|item| (item.cid, item.duration))
+            .unwrap_or((info.cid, info.duration));
+        if cid <= 0 {
             return Err(anyhow!("cid 不存在"));
         }
-        Ok((info.cid, info.duration))
+        Ok((cid, duration))
     }
 
     /// 分段拉取并立即解析 protobuf，避免同时在内存保留全部原始分段。
@@ -36,7 +72,7 @@ impl DanmakuService {
         cid: i64,
         duration: i64,
         cookies: &HashMap<String, String>,
-    ) -> Result<(Vec<Value>, usize)> {
+    ) -> Result<(Vec<Value>, usize, usize, Vec<usize>, bool)> {
         // 先合并设备指纹，再获取 WBI keys：nav 接口在新风控下要求携带登录态 Cookie
         let enriched = self
             .cookie_manager
@@ -46,15 +82,13 @@ impl DanmakuService {
         let (img_key, sub_key) = self.bili_api.get_wbi_keys_public(&enriched).await?;
         let referer = format!("https://www.bilibili.com/video/{bvid}");
 
-        let parts = if duration <= 0 {
-            1
-        } else {
-            ((duration + SEGMENT_DURATION - 1) / SEGMENT_DURATION).max(1)
-        };
+        let (parts, truncated) = capped_segment_count(duration);
 
         let mut list = Vec::new();
         let mut successful_segments = 0usize;
+        let mut failed_segments = Vec::new();
         for index in 1..=parts {
+            failed_segments.push(index);
             let mut params = HashMap::new();
             params.insert("type".to_string(), "1".to_string());
             params.insert("oid".to_string(), cid.to_string());
@@ -79,7 +113,7 @@ impl DanmakuService {
                         warn!("弹幕分段 {index} HTTP {} 失败", resp.status());
                         continue;
                     }
-                    match resp.bytes().await {
+                    match read_limited_response(resp, MAX_DANMAKU_SEGMENT_BYTES).await {
                         Ok(bytes) => {
                             if bytes.is_empty() {
                                 warn!("弹幕分段 {index} 返回空数据");
@@ -87,6 +121,7 @@ impl DanmakuService {
                             }
                             list.extend(dm_proto::parse_danmaku_bytes(&bytes));
                             successful_segments += 1;
+                            failed_segments.retain(|failed| *failed != index);
                         }
                         Err(e) => warn!("弹幕分段 {index} 读取字节失败: {e}"),
                     }
@@ -94,22 +129,89 @@ impl DanmakuService {
                 Err(e) => warn!("弹幕分段 {index} 请求失败: {e}"),
             }
         }
-        Ok((list, successful_segments))
+        Ok((list, successful_segments, parts, failed_segments, truncated))
     }
 
     /// 下载弹幕，支持指定保存目录（用于手动下载时与视频放在同一目录）
     pub async fn download_danmaku_to(
         &self,
         bvid: &str,
+        page: Option<i32>,
         cookies_str: Option<&str>,
         uid: Option<&str>,
         archive_policy: SidecarArchivePolicy,
         save_dir_override: Option<&std::path::Path>,
     ) -> Result<Value> {
-        info!("[弹幕] 开始下载: bvid={bvid}, uid={:?}", uid);
+        info!("[弹幕] 开始下载: bvid={bvid}, page={page:?}, uid={:?}", uid);
         let cookies = cookies_str.map(cookie_map).unwrap_or_default();
 
-        let (cid, duration) = match self.get_video_meta(bvid, &cookies).await {
+        if page.is_none() {
+            let info = self
+                .bili_api
+                .get_video_info(bvid, &cookie_header(&cookies))
+                .await?;
+            let pages = info
+                .pages
+                .iter()
+                .filter(|item| item.cid > 0)
+                .take(100)
+                .collect::<Vec<_>>();
+            if pages.len() > 1 {
+                let mut results = Vec::with_capacity(pages.len());
+                for item in pages {
+                    let result = self
+                        .download_danmaku_page(
+                            bvid,
+                            Some(item.page),
+                            cookies_str,
+                            uid,
+                            archive_policy,
+                            save_dir_override,
+                        )
+                        .await?;
+                    results.push(json!({
+                        "page": item.page,
+                        "cid": item.cid,
+                        "result": result,
+                    }));
+                }
+                let success = results.iter().all(|item| {
+                    item.pointer("/result/success")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                });
+                return Ok(json!({
+                    "success": success,
+                    "partial": !success,
+                    "message": if success { "所有分P弹幕下载完成" } else { "部分分P弹幕下载失败" },
+                    "pages": results,
+                }));
+            }
+        }
+        self.download_danmaku_page(
+            bvid,
+            page,
+            cookies_str,
+            uid,
+            archive_policy,
+            save_dir_override,
+        )
+        .await
+    }
+
+    async fn download_danmaku_page(
+        &self,
+        bvid: &str,
+        page: Option<i32>,
+        cookies_str: Option<&str>,
+        uid: Option<&str>,
+        archive_policy: SidecarArchivePolicy,
+        save_dir_override: Option<&std::path::Path>,
+    ) -> Result<Value> {
+        info!("[弹幕] 开始下载: bvid={bvid}, page={page:?}, uid={:?}", uid);
+        let cookies = cookies_str.map(cookie_map).unwrap_or_default();
+
+        let (cid, duration) = match self.get_video_meta(bvid, &cookies, page).await {
             Ok(v) => {
                 info!(
                     "[弹幕] 视频元信息: bvid={bvid}, cid={}, duration={}",
@@ -126,14 +228,17 @@ impl DanmakuService {
             }
         };
 
-        let (mut list, segment_count) = match self
+        let (mut list, segment_count, expected_segments, failed_segments, truncated) = match self
             .fetch_protobuf_segments(bvid, cid, duration, &cookies)
             .await
         {
-            Ok((_, 0)) => {
+            Ok((_, 0, _, failed_segments, truncated)) => {
                 warn!("[弹幕] 所有分段拉取失败（可能 Cookies 已过期或被风控）: bvid={bvid}");
                 return Ok(json!({
                     "success": false,
+                    "partial": true,
+                    "failed_segments": failed_segments,
+                    "truncated": truncated,
                     "message": "所有弹幕分段拉取失败（可能 Cookies 已过期或被风控）",
                 }));
             }
@@ -150,13 +255,18 @@ impl DanmakuService {
             }
         };
 
+        let partial = truncated || !failed_segments.is_empty() || segment_count < expected_segments;
+
         if list.is_empty() {
             info!("[弹幕] 该视频暂无弹幕: bvid={bvid}");
             return Ok(json!({
-                "success": true,
+                "success": !partial,
                 "message": "该视频暂无弹幕",
                 "count": 0,
                 "file_path": null,
+                "partial": partial,
+                "failed_segments": failed_segments,
+                "truncated": truncated,
             }));
         }
 
@@ -177,11 +287,14 @@ impl DanmakuService {
             }));
         }
 
-        let xml_path = save_dir.join(format!("{bvid}_danmaku.xml"));
-        let json_path = save_dir.join(format!("{bvid}_danmaku.json"));
-        let txt_path = save_dir.join(format!("{bvid}_danmaku.txt"));
+        let stem = page
+            .map(|number| format!("{bvid}_p{number}"))
+            .unwrap_or_else(|| bvid.to_string());
+        let xml_path = save_dir.join(format!("{stem}_danmaku.xml"));
+        let json_path = save_dir.join(format!("{stem}_danmaku.json"));
+        let txt_path = save_dir.join(format!("{stem}_danmaku.txt"));
 
-        let xml_content = self.serialize_xml(bvid, cid, &list);
+        let xml_content = self.serialize_xml(&stem, cid, &list);
         let json_data = json!({
             "video_info": {
                 "bvid": bvid,
@@ -191,6 +304,10 @@ impl DanmakuService {
                 "download_time": Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
                 "source": "protobuf_seg.so",
                 "segments": segment_count,
+                "expected_segments": expected_segments,
+                "partial": partial,
+                "failed_segments": failed_segments,
+                "truncated": truncated,
             },
             "danmaku_list": list,
         });
@@ -219,7 +336,7 @@ impl DanmakuService {
                 "message": format!("写入 JSON 失败: {e}"),
             }));
         }
-        let txt_content = self.format_danmaku_txt(bvid, cid, &list);
+        let txt_content = self.format_danmaku_txt(&stem, cid, &list);
         if let Err(e) = tokio::fs::write(&txt_path, txt_content).await {
             error!("[弹幕] 写入 TXT 失败 {bvid}: {e}");
             return Ok(json!({
@@ -249,15 +366,17 @@ impl DanmakuService {
             segment_count
         );
         Ok(json!({
-            "success": true,
+            "success": !partial,
             "message": format!("弹幕下载完成，共 {} 条（{} 个分段）", list.len(), segment_count),
-            "file_path": save_dir.to_string_lossy(),
             "files": [
                 xml_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
                 json_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
                 txt_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
             ],
             "count": list.len(),
+            "partial": partial,
+            "failed_segments": failed_segments,
+            "truncated": truncated,
         }))
     }
 

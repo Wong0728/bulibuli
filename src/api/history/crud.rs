@@ -1,10 +1,12 @@
 //! 历史记录读写接口：按博主查询、删除单条记录与关键字搜索。
 
 use crate::error::{ApiResponse, AppError};
+use crate::services::file_safety::ensure_existing_within_root;
 use crate::state::SharedState;
 use axum::{extract::Query, extract::State, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::Path;
 
 #[derive(Deserialize)]
 pub(super) struct ByUidQuery {
@@ -31,6 +33,65 @@ pub(super) struct DeleteHistoryRequest {
     bvid: String,
     /// 是否同时删除本地文件（视频/封面/弹幕/字幕）。默认 true。
     delete_files: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct OpenDirectoryRequest {
+    bvid: String,
+    /// 由 scan_files 返回的相对路径；不接受客户端绝对路径。
+    path: Option<String>,
+}
+
+pub(super) async fn open_directory(
+    State(state): State<SharedState>,
+    Json(req): Json<OpenDirectoryRequest>,
+) -> Result<Json<ApiResponse<Value>>, AppError> {
+    let bvid = req.bvid.trim();
+    if bvid.is_empty() {
+        return Err(AppError::BadRequest("请提供视频BV号".to_string()));
+    }
+    let history = state
+        .business
+        .history_service
+        .find_by_bvid(bvid)
+        .await?
+        .ok_or_else(|| AppError::NotFound("未找到该视频记录".to_string()))?;
+    let target = if let Some(relative) = req.path.as_deref().filter(|path| !path.trim().is_empty())
+    {
+        let files = state
+            .business
+            .history_service
+            .scan_files(bvid, history.uid.as_deref(), history.file_path.as_deref())
+            .await;
+        if !files.iter().any(|file| file.path == relative) {
+            return Err(AppError::BadRequest("文件不属于该视频记录".to_string()));
+        }
+        state
+            .business
+            .history_service
+            .resolve_download_relative_path(relative)
+            .ok_or_else(|| AppError::BadRequest("文件路径无效".to_string()))?
+    } else {
+        history
+            .file_path
+            .as_deref()
+            .map(|path| Path::new(path).to_path_buf())
+            .ok_or_else(|| AppError::BadRequest("该记录没有可打开的文件".to_string()))?
+    };
+    ensure_existing_within_root(&state.infra.paths.download_dir, &target).await?;
+    if !tokio::fs::try_exists(&target).await.unwrap_or(false) {
+        return Err(AppError::NotFound("文件不存在".to_string()));
+    }
+    let directory = target
+        .parent()
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| AppError::NotFound("文件所在目录不存在".to_string()))?;
+    open::that(directory)
+        .map_err(|_| AppError::Internal("open download directory failed".to_string()))?;
+    Ok(Json(ApiResponse::with_message(
+        json!({"bvid": bvid}),
+        "已打开文件所在目录",
+    )))
 }
 
 /// 删除单条视频记录（抽屉"删除本地文件 + 记录"按钮用）。

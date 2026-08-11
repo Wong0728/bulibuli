@@ -2,6 +2,7 @@
 
 use crate::error::{ApiResponse, AppError};
 use crate::models::{blogger, download_task, history};
+use crate::services::security_config::AccessMode;
 use crate::state::business::BusinessState;
 use crate::state::infra::InfraState;
 use crate::state::SharedState;
@@ -30,7 +31,14 @@ pub(super) async fn list_history(
 
     // 单视频详情查询：返回该 bvid 的 history + sidecar + 最新 download_task 状态
     if let Some(bvid) = q.bvid.as_deref() {
-        let data = build_single_video_response(&state.business, bvid.trim(), server_time).await?;
+        let data = build_single_video_response(
+            &state.business,
+            &state.infra,
+            bvid.trim(),
+            server_time,
+            matches!(state.bili.security.current().mode, AccessMode::Local),
+        )
+        .await?;
         return Ok(Json(ApiResponse::success(data)));
     }
 
@@ -44,6 +52,7 @@ pub(super) async fn list_history(
         server_time,
         page,
         page_size,
+        matches!(state.bili.security.current().mode, AccessMode::Local),
     )
     .await?;
     Ok(Json(ApiResponse::success(board)))
@@ -57,6 +66,7 @@ async fn build_board_response(
     server_time: i64,
     page: u64,
     page_size: u64,
+    allow_absolute_path: bool,
 ) -> Result<Value, AppError> {
     let board_page = business
         .history_service
@@ -96,7 +106,18 @@ async fn build_board_response(
             .or_default()
             .push(t.clone());
     }
-    let show_relative_path = infra.settings_service.current().board.show_relative_path;
+    let settings = infra.settings_service.current();
+    let configured_path_display_mode =
+        if settings.board.path_display_mode == "hidden" && settings.board.show_relative_path {
+            "relative".to_string()
+        } else {
+            settings.board.path_display_mode.clone()
+        };
+    let path_display_mode = if configured_path_display_mode == "absolute" && !allow_absolute_path {
+        "relative".to_string()
+    } else {
+        configured_path_display_mode
+    };
 
     // 按 uid 分组
     let mut groups: HashMap<String, Vec<history::Model>> = HashMap::new();
@@ -119,7 +140,7 @@ async fn build_board_response(
         let fallback_name = videos.iter().find_map(|v| v.owner_name.clone());
         let fallback_face = videos.iter().find_map(|v| v.owner_face.clone());
         let video_list =
-            build_video_list(business, videos, &task_by_bvid, show_relative_path).await;
+            build_video_list(business, videos, &task_by_bvid, &path_display_mode).await;
         result_groups.push(json!({
             "uid": uid,
             "name": b.and_then(|b| b.name.clone()).or(fallback_name),
@@ -168,7 +189,7 @@ async fn build_video_list(
     business: &BusinessState,
     videos: &[history::Model],
     task_by_bvid: &HashMap<String, Vec<download_task::Model>>,
-    show_relative_path: bool,
+    path_display_mode: &str,
 ) -> Vec<Value> {
     stream::iter(videos.iter().cloned())
         .map(|h| async move {
@@ -176,13 +197,11 @@ async fn build_video_list(
                 .history_service
                 .sidecar_status(&h.bvid, h.uid.as_deref(), h.file_path.as_deref())
                 .await;
-            let filepath = if show_relative_path {
-                h.file_path
-                    .as_deref()
-                    .map(|p| business.history_service.to_relative_path(p))
-            } else {
-                None
-            };
+            let filepath = display_path_for(
+                &business.history_service,
+                h.file_path.as_deref(),
+                path_display_mode,
+            );
 
             let task = aggregate_task_progress(task_by_bvid.get(&h.bvid).map(Vec::as_slice), &h);
 
@@ -196,8 +215,9 @@ async fn build_video_list(
                 "duration": h.duration,
                 "view": h.view,
                 "state": h.state,
-                "cover_local_path": h.cover_local_path,
+                "cover_local_path": display_path_for(&business.history_service, h.cover_local_path.as_deref(), path_display_mode),
                 "file_path": filepath,
+                "relative_path": h.file_path.as_deref().and_then(|path| business.history_service.to_relative_path(path)),
                 "reupload_of": h.reupload_of,
                 "pay_note": h.pay_note,
                 "md5": h.md5,
@@ -226,8 +246,10 @@ async fn build_video_list(
 /// 单视频详情响应（抽屉用）。
 async fn build_single_video_response(
     business: &BusinessState,
+    infra: &InfraState,
     bvid: &str,
     server_time: i64,
+    allow_absolute_path: bool,
 ) -> Result<Value, AppError> {
     let h = business.history_service.find_by_bvid(bvid).await;
     let Ok(Some(h)) = h else {
@@ -291,6 +313,37 @@ async fn build_single_video_response(
         .scan_files(&h.bvid, h.uid.as_deref(), h.file_path.as_deref())
         .await;
 
+    let settings = infra.settings_service.current();
+    let configured_path_display_mode =
+        if settings.board.path_display_mode == "hidden" && settings.board.show_relative_path {
+            "relative".to_string()
+        } else {
+            settings.board.path_display_mode.clone()
+        };
+    let path_display_mode = if configured_path_display_mode == "absolute" && !allow_absolute_path {
+        "relative".to_string()
+    } else {
+        configured_path_display_mode
+    };
+    let file_path = display_path_for(
+        &business.history_service,
+        h.file_path.as_deref(),
+        &path_display_mode,
+    );
+    let cover_local_path = display_path_for(
+        &business.history_service,
+        h.cover_local_path.as_deref(),
+        &path_display_mode,
+    );
+    let relative_path = h
+        .file_path
+        .as_deref()
+        .and_then(|path| business.history_service.to_relative_path(path));
+    let files = files
+        .into_iter()
+        .map(|file| file_entry_view(&business.history_service, file, &path_display_mode))
+        .collect::<Vec<_>>();
+
     Ok(json!({
         "server_time": server_time,
         "video": {
@@ -303,8 +356,9 @@ async fn build_single_video_response(
             "duration": h.duration,
             "view": h.view,
             "state": h.state,
-            "cover_local_path": h.cover_local_path,
-            "file_path": h.file_path,
+            "cover_local_path": cover_local_path,
+            "file_path": file_path,
+            "relative_path": relative_path,
             "reupload_of": h.reupload_of,
             "pay_note": h.pay_note,
             "md5": h.md5,
@@ -321,6 +375,41 @@ async fn build_single_video_response(
             },
         }
     }))
+}
+
+fn display_path_for(
+    history_service: &crate::services::history::HistoryService,
+    path: Option<&str>,
+    mode: &str,
+) -> Option<String> {
+    let relative = path.and_then(|value| history_service.to_relative_path(value))?;
+    match mode {
+        "relative" => Some(relative),
+        "absolute" => history_service
+            .resolve_download_relative_path(&relative)
+            .map(|value| value.to_string_lossy().replace('\\', "/")),
+        _ => None,
+    }
+}
+
+fn file_entry_view(
+    history_service: &crate::services::history::HistoryService,
+    file: crate::services::history::FileEntry,
+    mode: &str,
+) -> Value {
+    let display_path = display_path_for(history_service, Some(&file.path), mode);
+    json!({
+        "file_type": file.file_type,
+        "name": file.name,
+        "path": file.path,
+        "display_path": display_path,
+        "size": file.size,
+        "format": file.format,
+        "location": file.location,
+        "is_current": file.is_current,
+        "version": file.version,
+        "modified_at": file.modified_at,
+    })
 }
 
 #[derive(Clone, Default, serde::Serialize)]

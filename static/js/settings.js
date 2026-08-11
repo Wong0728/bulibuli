@@ -3,6 +3,41 @@ import { escapeHtml } from './utils.js';
 import { setTone, apiPost, apiPut, apiGet } from './core.js';
 import { showToast, confirmDialog } from './download-status.js';
 
+let settingsFragmentPromise = null;
+
+export function loadSettingsFragment() {
+    if (settingsFragmentPromise) return settingsFragmentPromise;
+    settingsFragmentPromise = (async () => {
+        const mount = document.getElementById('settings-fragment-mount');
+        if (!mount || mount.dataset.loaded === 'true') return;
+        const response = await fetch('/settings.html', { credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) throw new Error(`设置导航加载失败 (${response.status})`);
+        mount.innerHTML = await response.text();
+        mount.dataset.loaded = 'true';
+        const groups = {
+            basic: ['account', 'appearance', 'query', 'parallel', 'smart'],
+            downloads: ['danmaku', 'aria2', 'ffmpeg', 'burn', 'subtitle', 'path', 'storage', 'retain', 'verify'],
+            advanced: ['board', 'monitor', 'refresh', 'live-recording'],
+            security: ['local-config'],
+        };
+        const sections = () => [...document.querySelectorAll('#tab-settings .section-collapsible')];
+        const selectGroup = group => {
+            const visible = new Set(groups[group] || groups.basic);
+            sections().forEach(section => {
+                section.hidden = !visible.has(section.dataset.section);
+            });
+            mount.querySelectorAll('[data-settings-group]').forEach(button => {
+                button.setAttribute('aria-pressed', String(button.dataset.settingsGroup === group));
+            });
+        };
+        mount.querySelectorAll('[data-settings-group]').forEach(button => {
+            button.addEventListener('click', () => selectGroup(button.dataset.settingsGroup));
+        });
+        selectGroup('basic');
+    })();
+    return settingsFragmentPromise;
+}
+
 // ==================== 设置面板 ====================
 
 // 解析时间点字符串为数组
@@ -190,6 +225,8 @@ export async function refreshFFmpegDetectedPath() {
             detectedPathEl.innerHTML = `
                 ${statusIcon} <i class="fa-solid ${icon}"></i> ${escapeHtml(path)} ${sourceText ? `<span data-js-style="12">${escapeHtml(sourceText)}</span>` : ''}
             `;
+            // ponytail: 首次检测可能后端尚未探完，补一次延迟重试
+            if (!data.path) setTimeout(refreshFFmpegDetectedPath, 2000);
         } else {
             detectedPathEl.innerHTML = '<i class="fa-solid fa-exclamation-circle" data-js-style="11"></i> 检测失败';
         }
@@ -375,7 +412,8 @@ export async function loadSettingsFromServer() {
 
             // 看板设置
             if (s.board) {
-                document.getElementById('setting-show-relative-path').checked = s.board.show_relative_path === true;
+                document.getElementById('setting-path-display-mode').value = s.board.path_display_mode
+                    || (s.board.show_relative_path ? 'relative' : 'hidden');
             }
 
             // 监控设置
@@ -400,6 +438,9 @@ export async function loadSettingsFromServer() {
                 document.getElementById('setting-burn-fix-time').value = s.burn.fix_time ?? 4;
                 document.getElementById('setting-burn-font-size-scale').value = s.burn.font_size_scale ?? 1;
                 document.getElementById('setting-burn-bottom-reserve').value = s.burn.bottom_reserve ?? 50;
+                document.getElementById('setting-burn-font-family').value = s.burn.font_family ?? 'auto';
+                document.getElementById('setting-burn-color-mode').value = s.burn.color_mode ?? 'source';
+                document.getElementById('setting-burn-color').value = s.burn.color ?? 'FFFFFF';
             }
             // CC 字幕设置（未配置时使用默认值：enabled=true, accept_ai=false, languages=[]）
             if (s.subtitle) {
@@ -429,6 +470,7 @@ export async function saveSettings(btn) {
             throw new Error('设置尚未加载完成');
         }
         const settings = structuredClone(_state.settingsSnapshot);
+        settings.expected_revision = settings.revision;
         Object.assign(settings.query, {
             manual_query_limit: parseInt(document.getElementById('setting-manual-query-limit').value),
             auto_query_limit: parseInt(document.getElementById('setting-auto-query-limit').value),
@@ -493,7 +535,9 @@ export async function saveSettings(btn) {
             periodic_days: parseInt(document.getElementById('setting-verify-periodic-days').value),
             periodic_batch: parseInt(document.getElementById('setting-verify-periodic-batch').value),
         });
-        settings.board.show_relative_path = document.getElementById('setting-show-relative-path').checked;
+        settings.board.path_display_mode = document.getElementById('setting-path-display-mode').value;
+        // 保留旧字段，兼容尚未升级的客户端。
+        settings.board.show_relative_path = settings.board.path_display_mode === 'relative';
         settings.live = {
             ...(settings.live || {}),
             max_concurrent: parseInt(document.getElementById('setting-live-max-concurrent').value),
@@ -512,6 +556,9 @@ export async function saveSettings(btn) {
             fix_time: parseFloat(document.getElementById('setting-burn-fix-time').value),
             font_size_scale: parseFloat(document.getElementById('setting-burn-font-size-scale').value),
             bottom_reserve: parseFloat(document.getElementById('setting-burn-bottom-reserve').value),
+            font_family: document.getElementById('setting-burn-font-family').value,
+            color_mode: document.getElementById('setting-burn-color-mode').value,
+            color: document.getElementById('setting-burn-color').value.trim().replace(/^#/, '').toUpperCase(),
         });
         Object.assign(settings.subtitle, {
             enabled: document.getElementById('setting-subtitle-enabled').checked,
@@ -526,12 +573,13 @@ export async function saveSettings(btn) {
                 throw new Error('保存设置响应缺少设置数据');
             }
             _state.settingsSnapshot = structuredClone(result.data);
-            showToast('设置已保存', 'success');
+            showToast(result.message || '设置已保存', result.message?.includes('Aria2 未能') ? 'warning' : 'success');
         } else {
             showToast(result.message || '保存失败', 'error');
         }
     } catch (e) {
-        showToast('保存设置失败', 'error');
+        showToast(e?.message || '保存设置失败', 'error');
+        if (e?.status === 409) await loadSettingsFromServer();
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -648,20 +696,15 @@ async function copyTextWithFeedback(text, successMessage) {
 
 // ==================== AI Skill ====================
 function loadAiSkillInfo() {
-    const toggle = document.getElementById('setting-ai-skill-enabled');
     const pathBox = document.getElementById('ai-skill-path-box');
-    if (!toggle) return;
 
     // 从只读摘要读取状态；主 Web 不再拥有 AI 开关写入口。
     apiGet('/api/foundation/status').then(result => {
         if (result.code === 0) {
             const data = result.data || {};
-            toggle.checked = data.ai_skill_enabled;
             if (pathBox) pathBox.hidden = !data.ai_skill_enabled;
         }
-    }).catch(error => showToast(`AI Skill 状态读取失败：${error.message || '请重试'}`, 'error'));
-
-    toggle.disabled = true;
+    }).catch(() => {});
 
     // 复制 Skill 路径
     const copyBtn = document.getElementById('copy-ai-skill-path-btn');
@@ -673,7 +716,6 @@ function loadAiSkillInfo() {
             }
         });
     }
-
 }
 
 // ==================== 移动端适配 ====================

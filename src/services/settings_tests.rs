@@ -45,6 +45,24 @@ fn legacy_settings_fill_live_recording_defaults() {
 }
 
 #[test]
+fn legacy_relative_path_setting_migrates_to_display_mode() {
+    let mut raw = serde_json::json!({"board": {"show_relative_path": true}});
+    migrate_legacy_path_display_mode(&mut raw);
+    assert_eq!(raw["board"]["path_display_mode"], "relative");
+}
+
+#[test]
+fn invalid_burn_color_and_font_are_rejected() {
+    let mut settings = RuntimeSettings::default();
+    settings.burn.color = "GGGGGG".to_string();
+    assert!(settings.validate().is_err());
+
+    let mut settings = RuntimeSettings::default();
+    settings.burn.font_family = "not-a-font".to_string();
+    assert!(settings.validate().is_err());
+}
+
+#[test]
 fn invalid_live_recording_settings_are_rejected() {
     let mut settings = RuntimeSettings::default();
     settings.live.max_concurrent = 0;
@@ -115,6 +133,21 @@ async fn save_atomically_updates_the_shared_snapshot() {
         .await
         .expect("reload settings service");
     assert_eq!(reloaded.current().parallel_download.max_parallel, 6);
+}
+
+#[tokio::test]
+async fn stale_settings_revision_is_rejected() {
+    let db = settings_database().await;
+    let service = SettingsService::new(db.clone(), test_secret_store(db))
+        .await
+        .expect("create settings service");
+    let stale = (*service.current()).clone();
+    let mut next = stale.clone();
+    next.parallel_download.max_parallel = 7;
+    service.save(next).await.expect("save first revision");
+
+    let result = service.save(stale).await;
+    assert!(matches!(result, Err(AppError::Conflict(_))));
 }
 
 #[tokio::test]

@@ -5,6 +5,9 @@ import { showToast } from './download-status.js';
 import { renderDrawerContent } from './drawer-render.js';
 import { renderDrawerContentForManualQuery } from './media-actions.js';
 
+_state.drawerRequestId = 0;
+_state.drawerController = null;
+
 // 打开视频详情抽屉
 // 始终走 /api/history/list?bvid=... 拉取完整详情（含 files/burned/blogger）；看板缓存仅用于秒开标题与兜底。
 export async function openVideoDrawer(bvid) {
@@ -19,6 +22,10 @@ export async function openVideoDrawer(bvid) {
     if (!drawer || !overlay || !titleEl) return;
 
     _state.currentDrawerBvid = bvid;
+    const requestId = ++_state.drawerRequestId;
+    _state.drawerController?.abort();
+    const controller = new AbortController();
+    _state.drawerController = controller;
 
     // 先显示抽屉骨架，给用户即时反馈
     titleEl.textContent = '加载中...';
@@ -36,7 +43,10 @@ export async function openVideoDrawer(bvid) {
     // 看板缓存不含 files，直接用会导致“已下载文件”只剩兜底 sidecar、且不渲染烧录按钮。
     let video = null;
     try {
-        const result = await apiGet(`/api/history/list?bvid=${encodeURIComponent(bvid)}`);
+        const result = await apiGet(`/api/history/list?bvid=${encodeURIComponent(bvid)}`, {
+            signal: controller.signal,
+        });
+        if (requestId !== _state.drawerRequestId || _state.currentDrawerBvid !== bvid) return;
         if (result.code === 0 && result.data?.video) {
             video = result.data.video;
         } else if (result.offline) {
@@ -50,6 +60,7 @@ export async function openVideoDrawer(bvid) {
             }
         }
     } catch (e) {
+        if (e?.name === 'AbortError') return;
         // 非网络异常：落到下面的兜底
     }
 
@@ -79,6 +90,7 @@ export async function openVideoDrawer(bvid) {
         }
     }
 
+    if (requestId !== _state.drawerRequestId || _state.currentDrawerBvid !== bvid) return;
     if (!video) {
         titleEl.textContent = '视频信息加载失败';
         const bodyEl = document.getElementById('drawer-body');
@@ -95,6 +107,7 @@ export async function openVideoDrawer(bvid) {
 
     titleEl.textContent = video.title || '未知标题';
     await renderDrawerContent(video, bvid);
+    if (requestId === _state.drawerRequestId) _state.drawerController = null;
 }
 
 // 关闭视频详情抽屉
@@ -102,8 +115,11 @@ export function closeVideoDrawer() {
     const drawer = document.getElementById('video-drawer');
     const overlay = document.getElementById('drawer-overlay');
 
-    overlay.classList.remove('active');
-    drawer.classList.remove('active');
+    _state.drawerRequestId++;
+    _state.drawerController?.abort();
+    _state.drawerController = null;
+    overlay?.classList.remove('active');
+    drawer?.classList.remove('active');
     document.body.classList.remove('modal-open');
     _state.currentDrawerBvid = null;
 }
@@ -116,6 +132,9 @@ export function openVideoDrawerFromManual(bvid) {
         return;
     }
 
+    _state.drawerRequestId++;
+    _state.drawerController?.abort();
+    _state.drawerController = null;
     const video = _state.manualQueryVideos[bvid];
     const drawer = document.getElementById('video-drawer');
     const overlay = document.getElementById('drawer-overlay');

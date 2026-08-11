@@ -13,6 +13,56 @@ use std::time::{Duration, Instant};
 use tokio::process::Child;
 use tokio::sync::Mutex;
 
+/// Build the only RPC endpoint accepted by the application.  Aria2 host is
+/// stored as an authority, never as a user-controlled URL fragment.
+pub(crate) fn rpc_endpoint(host: &str, port: u16) -> anyhow::Result<String> {
+    let host = host.trim();
+    if host.is_empty()
+        || host.contains("://")
+        || host.contains('/')
+        || host.contains('@')
+        || host.contains('?')
+        || host.contains('#')
+    {
+        anyhow::bail!("invalid aria2 RPC host");
+    }
+
+    let (authority, loopback) = if let Some(ipv6) =
+        host.strip_prefix('[').and_then(|v| v.strip_suffix(']'))
+    {
+        let ip: std::net::IpAddr = ipv6
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid aria2 IPv6 host"))?;
+        (format!("[{ipv6}]"), ip.is_loopback())
+    } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if ip.is_ipv6() {
+            (format!("[{host}]"), ip.is_loopback())
+        } else {
+            (host.to_owned(), ip.is_loopback())
+        }
+    } else {
+        if host.contains(':') {
+            anyhow::bail!("invalid aria2 host");
+        }
+        let parsed = url::Url::parse(&format!("http://{host}:{port}/"))
+            .map_err(|_| anyhow::anyhow!("invalid aria2 host"))?;
+        if parsed.host_str() != Some(host) || parsed.username() != "" || parsed.password().is_some()
+        {
+            anyhow::bail!("invalid aria2 host");
+        }
+        (
+            host.to_owned(),
+            matches!(
+                host.to_ascii_lowercase().as_str(),
+                "localhost" | "localhost."
+            ),
+        )
+    };
+
+    let scheme = if loopback { "http" } else { "https" };
+    Ok(format!("{scheme}://{authority}:{port}/jsonrpc"))
+}
+
 const DEFAULT_ARIA2_PORT: u16 = 6800;
 const MAX_RETRIES: u32 = 3;
 const BASE_RETRY_DELAY_MS: u64 = 500;
@@ -75,7 +125,6 @@ impl std::error::Error for Aria2Error {}
 pub struct Aria2Manager {
     client: Client,
     paths: Arc<crate::config::AppPaths>,
-    tls_verify: bool,
     inner: Arc<Mutex<Aria2Inner>>,
 }
 
@@ -142,5 +191,27 @@ impl Aria2Status {
 
     fn parse_size(v: &Value) -> i64 {
         v.as_str().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rpc_endpoint;
+
+    #[test]
+    fn rpc_endpoint_uses_https_for_remote_hosts() {
+        assert_eq!(
+            rpc_endpoint("aria.example.com", 6800).unwrap(),
+            "https://aria.example.com:6800/jsonrpc"
+        );
+        assert_eq!(
+            rpc_endpoint("127.0.0.1", 6800).unwrap(),
+            "http://127.0.0.1:6800/jsonrpc"
+        );
+        assert!(rpc_endpoint("http://aria.example.com/path", 6800).is_err());
+        assert_eq!(
+            rpc_endpoint("2001:db8::1", 6800).unwrap(),
+            "https://[2001:db8::1]:6800/jsonrpc"
+        );
     }
 }

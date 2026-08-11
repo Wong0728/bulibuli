@@ -20,14 +20,16 @@ const PREVIOUS_TOKEN_GRACE_SECONDS: i64 = 120;
 const CODE_ALPHABET: &[u8] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 /// 每 IP 每分钟最大登录/配对尝试次数
 const LOGIN_RATE_LIMIT_PER_IP: usize = 5;
+const MAX_AUTHENTICATION_LOCKS: usize = 4096;
 
 #[derive(Clone)]
 pub struct AuthService {
     db: DatabaseConnection,
     security: Arc<SecurityConfigService>,
+    geo_reader: Arc<Option<maxminddb::Reader<Vec<u8>>>>,
     pairing: Arc<Mutex<Option<PairWindow>>>,
     attempts: Arc<Mutex<AttemptBook>>,
-    authentication: Arc<Mutex<()>>,
+    authentication_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     /// 每 IP 登录尝试时间戳，用于速率限制
     login_attempts: Arc<Mutex<HashMap<IpAddr, VecDeque<i64>>>>,
     /// 全局每分钟最大登录/配对尝试次数（由 AppConfig 注入）
@@ -38,6 +40,15 @@ struct PairWindow {
     code: String,
     expires_at: i64,
     role: SessionRole,
+}
+
+struct AuthSessionRow {
+    id: String,
+    csrf_token: String,
+    role: SessionRole,
+    expires_at: i64,
+    absolute_expires_at: i64,
+    last_rotated_at: i64,
 }
 
 #[derive(Default)]
@@ -126,12 +137,22 @@ impl AuthService {
         security: Arc<SecurityConfigService>,
         login_rate_limit_global: usize,
     ) -> AppResult<(Self, Option<String>)> {
+        let geo_reader = security.effective_geo_db().and_then(|path| {
+            match maxminddb::Reader::open_readfile(path) {
+                Ok(reader) => Some(reader),
+                Err(error) => {
+                    tracing::warn!(%error, "GeoIP 数据库加载失败，新配对将被拒绝");
+                    None
+                }
+            }
+        });
         let service = Self {
             db,
             security,
+            geo_reader: Arc::new(geo_reader),
             pairing: Arc::new(Mutex::new(None)),
             attempts: Arc::new(Mutex::new(AttemptBook::default())),
-            authentication: Arc::new(Mutex::new(())),
+            authentication_locks: Arc::new(Mutex::new(HashMap::new())),
             login_attempts: Arc::new(Mutex::new(HashMap::new())),
             login_rate_limit_global: login_rate_limit_global.max(1),
         };
@@ -232,43 +253,21 @@ impl AuthService {
         if token.is_empty() {
             return Ok(None);
         }
-        let _authentication_guard = self.authentication.lock().await;
         let now = Utc::now().timestamp();
         let hash = token_hash(token);
-        let row = self
-            .db
-            .query_one_raw(Statement::from_sql_and_values(
-                self.db.get_database_backend(),
-                "SELECT id, csrf_token, role, expires_at, absolute_expires_at, last_rotated_at
-                 FROM auth_sessions
-                 WHERE revoked_at IS NULL
-                   AND (
-                     token_hash = ?
-                     OR (previous_token_hash = ? AND previous_valid_until > ?)
-                   )
-                 LIMIT 1"
-                    .to_string(),
-                [
-                    bytes_value(hash.clone()),
-                    bytes_value(hash),
-                    sea_orm::Value::from(now),
-                ],
-            ))
-            .await?;
-        let Some(row) = row else {
+        let Some(candidate) = self.find_session(&hash, now).await? else {
             return Ok(None);
         };
-        let expires_at: i64 = row.try_get("", "expires_at")?;
-        let absolute_expires_at: i64 = row.try_get("", "absolute_expires_at")?;
-        if expires_at <= now || absolute_expires_at <= now {
+        let session_lock = self.session_lock(&candidate.id).await;
+        let _guard = session_lock.lock().await;
+        let Some(row) = self.find_session(&hash, now).await? else {
+            return Ok(None);
+        };
+        if row.expires_at <= now || row.absolute_expires_at <= now {
             return Ok(None);
         }
-        let id: String = row.try_get("", "id")?;
-        let csrf_token: String = row.try_get("", "csrf_token")?;
-        let role = SessionRole::from_db(&row.try_get::<String>("", "role")?);
-        let last_rotated_at: i64 = row.try_get("", "last_rotated_at")?;
-        let next_expiry = (now + SESSION_IDLE_SECONDS).min(absolute_expires_at);
-        let rotated_token = if now - last_rotated_at >= ROTATE_AFTER_SECONDS {
+        let next_expiry = (now + SESSION_IDLE_SECONDS).min(row.absolute_expires_at);
+        let rotated_token = if now - row.last_rotated_at >= ROTATE_AFTER_SECONDS {
             Some(random_token())
         } else {
             None
@@ -293,7 +292,7 @@ impl AuthService {
                     sea_orm::Value::from(now),
                     sea_orm::Value::from(now),
                     sea_orm::Value::from(ip.to_string()),
-                    sea_orm::Value::from(id.clone()),
+                    sea_orm::Value::from(row.id.clone()),
                 ],
             )
         } else {
@@ -305,17 +304,62 @@ impl AuthService {
                     sea_orm::Value::from(next_expiry),
                     sea_orm::Value::from(now),
                     sea_orm::Value::from(ip.to_string()),
-                    sea_orm::Value::from(id.clone()),
+                    sea_orm::Value::from(row.id.clone()),
                 ],
             )
         };
         self.db.execute_raw(statement).await?;
         Ok(Some(SessionAuth {
-            id,
-            csrf_token,
+            id: row.id,
+            csrf_token: row.csrf_token,
             rotated_token,
-            role,
+            role: row.role,
         }))
+    }
+
+    async fn find_session(&self, hash: &[u8], now: i64) -> AppResult<Option<AuthSessionRow>> {
+        let row = self
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                self.db.get_database_backend(),
+                "SELECT id, csrf_token, role, expires_at, absolute_expires_at, last_rotated_at
+                 FROM auth_sessions
+                 WHERE revoked_at IS NULL
+                   AND (token_hash = ? OR (previous_token_hash = ? AND previous_valid_until > ?))
+                 LIMIT 1"
+                    .to_string(),
+                [
+                    bytes_value(hash.to_vec()),
+                    bytes_value(hash.to_vec()),
+                    sea_orm::Value::from(now),
+                ],
+            ))
+            .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        Ok(Some(AuthSessionRow {
+            id: row.try_get("", "id")?,
+            csrf_token: row.try_get("", "csrf_token")?,
+            role: SessionRole::from_db(&row.try_get::<String>("", "role")?),
+            expires_at: row.try_get("", "expires_at")?,
+            absolute_expires_at: row.try_get("", "absolute_expires_at")?,
+            last_rotated_at: row.try_get("", "last_rotated_at")?,
+        }))
+    }
+
+    async fn session_lock(&self, id: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.authentication_locks.lock().await;
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        if locks.len() >= MAX_AUTHENTICATION_LOCKS {
+            if let Some(key) = locks.keys().next().cloned() {
+                locks.remove(&key);
+            }
+        }
+        locks
+            .entry(id.to_owned())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     pub async fn list_sessions(&self) -> AppResult<Vec<SessionSummary>> {
@@ -469,12 +513,10 @@ impl AuthService {
     }
 
     fn ip_is_cn(&self, ip: IpAddr) -> AppResult<bool> {
-        let path = self
-            .security
-            .effective_geo_db()
-            .ok_or_else(|| AppError::Unauthorized("GeoIP 数据不可用，已拒绝新配对".to_string()))?;
-        let reader = maxminddb::Reader::open_readfile(path)
-            .map_err(|_| AppError::Unauthorized("GeoIP 数据不可用，已拒绝新配对".to_string()))?;
+        let reader =
+            self.geo_reader.as_ref().as_ref().ok_or_else(|| {
+                AppError::Unauthorized("GeoIP 数据不可用，已拒绝新配对".to_string())
+            })?;
         let country: maxminddb::geoip2::Country = reader
             .lookup(ip)
             .map_err(|_| AppError::Unauthorized("无法判断网络区域，已拒绝新配对".to_string()))?;

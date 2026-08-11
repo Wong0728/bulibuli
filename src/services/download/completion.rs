@@ -46,12 +46,10 @@ impl DownloadManager {
                 };
             }
         }
-        if task.status != "completed" {
-            info!(
-                "[DownloadManager] 下载完成: {} ({}) 进度 100%",
-                task.bvid, task.task_type
-            );
-        }
+        info!(
+            "[DownloadManager] 下载完成: {} ({}) 进度 100%",
+            task.bvid, task.task_type
+        );
 
         // 获取下载目录与 UP 主 uid（用于 MD5 去重与历史记录）
         let uid = self.get_blogger_uid_from_history(&task.bvid).await;
@@ -127,20 +125,18 @@ impl DownloadManager {
 
         // 写一条带 bvid 的库日志（仅首次进入终态时），供抽屉“日志”区展示。
         // 手动下载任务不携带 uid，避免混入博主自动监测日志。
-        if task.status != "completed" {
-            let log_uid = if task.source.as_deref() == Some("manual") {
-                None
-            } else {
-                uid.as_deref()
-            };
-            self.log_bvid(
-                &task.bvid,
-                log_uid,
-                &format!("下载完成（{}）", task.task_type),
-                "success",
-            )
-            .await;
-        }
+        let log_uid = if task.source.as_deref() == Some("manual") {
+            None
+        } else {
+            uid.as_deref()
+        };
+        self.log_bvid(
+            &task.bvid,
+            log_uid,
+            &format!("下载完成（{}）", task.task_type),
+            "success",
+        )
+        .await;
 
         // 确保封面已落盘（本地已有则跳过，避免与 add_to_history 内的下载重复请求）
         if let Err(e) = self.ensure_cover_local(&task.bvid, uid.as_deref()).await {

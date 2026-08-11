@@ -22,7 +22,7 @@
 
 use crate::error::{AppError, AppResult};
 use crate::models::operation_log::OperationTarget;
-use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, TransactionTrait};
 
 /// 乐观锁守卫：持有一个已通过校验并 bump 的写操作上下文。
 ///
@@ -112,9 +112,10 @@ impl ConflictGuardService {
         } else {
             format!("UPDATE {table} SET version = version + 1 WHERE id = ?")
         };
-        let backend = self.db.get_database_backend();
+        let transaction = self.db.begin().await?;
+        let backend = transaction.get_database_backend();
         let result = if let Some(ev) = expected_version {
-            self.db
+            transaction
                 .execute_raw(Statement::from_sql_and_values(
                     backend,
                     sql,
@@ -122,7 +123,7 @@ impl ConflictGuardService {
                 ))
                 .await?
         } else {
-            self.db
+            transaction
                 .execute_raw(Statement::from_sql_and_values(
                     backend,
                     sql,
@@ -133,10 +134,10 @@ impl ConflictGuardService {
 
         if result.rows_affected() == 0 {
             // 没命中：可能是 version 不匹配，也可能是记录不存在
-            let current = self
-                .current_version(target, target_id)
+            let current = fetch_current_version(&transaction, target, target_id)
                 .await?
                 .ok_or_else(|| AppError::NotFound(format!("{target:?} id={target_id} 不存在")))?;
+            transaction.rollback().await?;
             // 注意：fetch_current_version 返回的是 bump 之前的值，即"当前版本"
             return Err(AppError::Conflict(format!(
                 "{target:?} id={target_id} 版本冲突：期望 {expected_version:?}，实际 {current}"
@@ -144,10 +145,10 @@ impl ConflictGuardService {
         }
 
         // 命中：取 bump 后的 version 作为 new_version 返回
-        let new_version = self
-            .current_version(target, target_id)
+        let new_version = fetch_current_version(&transaction, target, target_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("{target:?} id={target_id} 不存在")))?;
+        transaction.commit().await?;
 
         Ok(ConflictGuard {
             db: self.db.clone(),
@@ -159,6 +160,7 @@ impl ConflictGuardService {
     }
 
     /// 读取目标资源当前的 version（不修改）。供 `dl status` 等只读场景返回版本号给调用方。
+    #[allow(dead_code)]
     pub async fn current_version(
         &self,
         target: OperationTarget,
@@ -167,30 +169,38 @@ impl ConflictGuardService {
         self.fetch_current_version(target, target_id).await
     }
 
+    #[allow(dead_code)]
     async fn fetch_current_version(
         &self,
         target: OperationTarget,
         target_id: &str,
     ) -> AppResult<Option<i32>> {
-        let table = table_for(target);
-        let sql = format!("SELECT version FROM {table} WHERE id = ?");
-        let row = self
-            .db
-            .query_one_raw(Statement::from_sql_and_values(
-                self.db.get_database_backend(),
-                sql,
-                [target_id.into()],
-            ))
-            .await?;
-        match row {
-            Some(row) => {
-                let v: i32 = row
-                    .try_get("", "version")
-                    .map_err(|e| AppError::Internal(format!("读取 version 失败: {e}")))?;
-                Ok(Some(v))
-            }
-            None => Ok(None),
+        fetch_current_version(&self.db, target, target_id).await
+    }
+}
+
+async fn fetch_current_version<C: ConnectionTrait>(
+    db: &C,
+    target: OperationTarget,
+    target_id: &str,
+) -> AppResult<Option<i32>> {
+    let table = table_for(target);
+    let sql = format!("SELECT version FROM {table} WHERE id = ?");
+    let row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            sql,
+            [target_id.into()],
+        ))
+        .await?;
+    match row {
+        Some(row) => {
+            let v: i32 = row
+                .try_get("", "version")
+                .map_err(|e| AppError::Internal(format!("读取 version 失败: {e}")))?;
+            Ok(Some(v))
         }
+        None => Ok(None),
     }
 }
 

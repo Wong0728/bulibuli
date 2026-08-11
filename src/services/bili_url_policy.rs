@@ -61,6 +61,40 @@ pub fn validate_syntax(raw: &str) -> AppResult<Url> {
     Ok(parsed)
 }
 
+pub fn validate_live_endpoint_syntax(raw: &str, websocket: bool) -> AppResult<Url> {
+    let parsed = Url::parse(raw.trim())
+        .map_err(|_| AppError::BadRequest("直播端点 URL 格式无效".to_string()))?;
+    let expected = if websocket { "wss" } else { "https" };
+    if parsed.scheme() != expected {
+        return Err(AppError::BadRequest(format!("直播端点必须使用 {expected}")));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(AppError::BadRequest(
+            "直播端点不允许携带用户信息".to_string(),
+        ));
+    }
+    // ponytail: no port restriction for live endpoints — B站 danmaku WSS uses 2244/2245, not 443.
+    // Domain allow-list above is the real security boundary.
+    let Host::Domain(host) = parsed
+        .host()
+        .ok_or_else(|| AppError::BadRequest("直播端点缺少域名".to_string()))?
+    else {
+        return Err(AppError::BadRequest(
+            "直播端点不允许使用 IP 地址".to_string(),
+        ));
+    };
+    let host = host.to_ascii_lowercase();
+    if !ALLOWED_ROOTS
+        .iter()
+        .any(|root| host == *root || host.ends_with(&format!(".{root}")))
+    {
+        return Err(AppError::BadRequest(
+            "不支持的 B 站直播端点域名".to_string(),
+        ));
+    }
+    Ok(parsed)
+}
+
 pub async fn validate(raw: &str) -> AppResult<Url> {
     let parsed = normalize_syntax(raw)?;
     let host = parsed
@@ -137,5 +171,19 @@ mod tests {
         );
         assert!(normalize_syntax("http://example.com/a.jpg").is_err());
         assert!(normalize_syntax("/relative/a.jpg").is_err());
+    }
+
+    #[test]
+    fn validates_live_endpoint_scheme_and_authority() {
+        assert!(validate_live_endpoint_syntax("https://cdn.bilivideo.com/live", false).is_ok());
+        assert!(validate_live_endpoint_syntax("wss://broadcast.bilibili.com/sub", true).is_ok());
+        assert!(validate_live_endpoint_syntax("http://cdn.bilivideo.com/live", false).is_err());
+        // ponytail: non-standard ports are allowed for live endpoints (danmaku WSS uses 2245)
+        assert!(validate_live_endpoint_syntax("wss://cdn.bilivideo.com:8443/sub", true).is_ok());
+        assert!(validate_live_endpoint_syntax("wss://cdn.bilivideo.com:2245/sub", true).is_ok());
+        assert!(
+            validate_live_endpoint_syntax("https://user@cdn.bilivideo.com/live", false).is_err()
+        );
+        assert!(validate_live_endpoint_syntax("https://127.0.0.1/live", false).is_err());
     }
 }

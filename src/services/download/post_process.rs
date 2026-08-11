@@ -103,8 +103,14 @@ impl DownloadManager {
                 tokio::spawn(async move {
                     // 合并任务结束，释放幂等标记
                     {
-                        let guard = merge_in_progress.lock();
-                        let mut guard = guard.unwrap_or_else(|e| e.into_inner());
+                        let mut guard = match merge_in_progress.lock() {
+                            Ok(guard) => guard,
+                            Err(error) => {
+                                let mut guard = error.into_inner();
+                                guard.clear();
+                                guard
+                            }
+                        };
                         guard.remove(&cache_key_for_cb);
                     }
                     if result.success {

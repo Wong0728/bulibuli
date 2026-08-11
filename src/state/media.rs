@@ -1,5 +1,6 @@
 //! 媒体处理领域状态：下载管理、aria2、视频处理、弹幕、字幕、烧录、直播录制。
 
+use crate::models::burn::BurnTask;
 use crate::services::aria2::Aria2Manager;
 use crate::services::danmaku::DanmakuService;
 use crate::services::download::{DownloadManager, DownloadManagerDependencies};
@@ -11,14 +12,6 @@ use crate::state::infra::InfraState;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
-
-#[derive(Clone, serde::Serialize)]
-pub struct BurnTask {
-    pub bvid: String,
-    pub status: String,
-    pub message: String,
-    pub output_path: Option<String>,
-}
 
 pub type BurnTasks = Arc<Mutex<HashMap<String, BurnTask>>>;
 
@@ -78,6 +71,7 @@ impl MediaState {
             db: infra.db.clone(),
         }));
         live_recorder.recover_incomplete_records().await?;
+        live_recorder.restore_merge_jobs().await?;
 
         Ok(Self {
             download_manager,

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub struct VideoInfo {
     pub cid: i64,
     pub title: String,
+    /// 视频简介（B 站原始字段 `desc`）
+    pub desc: String,
     pub duration: i64,
     pub owner: VideoOwner,
     pub stat: VideoStat,

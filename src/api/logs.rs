@@ -20,7 +20,7 @@ async fn get_logs(
     State(state): State<SharedState>,
     Query(q): Query<LogQuery>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let limit = q.limit.unwrap_or(100);
+    let limit = q.limit.unwrap_or(100).clamp(1, 100);
     let logs = state
         .business
         .monitor_service
@@ -45,7 +45,7 @@ async fn get_blogger_logs(
     if uid.is_empty() {
         return Err(AppError::BadRequest("请提供博主UID".to_string()));
     }
-    let limit = q.limit.unwrap_or(100);
+    let limit = q.limit.unwrap_or(100).clamp(1, 100);
     let logs = state
         .business
         .monitor_service
@@ -71,7 +71,7 @@ async fn get_bvid_logs(
     if bvid.is_empty() {
         return Err(AppError::BadRequest("请提供视频BV号".to_string()));
     }
-    let limit = q.limit.unwrap_or(100);
+    let limit = q.limit.unwrap_or(100).clamp(1, 100);
     let logs = state
         .business
         .monitor_service

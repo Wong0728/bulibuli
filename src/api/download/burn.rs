@@ -1,17 +1,23 @@
 //! 烧录任务：弹幕/字幕烧录任务启动、视频路径解析与烧录状态查询。
 
 use crate::error::{ApiResponse, AppError};
+use crate::models::burn::BurnTask;
 use crate::services::subtitle_burner::SubtitleBurner;
 use crate::state::business::BusinessState;
 use crate::state::infra::InfraState;
-use crate::state::media::{BurnTask, MediaState};
+use crate::state::media::MediaState;
 use crate::state::SharedState;
 use axum::extract::State;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tracing::error;
 use uuid::Uuid;
+
+const BURN_TASK_TTL_SECONDS: i64 = 60 * 60;
+const MAX_BURN_TASKS: usize = 200;
 
 #[derive(Deserialize)]
 pub(super) struct BurnRequest {
@@ -65,10 +71,7 @@ async fn spawn_burn(
 
     let video_path = resolve_burn_video_path(infra, business, bvid, video_path).await?;
     if !video_path.exists() {
-        return Err(AppError::NotFound(format!(
-            "视频文件不存在: {}",
-            video_path.display()
-        )));
+        return Err(AppError::NotFound("视频文件不存在".to_string()));
     }
 
     let task_id = Uuid::new_v4()
@@ -94,6 +97,8 @@ async fn spawn_burn(
 
     {
         let mut tasks = burn_tasks.lock().await;
+        prune_burn_tasks(&mut tasks);
+        let now = chrono::Utc::now().timestamp();
         tasks.insert(
             task_id.clone(),
             BurnTask {
@@ -101,17 +106,21 @@ async fn spawn_burn(
                 status: "queued".to_string(),
                 message: "烧录任务已排队".to_string(),
                 output_path: None,
+                created_at: now,
+                updated_at: now,
             },
         );
     }
 
     let task_id_for_spawn = task_id.clone();
+    let download_dir = infra.paths.download_dir.clone();
     tokio::spawn(async move {
         let Ok(_permit) = burn_semaphore.acquire_owned().await else {
             let mut tasks = burn_tasks.lock().await;
             if let Some(task) = tasks.get_mut(&task_id_for_spawn) {
                 task.status = "failed".to_string();
                 task.message = "烧录队列已关闭".to_string();
+                task.updated_at = chrono::Utc::now().timestamp();
             }
             return;
         };
@@ -120,6 +129,7 @@ async fn spawn_burn(
             if let Some(t) = tasks.get_mut(&task_id_for_spawn) {
                 t.status = "processing".to_string();
                 t.message = "正在烧录，请稍候...".to_string();
+                t.updated_at = chrono::Utc::now().timestamp();
             }
         }
         monitor_service
@@ -146,10 +156,11 @@ async fn spawn_burn(
                     } else {
                         "failed".to_string()
                     };
-                    t.message = message;
+                    t.message = redact_burn_message(&message);
                     t.output_path = output_path
                         .as_ref()
-                        .map(|p| p.to_string_lossy().to_string());
+                        .and_then(|p| safe_relative_path(&download_dir, p));
+                    t.updated_at = chrono::Utc::now().timestamp();
                 }
                 drop(tasks);
 
@@ -183,7 +194,8 @@ async fn spawn_burn(
                 let mut tasks = burn_tasks.lock().await;
                 if let Some(t) = tasks.get_mut(&task_id_for_spawn) {
                     t.status = "failed".to_string();
-                    t.message = format!("烧录出错: {e}");
+                    t.message = redact_burn_message(&format!("烧录出错: {e}"));
+                    t.updated_at = chrono::Utc::now().timestamp();
                 }
                 drop(tasks);
                 monitor_service
@@ -214,7 +226,7 @@ async fn resolve_burn_video_path(
         // 安全校验：用户指定的路径必须位于 download_dir 之下，防止路径遍历
         let user_path = std::path::PathBuf::from(&p);
         let canonical = std::fs::canonicalize(&user_path)
-            .map_err(|_| AppError::BadRequest(format!("视频路径无效或不存在: {p}")))?;
+            .map_err(|_| AppError::BadRequest("视频路径无效或不存在".to_string()))?;
         let download_dir_canonical = std::fs::canonicalize(&infra.paths.download_dir)
             .unwrap_or_else(|_| infra.paths.download_dir.clone());
         if !canonical.starts_with(&download_dir_canonical) {
@@ -227,20 +239,29 @@ async fn resolve_burn_video_path(
     let h = business.history_service.find_by_bvid(bvid).await?;
     if let Some(h) = h {
         if let Some(fp) = h.file_path {
-            if std::path::Path::new(&fp).exists() {
-                return Ok(std::path::PathBuf::from(fp));
+            if let Ok(canonical) = std::fs::canonicalize(&fp) {
+                let root = std::fs::canonicalize(&infra.paths.download_dir)
+                    .unwrap_or_else(|_| infra.paths.download_dir.clone());
+                if canonical.starts_with(root) {
+                    return Ok(canonical);
+                }
             }
         }
     }
-    find_video_file(&infra.paths.download_dir, bvid)
-        .ok_or_else(|| AppError::NotFound(format!("未找到视频文件，BV号: {bvid}")))
+    let root = infra.paths.download_dir.clone();
+    let bvid = bvid.to_owned();
+    tokio::task::spawn_blocking(move || find_video_file(&root, &bvid))
+        .await
+        .map_err(|_| AppError::Internal("视频文件扫描任务失败".to_string()))?
+        .ok_or_else(|| AppError::NotFound("未找到视频文件".to_string()))
 }
 
 pub(super) async fn burn_status(
     State(state): State<SharedState>,
     axum::extract::Path(task_id): axum::extract::Path<String>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let tasks = state.media.burn_tasks.lock().await;
+    let mut tasks = state.media.burn_tasks.lock().await;
+    prune_burn_tasks(&mut tasks);
     let task = tasks.get(&task_id).cloned();
     drop(tasks);
 
@@ -255,23 +276,67 @@ pub(super) async fn burn_status(
     }
 }
 
-fn find_video_file(dir: &std::path::Path, bvid: &str) -> Option<std::path::PathBuf> {
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.is_file() {
-            let name = path.file_name()?.to_string_lossy();
-            if name.contains(bvid)
-                && ["mp4", "mkv", "flv", "avi", "mov", "webm"]
-                    .iter()
-                    .any(|ext| name.ends_with(ext))
-            {
-                return Some(path);
+fn find_video_file(dir: &Path, bvid: &str) -> Option<PathBuf> {
+    const MAX_DEPTH: usize = 8;
+    const MAX_ENTRIES: usize = 5_000;
+    let mut pending = vec![(dir.to_path_buf(), 0usize)];
+    let mut visited = 0usize;
+    while let Some((directory, depth)) = pending.pop() {
+        let entries = std::fs::read_dir(directory).ok()?;
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > MAX_ENTRIES {
+                return None;
             }
-        } else if path.is_dir() {
-            if let Some(found) = find_video_file(&path, bvid) {
-                return Some(found);
+            let path = entry.path();
+            let file_type = entry.file_type().ok()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_file() {
+                let name = path.file_name()?.to_string_lossy();
+                if name.contains(bvid)
+                    && ["mp4", "mkv", "flv", "avi", "mov", "webm"]
+                        .iter()
+                        .any(|ext| name.ends_with(ext))
+                {
+                    return Some(path);
+                }
+            } else if file_type.is_dir() && depth < MAX_DEPTH {
+                pending.push((path, depth + 1));
             }
         }
     }
     None
+}
+
+fn safe_relative_path(root: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(root)
+        .ok()
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+}
+
+fn redact_burn_message(message: &str) -> String {
+    crate::services::live_recorder::ffmpeg_session::redact_diagnostics(message)
+}
+
+fn prune_burn_tasks(tasks: &mut HashMap<String, BurnTask>) {
+    let now = chrono::Utc::now().timestamp();
+    tasks.retain(|_, task| {
+        task.status == "queued"
+            || task.status == "processing"
+            || now.saturating_sub(task.updated_at.max(task.created_at)) <= BURN_TASK_TTL_SECONDS
+    });
+    if tasks.len() <= MAX_BURN_TASKS {
+        return;
+    }
+    let mut terminal = tasks
+        .iter()
+        .filter(|(_, task)| !matches!(task.status.as_str(), "queued" | "processing"))
+        .map(|(id, task)| (id.clone(), task.updated_at))
+        .collect::<Vec<_>>();
+    terminal.sort_by_key(|(_, updated_at)| *updated_at);
+    for (id, _) in terminal.into_iter().take(tasks.len() - MAX_BURN_TASKS) {
+        tasks.remove(&id);
+    }
 }

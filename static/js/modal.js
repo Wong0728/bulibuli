@@ -6,15 +6,70 @@ import { loadKnownBloggers, buildBloggerOption } from './blogger-search.js';
 import { showToast, confirmDialog } from './download-status.js';
 import { downloadCover } from './media-actions.js';
 
+function activateBloggerModal(mode, modal) {
+    if (!modal) return;
+    _state.bloggerModalMode = mode;
+    modal.dataset.mode = mode;
+    modal.classList.add('active');
+    document.body.classList.add('modal-open');
+    _state.activeModalTrigger = document.activeElement;
+}
+
+function deactivateBloggerModal(modal) {
+    modal?.classList.remove('active');
+    document.body.classList.remove('modal-open');
+    _state.activeModalTrigger?.focus?.();
+    _state.activeModalTrigger = null;
+}
+
+export function getBloggerModalMode() {
+    return _state.bloggerModalMode || null;
+}
+
+export function closeBloggerModal() {
+    const modal = document.getElementById('blogger-modal');
+    if (modal) deactivateBloggerModal(modal);
+}
+
+export function confirmBloggerModal() {
+    return getBloggerModalMode() === 'edit' ? confirmEditBlogger() : confirmAddBlogger();
+}
+
+function bloggerField(name) {
+    return document.getElementById(`modal-blogger-${name}`);
+}
+
+function configureBloggerModal(mode) {
+    const modal = document.getElementById('blogger-modal');
+    if (!modal) return null;
+    modal.dataset.mode = mode;
+    modal.querySelectorAll('[data-action="confirm-blogger-modal"]').forEach(button => {
+        button.innerHTML = mode === 'edit'
+            ? '<i class="fa-solid fa-save"></i> 保存修改'
+            : '<i class="fa-solid fa-check"></i> 确认添加';
+    });
+    modal.querySelectorAll('[data-action="close-blogger-modal"]').forEach(button => {
+        button.dataset.mode = mode;
+    });
+    modal.querySelector('.modal-header i')?.classList.toggle('fa-user-edit', mode === 'edit');
+    modal.querySelector('.modal-header i')?.classList.toggle('fa-user-plus', mode !== 'edit');
+    const title = document.getElementById('blogger-modal-title');
+    if (title) title.textContent = mode === 'edit' ? '编辑博主配置' : '添加监控博主';
+    const knownSelect = document.getElementById('modal-known-blogger-select');
+    knownSelect?.closest('.form-group')?.toggleAttribute('hidden', mode === 'edit');
+    const uid = bloggerField('uid');
+    if (uid) uid.disabled = mode === 'edit';
+    return modal;
+}
+
 // ==================== 模态框功能 ====================
 export function showAddBloggerModal(prefill = null) {
-    const modal = document.getElementById('add-blogger-modal');
+    const modal = configureBloggerModal('add');
     if (modal) {
-        modal.classList.add('active');
-        document.body.classList.add('modal-open');
-        _state.activeModalTrigger = document.activeElement;
-        document.getElementById('modal-blogger-uid').value = prefill?.uid || '';
-        document.getElementById('modal-blogger-name').value = prefill?.name || '';
+        activateBloggerModal('add', modal);
+        bloggerField('id').value = '';
+        bloggerField('uid').value = prefill?.uid || '';
+        bloggerField('name').value = prefill?.name || '';
         document.getElementById('modal-min-interval').value = '60';
         document.getElementById('modal-max-interval').value = '300';
         document.getElementById('modal-download-video').checked = true;
@@ -25,7 +80,7 @@ export function showAddBloggerModal(prefill = null) {
         document.getElementById('modal-burn-subtitle').checked = false;
         document.getElementById('modal-series-filter-regex').value = '';
         document.getElementById('modal-start-monitoring').checked = true;
-        renderActiveWindowRows([], 'add');
+        renderActiveWindowRows([], 'blogger');
         // 填充已知博主下拉（富内容选项）- 异步加载
         const select = document.getElementById('modal-known-blogger-select');
         if (select) {
@@ -46,17 +101,14 @@ export function showAddBloggerModal(prefill = null) {
                 }
             });
         }
-        setTimeout(() => document.getElementById('modal-blogger-uid')?.focus(), 50);
+        setTimeout(() => bloggerField('uid')?.focus(), 50);
     }
 }
 
 export function closeAddBloggerModal() {
-    const modal = document.getElementById('add-blogger-modal');
+    const modal = document.getElementById('blogger-modal');
     if (modal) {
-        modal.classList.remove('active');
-        document.body.classList.remove('modal-open');
-        _state.activeModalTrigger?.focus?.();
-        _state.activeModalTrigger = null;
+        deactivateBloggerModal(modal);
     }
 }
 
@@ -79,16 +131,16 @@ export async function loadKnownBloggerIntoAddForm() {
     document.getElementById('modal-burn-subtitle').checked = state.burn_subtitle === true;
     document.getElementById('modal-series-filter-regex').value = state.series_filter_regex || '';
     document.getElementById('modal-start-monitoring').checked = state.isRunning === true;
-    renderActiveWindowRows(Array.isArray(state.active_windows) ? state.active_windows : [], 'add');
+    renderActiveWindowRows(Array.isArray(state.active_windows) ? state.active_windows : [], 'blogger');
 }
 
 export async function confirmAddBlogger() {
     const select = document.getElementById('modal-known-blogger-select');
-    const uid = document.getElementById('modal-blogger-uid').value.trim() || select.value;
-    const nameInput = document.getElementById('modal-blogger-name').value.trim();
+    const uid = bloggerField('uid').value.trim() || select?.value || '';
+    const nameInput = bloggerField('name').value.trim();
     const minInterval = parseInt(document.getElementById('modal-min-interval').value) || 60;
     const maxInterval = parseInt(document.getElementById('modal-max-interval').value) || 300;
-    const activeWindows = collectActiveWindows('add');
+    const activeWindows = collectActiveWindows('blogger');
     if (activeWindows === null) return;
 
     if (!uid) {
@@ -105,7 +157,7 @@ export async function confirmAddBlogger() {
     }
 
     // 从下拉框的 data 属性获取博主名称
-    const selectedOption = select.options[select.selectedIndex];
+    const selectedOption = select?.options[select.selectedIndex];
     const name = nameInput || selectedOption?.dataset.name || '';
     const payload = {
         uid,
@@ -230,35 +282,30 @@ document.addEventListener('keydown', event => {
 export function showEditBloggerModal(bloggerId) {
     const state = _state.bloggerStates[bloggerId];
     if (!state) return;
-    const modal = document.getElementById('edit-blogger-modal');
+    const modal = configureBloggerModal('edit');
     if (!modal) return;
-    document.getElementById('edit-blogger-id').value = bloggerId;
-    document.getElementById('edit-blogger-uid').value = state.uid;
-    document.getElementById('edit-blogger-name').value = state.name || '';
-    document.getElementById('edit-min-interval').value = state.minInterval || 60;
-    document.getElementById('edit-max-interval').value = state.maxInterval || 300;
-    document.getElementById('edit-download-video').checked = state.download_video !== false;
-    document.getElementById('edit-download-danmaku').checked = state.download_danmaku !== false;
-    document.getElementById('edit-download-comments').checked = state.download_comments !== false;
-    document.getElementById('edit-download-cover').checked = state.download_cover !== false;
-    document.getElementById('edit-burn-danmaku').checked = state.burn_danmaku === true;
-    document.getElementById('edit-burn-subtitle').checked = state.burn_subtitle === true;
-    document.getElementById('edit-series-filter-regex').value = state.series_filter_regex || '';
-    document.getElementById('edit-monitor-enabled').checked = state.isRunning === true;
-    renderActiveWindowRows(Array.isArray(state.active_windows) ? state.active_windows : [], 'edit');
-    modal.classList.add('active');
-    document.body.classList.add('modal-open');
-    _state.activeModalTrigger = document.activeElement;
-    setTimeout(() => document.getElementById('edit-blogger-name').focus(), 100);
+    bloggerField('id').value = bloggerId;
+    bloggerField('uid').value = state.uid;
+    bloggerField('name').value = state.name || '';
+    document.getElementById('modal-min-interval').value = state.minInterval || 60;
+    document.getElementById('modal-max-interval').value = state.maxInterval || 300;
+    document.getElementById('modal-download-video').checked = state.download_video !== false;
+    document.getElementById('modal-download-danmaku').checked = state.download_danmaku !== false;
+    document.getElementById('modal-download-comments').checked = state.download_comments !== false;
+    document.getElementById('modal-download-cover').checked = state.download_cover !== false;
+    document.getElementById('modal-burn-danmaku').checked = state.burn_danmaku === true;
+    document.getElementById('modal-burn-subtitle').checked = state.burn_subtitle === true;
+    document.getElementById('modal-series-filter-regex').value = state.series_filter_regex || '';
+    document.getElementById('modal-start-monitoring').checked = state.isRunning === true;
+    renderActiveWindowRows(Array.isArray(state.active_windows) ? state.active_windows : [], 'blogger');
+    activateBloggerModal('edit', modal);
+    setTimeout(() => bloggerField('name')?.focus(), 100);
 }
 
 export function closeEditBloggerModal() {
-    const modal = document.getElementById('edit-blogger-modal');
+    const modal = document.getElementById('blogger-modal');
     if (modal) {
-        modal.classList.remove('active');
-        document.body.classList.remove('modal-open');
-        _state.activeModalTrigger?.focus?.();
-        _state.activeModalTrigger = null;
+        deactivateBloggerModal(modal);
     }
 }
 
@@ -297,7 +344,7 @@ function createActiveWindowRow(start, end) {
     return row;
 }
 
-function renderActiveWindowRows(windows, scope = 'edit') {
+function renderActiveWindowRows(windows, scope = 'blogger') {
     const list = document.getElementById(`${scope}-active-windows-list`);
     if (!list) return;
     list.innerHTML = '';
@@ -310,7 +357,7 @@ function renderActiveWindowRows(windows, scope = 'edit') {
     toggleActiveWindowMode(scope);
 }
 
-export function addActiveWindowRow(scope = 'edit', start = '18:00', end = '23:00') {
+export function addActiveWindowRow(scope = 'blogger', start = '18:00', end = '23:00') {
     const list = document.getElementById(`${scope}-active-windows-list`);
     if (!list) return;
     if (list.children.length >= MAX_ACTIVE_WINDOWS) {
@@ -325,7 +372,7 @@ export function removeActiveWindowRow(el) {
     el.closest('.active-window-row')?.remove();
 }
 
-export function toggleActiveWindowMode(scope = 'edit') {
+export function toggleActiveWindowMode(scope = 'blogger') {
     const allDay = document.getElementById(`${scope}-all-day`)?.checked === true;
     const list = document.getElementById(`${scope}-active-windows-list`);
     const controls = document.getElementById(`${scope}-active-window-controls`);
@@ -347,7 +394,7 @@ export function addActiveWindowPreset(scope, preset) {
 }
 
 // 收集时段行为 ["HH:MM-HH:MM"]；起止有一边为空或相同的行视为无效，返回 null 并提示
-function collectActiveWindows(scope = 'edit') {
+function collectActiveWindows(scope = 'blogger') {
     if (document.getElementById(`${scope}-all-day`)?.checked) return [];
     const list = document.getElementById(`${scope}-active-windows-list`);
     if (!list) return [];
@@ -376,18 +423,18 @@ function collectActiveWindows(scope = 'edit') {
 }
 
 export async function confirmEditBlogger() {
-    const id = parseInt(document.getElementById('edit-blogger-id').value);
-    const name = document.getElementById('edit-blogger-name').value.trim();
-    const minInterval = parseInt(document.getElementById('edit-min-interval').value) || 60;
-    const maxInterval = parseInt(document.getElementById('edit-max-interval').value) || 300;
-    const downloadVideo = document.getElementById('edit-download-video').checked;
-    const downloadDanmaku = document.getElementById('edit-download-danmaku').checked;
-    const downloadComments = document.getElementById('edit-download-comments').checked;
-    const downloadCover = document.getElementById('edit-download-cover').checked;
-    const burnDanmaku = document.getElementById('edit-burn-danmaku').checked;
-    const burnSubtitle = document.getElementById('edit-burn-subtitle').checked;
-    const seriesFilterRegex = document.getElementById('edit-series-filter-regex').value.trim();
-    const activeWindows = collectActiveWindows('edit');
+    const id = parseInt(bloggerField('id').value);
+    const name = bloggerField('name').value.trim();
+    const minInterval = parseInt(document.getElementById('modal-min-interval').value) || 60;
+    const maxInterval = parseInt(document.getElementById('modal-max-interval').value) || 300;
+    const downloadVideo = document.getElementById('modal-download-video').checked;
+    const downloadDanmaku = document.getElementById('modal-download-danmaku').checked;
+    const downloadComments = document.getElementById('modal-download-comments').checked;
+    const downloadCover = document.getElementById('modal-download-cover').checked;
+    const burnDanmaku = document.getElementById('modal-burn-danmaku').checked;
+    const burnSubtitle = document.getElementById('modal-burn-subtitle').checked;
+    const seriesFilterRegex = document.getElementById('modal-series-filter-regex').value.trim();
+    const activeWindows = collectActiveWindows('blogger');
     if (activeWindows === null) return;
 
     if (!id) return;
@@ -414,7 +461,7 @@ export async function confirmEditBlogger() {
             burn_subtitle: burnSubtitle,
             series_filter_regex: seriesFilterRegex,
             active_windows: activeWindows,
-            monitor_enabled: document.getElementById('edit-monitor-enabled')?.checked === true
+            monitor_enabled: document.getElementById('modal-start-monitoring')?.checked === true
         });
 
         if (result.code === 0) {
@@ -465,8 +512,7 @@ document.addEventListener('mousedown', function(event) {
 window.addEventListener('click', function(event) {
     // 仅当 mousedown 与 mouseup 均落在同一遮罩层时才视为"点击遮罩关闭"
     if (event.target.classList.contains('modal-overlay') && _state.modalMouseDownTarget === event.target) {
-        if (event.target.id === 'add-blogger-modal') closeAddBloggerModal();
-        else if (event.target.id === 'edit-blogger-modal') closeEditBloggerModal();
+        if (event.target.id === 'blogger-modal') closeAddBloggerModal();
         else event.target.classList.remove('active');
     }
     _state.modalMouseDownTarget = null;

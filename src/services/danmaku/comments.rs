@@ -112,7 +112,6 @@ impl DanmakuService {
         Ok(json!({
             "success": true,
             "message": format!("评论下载完成，共 {} 条主评论", comments.len()),
-            "file_path": output.to_string_lossy(),
             "count": comments.len(),
         }))
     }
@@ -397,11 +396,27 @@ impl DanmakuService {
     fn parse_reply(&self, reply: &Value) -> Value {
         let member = &reply["member"];
         let content = &reply["content"];
+        let vip_status = member["vip"]["status"]
+            .as_i64()
+            .or_else(|| member["vip_status"].as_i64())
+            .unwrap_or(0);
+        let vip_label = member["vip"]["label"]["text"]
+            .as_str()
+            .or_else(|| member["vip_label"]["text"].as_str())
+            .or_else(|| member["vip_label"].as_str())
+            .unwrap_or("");
+        let name_color = member["vip"]["nickname_color"]
+            .as_str()
+            .or_else(|| member["nameplate"]["nickname_color"].as_str())
+            .unwrap_or("");
         json!({
             "rpid": reply["rpid"],
             "mid": member["mid"],
             "uname": member["uname"].as_str().unwrap_or(""),
             "level": member["level_info"]["current_level"].as_i64().unwrap_or(0),
+            "vip_status": vip_status,
+            "vip_label": vip_label,
+            "name_color": name_color,
             "message": content["message"].as_str().unwrap_or(""),
             "like": reply["like"].as_i64().unwrap_or(0),
             "ctime": reply["ctime"].as_i64().unwrap_or(0),

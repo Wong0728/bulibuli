@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
 use super::engine::TransferEngine;
-use super::{file_stem_for, is_valid_bvid, task_cache_key, DownloadManager, PageInfo, TaskOutcome};
+use super::{
+    backoff_key, file_stem_for, is_valid_bvid, task_cache_key, DownloadManager, PageInfo,
+    TaskOutcome,
+};
 
 /// 从任务行还原分P信息：单P（cid/page 为 NULL）返回 None，保持存量语义；
 /// 多P时重建 PageInfo，供重试等入口沿用原分P的 cid/文件名。
@@ -204,6 +207,28 @@ impl DownloadManager {
             }
         }
 
+        let prepared_audio = if task_type == "video" {
+            let preference = self
+                .settings_service
+                .current()
+                .query
+                .audio_quality_preference
+                .clone();
+            match self
+                .bili_api
+                .get_audio_url(bvid, cid, cookies, &preference)
+                .await
+            {
+                Ok(Some(audio)) if !audio.audio_url.is_empty() => {
+                    Some((audio.audio_url, audio.ext))
+                }
+                Ok(_) => return Err(anyhow!("获取音频 URL 失败: 未找到音频流")),
+                Err(error) => return Err(error),
+            }
+        } else {
+            None
+        };
+
         let filename = format!("{stem}.{default_ext}");
         let dir = desired_dir;
         let new_task = download_task::ActiveModel {
@@ -244,6 +269,7 @@ impl DownloadManager {
         let (gid, permit) = self
             .dispatch_transfer(engine, task.id, url, bvid, cookies, &dir, &filename)
             .await?;
+        let runtime_gid = gid.clone();
         let mut model: download_task::ActiveModel = task.clone().into();
         model.gid = Set(gid);
         model.status = Set("downloading".to_string());
@@ -263,53 +289,37 @@ impl DownloadManager {
         }
         // aria2 路径：permit 在此处 Drop 释放（aria2 自行管理并发上限）
 
-        // 自动添加音频任务
-        if task_type == "video" {
-            let preference = self
-                .settings_service
-                .current()
-                .query
-                .audio_quality_preference
-                .clone();
-            match self
-                .bili_api
-                .get_audio_url(bvid, cid, cookies, &preference)
-                .await
-            {
-                Ok(Some(audio)) if !audio.audio_url.is_empty() => {
-                    let audio_ext = audio.ext.clone();
-                    match Box::pin(self.add_task_inner(
-                        bvid,
-                        title,
-                        &audio.audio_url,
-                        cookies,
-                        quality,
-                        "audio",
-                        uid,
-                        source,
-                        page,
-                        Some(audio_ext.as_str()),
-                    ))
-                    .await
-                    {
-                        Ok(res) if res.ok => {
-                            info!("已自动添加音频任务 {bvid}");
-                        }
-                        Ok(res) => {
-                            warn!("音频任务添加失败 {bvid}: {}", res.message);
-                        }
-                        Err(e) => {
-                            error!("音频任务添加异常 {bvid}: {e}");
-                        }
-                    }
+        // 自动添加音频任务。音频 URL 已在视频落库前解析；失败时撤销视频任务。
+        if let Some((audio_url, audio_ext)) = prepared_audio {
+            let audio_result = Box::pin(self.add_task_inner(
+                bvid,
+                title,
+                &audio_url,
+                cookies,
+                quality,
+                "audio",
+                uid,
+                source,
+                page,
+                Some(audio_ext.as_str()),
+            ))
+            .await;
+            if !matches!(audio_result, Ok(ref result) if result.ok) {
+                if let Some(token) = self.native_tasks.lock().await.remove(&task.id) {
+                    token.cancel();
                 }
-                Ok(_) => {
-                    warn!("获取音频 URL 失败 {bvid}: 未找到音频流");
+                if let Some(gid) = runtime_gid.as_deref() {
+                    let _ = self.aria2.remove(gid).await;
                 }
-                Err(e) => {
-                    warn!("获取音频 URL 异常 {bvid}: {e}");
-                }
+                let _ = download_task::Entity::delete_by_id(task.id)
+                    .exec(&self.db)
+                    .await;
+                return match audio_result {
+                    Ok(result) => Err(anyhow!("自动添加音频任务失败: {}", result.message)),
+                    Err(error) => Err(error),
+                };
             }
+            info!("已自动添加音频任务 {bvid}");
         }
 
         Ok(TaskOutcome::accepted(
@@ -444,7 +454,7 @@ impl DownloadManager {
         let mut last: Option<TaskOutcome> = None;
         for task in tasks {
             // 退避键按分P隔离：单P为 `{bvid}_{task_type}`（不变），多P为 `{bvid}#{cid}_{task_type}`。
-            let key = format!("{}_{}", task_cache_key(bvid, task.cid), task_type);
+            let key = backoff_key(bvid, task.cid, task_type);
             if let Some(wait_secs) = self.check_backoff(&key).await {
                 last = Some(TaskOutcome::rejected(format!(
                     "重试过于频繁，请 {wait_secs} 秒后再试"
@@ -466,7 +476,16 @@ impl DownloadManager {
                 retrying.next_retry_at = Set(None);
                 retrying.update(&self.db).await?;
             }
-            let url = task.url.as_deref().unwrap_or("").to_string();
+            let url = self
+                .resolve_resume_url(&task)
+                .await
+                .filter(|value| !value.is_empty())
+                .or_else(|| task.url.clone())
+                .unwrap_or_default();
+            if url.is_empty() {
+                last = Some(TaskOutcome::rejected("无法解析下载链接"));
+                continue;
+            }
             // 重试保留任务原有来源，避免手动任务重试后日志混入博主日志
             let task_source = task.source.clone().unwrap_or_else(|| "auto".to_string());
             let page_info = page_info_from_task(&task);
@@ -487,7 +506,7 @@ impl DownloadManager {
             let success = result.ok;
             self.update_backoff(&key, success).await;
             if !success {
-                self.persist_retry_schedule(bvid, task_type, "transient")
+                self.persist_retry_schedule(bvid, task.cid, task_type, "transient")
                     .await;
             }
             last = Some(result);
@@ -515,12 +534,8 @@ impl DownloadManager {
         let mut skipped_count = 0;
         let mut failed_count = 0;
         for task in tasks {
-            if let Some(url) = &task.url {
-                let key = format!(
-                    "{}_{}",
-                    task_cache_key(&task.bvid, task.cid),
-                    task.task_type
-                );
+            if task.url.is_some() {
+                let key = backoff_key(&task.bvid, task.cid, &task.task_type);
                 if self.check_backoff(&key).await.is_some() {
                     skipped_count += 1;
                     continue;
@@ -528,11 +543,20 @@ impl DownloadManager {
                 let uid = self.get_blogger_uid_from_history(&task.bvid).await;
                 let task_source = task.source.clone().unwrap_or_else(|| "auto".to_string());
                 let page_info = page_info_from_task(&task);
+                let url = self
+                    .resolve_resume_url(&task)
+                    .await
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| task.url.clone());
+                let Some(url) = url else {
+                    failed_count += 1;
+                    continue;
+                };
                 let result = self
                     .add_task(
                         &task.bvid,
                         task.title.as_deref().unwrap_or(&task.bvid),
-                        url,
+                        &url,
                         &cookies,
                         task.quality,
                         &task.task_type,
@@ -545,7 +569,7 @@ impl DownloadManager {
                 let success = result.ok;
                 self.update_backoff(&key, success).await;
                 if !success {
-                    self.persist_retry_schedule(&task.bvid, &task.task_type, "transient")
+                    self.persist_retry_schedule(&task.bvid, task.cid, &task.task_type, "transient")
                         .await;
                 }
                 if success {
@@ -847,11 +871,6 @@ impl DownloadManager {
         if let Some(gid) = &task.gid {
             // gid 仍在 aria2 中：直接 unpause 即可，保留断点续传控制文件
             if self.aria2.get_download_status(gid).await.is_ok() {
-                if let Err(e) = self.aria2.unpause(gid).await {
-                    warn!("恢复 aria2 任务 gid={gid} 失败: {e}");
-                    return Ok(false);
-                }
-                // 落库：status=downloading，generation+=1（防 stale 回调覆盖）
                 let updated = self
                     .state_service
                     .transition(
@@ -862,12 +881,27 @@ impl DownloadManager {
                     )
                     .await
                     .map_err(|e| anyhow!(e.to_string()))?;
+                if let Err(e) = self.aria2.unpause(gid).await {
+                    warn!("恢复 aria2 任务 gid={gid} 失败: {e}");
+                    let _ = self
+                        .state_service
+                        .transition(
+                            task.id,
+                            updated.generation,
+                            DownloadStatus::Paused,
+                            DownloadStage::Transferring,
+                        )
+                        .await;
+                    return Ok(false);
+                }
                 let mut model: download_task::ActiveModel = updated.into();
                 model.speed = Set(0);
                 model.error = Set(None);
                 model.next_retry_at = Set(None);
                 if let Err(e) = model.update(&self.db).await {
                     error!("恢复任务 {} 时持久化状态失败: {e}", task.bvid);
+                    let _ = self.aria2.pause(gid).await;
+                    return Ok(false);
                 }
                 self.queue_notify.notify_one();
                 info!(
@@ -897,11 +931,6 @@ impl DownloadManager {
             .clone()
             .unwrap_or_else(|| format!("{}.{}", task.bvid, task.task_type));
 
-        let (gid, permit) = self
-            .dispatch_transfer(engine, task.id, &url, &task.bvid, &cookies, &dir, &filename)
-            .await?;
-
-        // 落库：status=downloading，generation+=1（防 stale 回调覆盖）
         let updated = self
             .state_service
             .transition(
@@ -913,7 +942,29 @@ impl DownloadManager {
             .await
             .map_err(|e| anyhow!(e.to_string()))?;
 
+        // 先持久化状态，再派发外部引擎；派发失败时恢复 paused，避免 DB 与引擎分叉。
+        let (gid, permit) = match self
+            .dispatch_transfer(engine, task.id, &url, &task.bvid, &cookies, &dir, &filename)
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = self
+                    .state_service
+                    .transition(
+                        task.id,
+                        updated.generation,
+                        DownloadStatus::Paused,
+                        DownloadStage::Transferring,
+                    )
+                    .await;
+                return Err(error);
+            }
+        };
+        let runtime_gid = gid.clone();
+
         // 更新 gid / 清除 error / next_retry_at
+        let updated_generation = updated.generation;
         let mut model: download_task::ActiveModel = updated.into();
         if let Some(g) = gid {
             model.gid = Set(Some(g));
@@ -924,6 +975,19 @@ impl DownloadManager {
         model.next_retry_at = Set(None);
         if let Err(e) = model.update(&self.db).await {
             error!("恢复任务 {} 时持久化状态失败: {e}", task.bvid);
+            if let Some(gid) = runtime_gid.as_deref() {
+                let _ = self.aria2.remove(gid).await;
+            }
+            let _ = self
+                .state_service
+                .transition(
+                    task.id,
+                    updated_generation,
+                    DownloadStatus::Paused,
+                    DownloadStage::Transferring,
+                )
+                .await;
+            return Ok(false);
         }
 
         // Native 路径需重新 spawn 传输（aria2 路径已通过 dispatch 进入调度）
@@ -933,8 +997,21 @@ impl DownloadManager {
             } else {
                 self.get_blogger_uid_from_history(&task.bvid).await
             };
-            self.spawn_native_transfer(task.id, &url, &cookies, uid.as_deref(), permit)
-                .await?;
+            if let Err(error) = self
+                .spawn_native_transfer(task.id, &url, &cookies, uid.as_deref(), permit)
+                .await
+            {
+                let _ = self
+                    .state_service
+                    .transition(
+                        task.id,
+                        updated_generation,
+                        DownloadStatus::Paused,
+                        DownloadStage::Transferring,
+                    )
+                    .await;
+                return Err(error);
+            }
         }
         // aria2 路径：permit 在此处 Drop 释放（aria2 自行管理并发上限）
 

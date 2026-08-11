@@ -574,6 +574,15 @@ pub(crate) fn redact_diagnostics(value: &str) -> String {
             cursor = start + "<redacted>".len();
         }
     }
+    if output.split_whitespace().any(|part| {
+        part.starts_with('/')
+            || part.starts_with("\\\\")
+            || (part.len() >= 3
+                && part.as_bytes()[1] == b':'
+                && (part.as_bytes()[2] == b'\\' || part.as_bytes()[2] == b'/'))
+    }) {
+        return "diagnostic redacted".to_owned();
+    }
     output.trim().to_owned()
 }
 

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub const CONFIG_VERSION: u32 = 1;
 pub const SECRET_MASK: &str = "********";
@@ -17,6 +18,7 @@ pub const SECRET_MASK: &str = "********";
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct RuntimeSettings {
+    pub revision: u64,
     pub config_version: u32,
     pub query: QuerySettings,
     pub danmaku_comment: DanmakuCommentSettings,
@@ -40,6 +42,7 @@ pub struct RuntimeSettings {
 impl Default for RuntimeSettings {
     fn default() -> Self {
         Self {
+            revision: 0,
             config_version: CONFIG_VERSION,
             query: QuerySettings::default(),
             danmaku_comment: DanmakuCommentSettings::default(),
@@ -172,6 +175,10 @@ impl RuntimeSettings {
         ) || !(1..=20).contains(&self.monitor.scan_page_limit)
             || !matches!(self.monitor.multi_page_mode.as_str(), "first" | "all")
             || !matches!(self.appearance.theme.as_str(), "system" | "light" | "dark")
+            || !matches!(
+                self.board.path_display_mode.as_str(),
+                "hidden" | "relative" | "absolute"
+            )
         {
             return Err(AppError::BadRequest(
                 "文件冲突策略、扫描页数、多P监控模式或主题设置无效".to_string(),
@@ -212,6 +219,13 @@ impl RuntimeSettings {
             || !(1.0..=60.0).contains(&self.burn.fix_time)
             || !(0.5..=2.0).contains(&self.burn.font_size_scale)
             || !(0.0..=200.0).contains(&self.burn.bottom_reserve)
+            || !matches!(
+                self.burn.font_family.as_str(),
+                "auto" | "Microsoft YaHei UI" | "Noto Sans CJK SC" | "Arial"
+            )
+            || !matches!(self.burn.color_mode.as_str(), "source" | "uniform")
+            || self.burn.color.len() != 6
+            || !self.burn.color.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
             return Err(AppError::BadRequest("弹幕烧录参数超出允许范围".to_string()));
         }
@@ -220,14 +234,15 @@ impl RuntimeSettings {
             || !(1..=72).contains(&self.live.max_duration_hours)
             || self.live.file_name_template.trim().is_empty()
         {
-            return Err(AppError::BadRequest(
-                "直播录制设置超出允许范围".to_string(),
-            ));
+            return Err(AppError::BadRequest("直播录制设置超出允许范围".to_string()));
         }
         Ok(())
     }
 }
 
+/// Declare a serde-default settings group while keeping its defaults beside
+/// the field definitions. This is intentionally local to runtime settings;
+/// it avoids repeating identical `Default` implementations for these DTOs.
 macro_rules! default_struct {
     ($name:ident { $($field:ident : $ty:ty = $value:expr),+ $(,)? }) => {
         #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -312,6 +327,8 @@ default_struct!(DownloadSettings {
     verify: VerifySettings = VerifySettings::default(),
 });
 default_struct!(BoardSettings {
+    path_display_mode: String = "hidden".to_string(),
+    // 旧版兼容字段；新代码以 path_display_mode 为准。
     show_relative_path: bool = false,
 });
 default_struct!(MonitorSettings {
@@ -337,6 +354,11 @@ default_struct!(BurnSettings {
     font_size_scale: f64 = 1.0,
     // 底部保留高度（像素，0~200），默认 50.0，避免弹幕遮挡字幕。
     bottom_reserve: f64 = 50.0,
+    // ASS 字体：auto 使用当前平台默认字体。
+    font_family: String = "auto".to_string(),
+    // source 保留原始颜色，uniform 使用 color。
+    color_mode: String = "source".to_string(),
+    color: String = "FFFFFF".to_string(),
 });
 
 default_struct!(SubtitleSettings {
@@ -370,6 +392,9 @@ impl BurnSettings {
             fix_time: self.fix_time,
             font_size_scale: self.font_size_scale,
             bottom_reserve: self.bottom_reserve,
+            font_family: self.font_family.clone(),
+            color_mode: self.color_mode.clone(),
+            color: self.color.clone(),
         }
     }
 }
@@ -379,6 +404,7 @@ pub struct SettingsService {
     db: DatabaseConnection,
     current: Arc<ArcSwap<RuntimeSettings>>,
     secret_store: Arc<SecretStore>,
+    save_lock: Arc<Mutex<()>>,
 }
 
 impl SettingsService {
@@ -405,6 +431,7 @@ impl SettingsService {
             db,
             current: Arc::new(ArcSwap::from_pointee(current)),
             secret_store,
+            save_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -412,26 +439,54 @@ impl SettingsService {
         self.current.load_full()
     }
 
-    pub async fn save(&self, mut settings: RuntimeSettings) -> AppResult<Arc<RuntimeSettings>> {
-        normalize_legacy_settings(&mut settings);
+    pub async fn save(&self, settings: RuntimeSettings) -> AppResult<Arc<RuntimeSettings>> {
+        self.save_inner(settings, true).await
+    }
+
+    async fn save_inner(
+        &self,
+        mut settings: RuntimeSettings,
+        check_revision: bool,
+    ) -> AppResult<Arc<RuntimeSettings>> {
+        let _save_guard = self.save_lock.lock().await;
+        let before = self.current.load_full();
+        if check_revision && settings.revision != before.revision {
+            return Err(AppError::Conflict(format!(
+                "settings revision conflict: expected {}, current {}",
+                settings.revision, before.revision
+            )));
+        }
         let requested_secret = settings.aria2_rpc.secret.clone();
         settings.aria2_rpc.secret = if requested_secret == SECRET_MASK {
-            self.current().aria2_rpc.secret.clone()
+            before.aria2_rpc.secret.clone()
         } else {
             requested_secret
         };
         settings.validate()?;
+        settings.revision = before.revision.saturating_add(1);
+        let previous_secret = before.aria2_rpc.secret.clone();
         self.secret_store
             .set("aria2_rpc_secret", &settings.aria2_rpc.secret)
             .await?;
-        persist_runtime_settings(&self.db, &settings).await?;
+        if let Err(error) = persist_runtime_settings(&self.db, &settings).await {
+            if let Err(rollback) = self
+                .secret_store
+                .set("aria2_rpc_secret", &previous_secret)
+                .await
+            {
+                return Err(AppError::Internal(format!(
+                    "settings save failed and secret rollback failed: {rollback}"
+                )));
+            }
+            return Err(error);
+        }
         let settings = Arc::new(settings);
         self.current.store(settings.clone());
         Ok(settings)
     }
 
     pub async fn reset(&self) -> AppResult<Arc<RuntimeSettings>> {
-        self.save(RuntimeSettings::default()).await
+        self.save_inner(RuntimeSettings::default(), false).await
     }
 
     pub async fn cookie_header(&self) -> AppResult<String> {
@@ -457,9 +512,10 @@ async fn load_runtime_settings(db: &DatabaseConnection) -> AppResult<RuntimeSett
         .await?
     {
         if let Some(value) = row.value {
-            let mut settings: RuntimeSettings = serde_json::from_str(&value)?;
+            let mut raw: Value = serde_json::from_str(&value)?;
+            migrate_legacy_path_display_mode(&mut raw);
+            let mut settings: RuntimeSettings = serde_json::from_value(raw)?;
             settings.config_version = CONFIG_VERSION;
-            normalize_legacy_settings(&mut settings);
             return Ok(settings);
         }
     }
@@ -483,22 +539,30 @@ async fn load_runtime_settings(db: &DatabaseConnection) -> AppResult<RuntimeSett
             object.insert(row.key, parsed);
         }
     }
+    migrate_legacy_path_display_mode(&mut merged);
     let mut settings: RuntimeSettings = serde_json::from_value(merged)
         .map_err(|error| AppError::Config(format!("迁移旧设置失败: {error}")))?;
     settings.config_version = CONFIG_VERSION;
-    normalize_legacy_settings(&mut settings);
     settings.validate()?;
     persist_runtime_settings(db, &settings).await?;
     Ok(settings)
 }
 
-fn normalize_legacy_settings(settings: &mut RuntimeSettings) {
-    settings.download_mode.mode = match settings.download_mode.mode.as_str() {
-        "rpc" => "external".to_string(),
-        "local" => "embedded".to_string(),
-        value => value.to_string(),
+fn migrate_legacy_path_display_mode(value: &mut Value) {
+    let Some(board) = value.get_mut("board").and_then(Value::as_object_mut) else {
+        return;
     };
-    settings.aria2c_basic.max_concurrent_downloads = settings.parallel_download.max_parallel;
+    if board.get("path_display_mode").is_none()
+        && board
+            .get("show_relative_path")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        board.insert(
+            "path_display_mode".to_string(),
+            Value::String("relative".to_string()),
+        );
+    }
 }
 
 async fn persist_runtime_settings(

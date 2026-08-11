@@ -8,7 +8,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 
 /// WBI keys 缓存 30 分钟，避免频繁请求 nav。
@@ -96,12 +96,14 @@ pub fn extract_key(url: &str) -> Option<String> {
 #[derive(Clone)]
 pub struct WbiKeysCache {
     inner: Arc<RwLock<Option<(String, String, Instant)>>>,
+    refresh_lock: Arc<Mutex<()>>,
 }
 
 impl WbiKeysCache {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(None)),
+            refresh_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -117,6 +119,15 @@ impl WbiKeysCache {
         referer: &str,
         cookies: &str,
     ) -> Result<(String, String)> {
+        {
+            let cache = self.inner.read().await;
+            if let Some((img, sub, fetched_at)) = cache.as_ref() {
+                if fetched_at.elapsed() < WBI_KEYS_CACHE_TTL {
+                    return Ok((img.clone(), sub.clone()));
+                }
+            }
+        }
+        let _refresh = self.refresh_lock.lock().await;
         {
             let cache = self.inner.read().await;
             if let Some((img, sub, fetched_at)) = cache.as_ref() {
@@ -150,7 +161,21 @@ impl WbiKeysCache {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let bytes = resp.bytes().await.context("读取WBI keys响应体失败")?;
+        if !content_type.is_empty() && !content_type.to_ascii_lowercase().contains("json") {
+            return Err(anyhow!(
+                "WBI keys 鍝嶅簲 Content-Type 闈炴湁鏁?JSON: {content_type}"
+            ));
+        }
+        let mut body = Vec::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+            let chunk = chunk.context("读取WBI keys响应体失败")?;
+            if body.len().saturating_add(chunk.len()) > 2 * 1024 * 1024 {
+                return Err(anyhow!("WBI keys响应体超过 2 MiB 上限"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let bytes = body;
         let data: crate::services::bili_api::models::auth::NavResponse =
             match serde_json::from_slice(&bytes) {
                 Ok(v) => v,
@@ -165,7 +190,9 @@ impl WbiKeysCache {
         debug!(code = data.code, "WBI keys 响应: nav");
         if data.code != 0 {
             // -101/-352 必须分类，供前端区分登录失效与风控。
-            return Err(crate::error::BiliApiError::classify(data.code, data.message).into());
+            let error = crate::error::BiliApiError::classify(data.code, data.message);
+            self.invalidate().await;
+            return Err(error.into());
         }
         let wbi = data
             .data
@@ -176,6 +203,10 @@ impl WbiKeysCache {
         let mut cache = self.inner.write().await;
         *cache = Some((img_key.clone(), sub_key.clone(), Instant::now()));
         Ok((img_key, sub_key))
+    }
+
+    pub async fn invalidate(&self) {
+        *self.inner.write().await = None;
     }
 }
 

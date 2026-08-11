@@ -9,6 +9,7 @@ mod m20260810_000006_live_sources_and_interactions;
 mod m20260810_000007_live_recording_reliability;
 mod m20260810_000008_live_merge_jobs;
 mod m20260810_000009_live_source_quality;
+mod m20260810_000010_live_merge_job_guards;
 
 pub struct Migrator;
 
@@ -25,6 +26,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260810_000007_live_recording_reliability::Migration),
             Box::new(m20260810_000008_live_merge_jobs::Migration),
             Box::new(m20260810_000009_live_source_quality::Migration),
+            Box::new(m20260810_000010_live_merge_job_guards::Migration),
         ]
     }
 }

@@ -36,10 +36,12 @@ pub fn select_stream_candidates(
         .filter_map(|stream| {
             let mut candidate = stream.clone();
             candidate.url = candidate.url.replace("\\u0026", "&").replace("\\/", "/");
-            url::Url::parse(candidate.url.trim())
-                .ok()
-                .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
-                .map(|_| candidate)
+            crate::services::bili_url_policy::validate_live_endpoint_syntax(
+                candidate.url.trim(),
+                false,
+            )
+            .ok()
+            .map(|_| candidate)
         })
         .collect::<Vec<_>>();
     sorted.sort_by_key(|stream| {
@@ -79,9 +81,11 @@ pub fn select_best_stream(
     let mut sorted = durl
         .iter()
         .filter(|stream| {
-            url::Url::parse(stream.url.trim()).is_ok_and(|url| {
-                matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
-            })
+            crate::services::bili_url_policy::validate_live_endpoint_syntax(
+                stream.url.trim(),
+                false,
+            )
+            .is_ok()
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -143,26 +147,26 @@ mod tests {
 
     #[test]
     fn extract_expires_from_url() {
-        let url = "https://cdn.example.com/live.flv?expires=1723982800&sign=abc";
+        let url = "https://cdn.bilivideo.com/live.flv?expires=1723982800&sign=abc";
         assert_eq!(extract_expires(url), Some(1723982800));
     }
 
     #[test]
     fn extract_expires_missing() {
-        let url = "https://cdn.example.com/live.flv?sign=abc";
+        let url = "https://cdn.bilivideo.com/live.flv?sign=abc";
         assert_eq!(extract_expires(url), None);
     }
 
     #[test]
     fn missing_expires_does_not_trigger_periodic_refresh() {
-        let url = "https://cdn.example.com/live.flv?sign=abc";
+        let url = "https://cdn.bilivideo.com/live.flv?sign=abc";
         assert!(!is_expiring_soon(url, 60));
     }
 
     #[test]
     fn expires_inside_margin_triggers_refresh() {
         let expires = chrono::Utc::now().timestamp() + 30;
-        let url = format!("https://cdn.example.com/live.flv?expires={expires}");
+        let url = format!("https://cdn.bilivideo.com/live.flv?expires={expires}");
         assert!(is_expiring_soon(&url, 60));
     }
 
@@ -170,26 +174,27 @@ mod tests {
     fn select_best_picks_order_1() {
         let durl = vec![
             LiveStreamUrl {
-                url: "https://backup/live.flv".into(),
+                url: "https://backup.bilivideo.com/live.flv".into(),
                 order: 2,
                 stream_type: 0,
                 ..Default::default()
             },
             LiveStreamUrl {
-                url: "https://main/live.flv".into(),
+                url: "https://main.bilivideo.com/live.flv".into(),
                 order: 1,
                 stream_type: 0,
                 ..Default::default()
             },
         ];
         let url = select_best_url(&durl).expect("select best");
-        assert_eq!(url, "https://main/live.flv");
+        assert_eq!(url, "https://main.bilivideo.com/live.flv");
     }
 
     #[test]
     fn select_best_unescapes_url() {
         let durl = vec![LiveStreamUrl {
-            url: "https://cdn/live.flv?expires=123\\u0026sign=abc\\u0026trid=xyz".into(),
+            url: "https://cdn.bilivideo.com/live.flv?expires=123\\u0026sign=abc\\u0026trid=xyz"
+                .into(),
             order: 1,
             stream_type: 0,
             ..Default::default()
@@ -202,7 +207,7 @@ mod tests {
     fn select_best_prefers_quality_then_compatible_codec() {
         let streams = vec![
             LiveStreamUrl {
-                url: "https://cdn/low.flv".into(),
+                url: "https://cdn.bilivideo.com/low.flv".into(),
                 order: 1,
                 current_qn: 250,
                 codec_name: "avc".into(),
@@ -210,7 +215,7 @@ mod tests {
                 ..Default::default()
             },
             LiveStreamUrl {
-                url: "https://cdn/high-hevc.m3u8".into(),
+                url: "https://cdn.bilivideo.com/high-hevc.m3u8".into(),
                 order: 1,
                 current_qn: 10000,
                 codec_name: "hevc".into(),
@@ -218,7 +223,7 @@ mod tests {
                 ..Default::default()
             },
             LiveStreamUrl {
-                url: "https://cdn/high-avc.flv".into(),
+                url: "https://cdn.bilivideo.com/high-avc.flv".into(),
                 order: 2,
                 current_qn: 10000,
                 codec_name: "avc".into(),
@@ -227,28 +232,28 @@ mod tests {
             },
         ];
         let best = select_best_stream(&streams).expect("best stream");
-        assert_eq!(best.url, "https://cdn/high-avc.flv");
+        assert_eq!(best.url, "https://cdn.bilivideo.com/high-avc.flv");
     }
 
     #[test]
     fn stream_candidates_rotate_unique_valid_cdns() {
         let streams = vec![
             LiveStreamUrl {
-                url: "https://cdn-a/live.flv?x=1\\u0026sign=a".into(),
+                url: "https://cdn-a.bilivideo.com/live.flv?x=1\\u0026sign=a".into(),
                 current_qn: 10000,
                 codec_name: "avc".into(),
                 format_name: "flv".into(),
                 ..Default::default()
             },
             LiveStreamUrl {
-                url: "https://cdn-a/live.flv?x=1&sign=a".into(),
+                url: "https://cdn-a.bilivideo.com/live.flv?x=1&sign=a".into(),
                 current_qn: 10000,
                 codec_name: "avc".into(),
                 format_name: "flv".into(),
                 ..Default::default()
             },
             LiveStreamUrl {
-                url: "https://cdn-b/live.flv".into(),
+                url: "https://cdn-b.bilivideo.com/live.flv".into(),
                 current_qn: 9000,
                 codec_name: "avc".into(),
                 format_name: "flv".into(),
@@ -257,7 +262,10 @@ mod tests {
         ];
         let candidates = select_stream_candidates(&streams).expect("candidates");
         assert_eq!(candidates.len(), 2);
-        assert_eq!(candidates[0].url, "https://cdn-a/live.flv?x=1&sign=a");
-        assert_eq!(candidates[1].url, "https://cdn-b/live.flv");
+        assert_eq!(
+            candidates[0].url,
+            "https://cdn-a.bilivideo.com/live.flv?x=1&sign=a"
+        );
+        assert_eq!(candidates[1].url, "https://cdn-b.bilivideo.com/live.flv");
     }
 }

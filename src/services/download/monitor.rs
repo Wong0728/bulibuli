@@ -118,6 +118,7 @@ impl DownloadManager {
         let mut idle_rounds: u32 = 0;
         // aria2 不可用计数器，需在循环外部声明才能正确累积
         let mut aria2_fail_count: u32 = 0;
+        let mut status_failures: HashMap<i32, u8> = HashMap::new();
         let mut disk_full_notified = false;
         let mut last_audio_retry = Instant::now() - std::time::Duration::from_secs(30);
         let mut last_disk_check = Instant::now() - std::time::Duration::from_secs(15);
@@ -135,7 +136,7 @@ impl DownloadManager {
                 last_audio_retry = Instant::now();
             }
 
-            let tasks = match download_task::Entity::find()
+            let all_tasks = match download_task::Entity::find()
                 .filter(download_task::Column::Status.is_in(vec!["downloading", "pending"]))
                 .all(&self.db)
                 .await
@@ -150,17 +151,19 @@ impl DownloadManager {
             // 原生任务由后台任务驱动；本循环只处理 aria2 GID 任务。
             let tasks = {
                 let native = self.native_tasks.lock().await;
-                tasks
-                    .into_iter()
+                all_tasks
+                    .iter()
                     .filter(|t| !native.contains_key(&t.id))
+                    .cloned()
                     .collect::<Vec<_>>()
             };
 
             // 防泄漏：任务被外部删除时同步清掉 gid 缺失计时
             let current_ids: HashSet<i32> = tasks.iter().map(|t| t.id).collect();
             gidless_since.retain(|id, _| current_ids.contains(id));
+            status_failures.retain(|id, _| current_ids.contains(id));
 
-            if tasks.is_empty() {
+            if all_tasks.is_empty() {
                 // 空队列：连续空闲 3 轮后退避到长间隔，入队通知会立即唤醒
                 idle_rounds = idle_rounds.saturating_add(1);
                 if idle_rounds >= 3 {
@@ -183,7 +186,7 @@ impl DownloadManager {
                 if let Err(pause_error) = self.aria2.pause_all().await {
                     warn!("磁盘空间不足后暂停 aria2 任务失败: {pause_error}");
                 }
-                for task in &tasks {
+                for task in &all_tasks {
                     if let Err(transition_error) = self
                         .state_service
                         .transition(
@@ -200,6 +203,12 @@ impl DownloadManager {
                         );
                     }
                 }
+                let mut native = self.native_tasks.lock().await;
+                for task in &all_tasks {
+                    if let Some(token) = native.remove(&task.id) {
+                        token.cancel();
+                    }
+                }
                 if !disk_full_notified {
                     if let Err(notify_error) = self
                         .ws
@@ -212,7 +221,16 @@ impl DownloadManager {
                 }
                 continue;
             }
-            disk_full_notified = false;
+            if disk_full_notified {
+                if let Err(error) = self
+                    .ws
+                    .broadcast_system("download:disk-recovered", json!({}))
+                    .await
+                {
+                    warn!("推送磁盘恢复事件失败: {error}");
+                }
+                disk_full_notified = false;
+            }
 
             let aria2_available = self.aria2.is_available().await;
             if !aria2_available {
@@ -289,6 +307,7 @@ impl DownloadManager {
                     };
                     match status_result {
                         Ok(status) => {
+                            status_failures.remove(&task.id);
                             let mut model: download_task::ActiveModel = task.clone().into();
                             // 更新内存进度缓存，减少数据库查询压力（按分P粒度隔离）
                             {
@@ -479,14 +498,18 @@ impl DownloadManager {
                             }
                         }
                         Err(e) => {
-                            warn!("获取 aria2 状态失败 (gid={gid}): {e}");
-                            // aria2 状态查询失败，将任务标记为失败
-                            self.queue_terminal_failure(
-                                &task,
-                                format!("Aria2 状态查询失败: {e}"),
-                                &mut to_update,
-                            )
-                            .await;
+                            let failures = status_failures.entry(task.id).or_default();
+                            *failures = failures.saturating_add(1);
+                            warn!("获取 aria2 状态失败 (gid={gid}, attempt={failures}): {e}");
+                            if *failures >= 3 {
+                                status_failures.remove(&task.id);
+                                self.queue_terminal_failure(
+                                    &task,
+                                    format!("Aria2 状态连续 3 次查询失败: {e}"),
+                                    &mut to_update,
+                                )
+                                .await;
+                            }
                         }
                     }
                 }

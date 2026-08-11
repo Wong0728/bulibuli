@@ -1,11 +1,22 @@
 import { _state, webSocketMessageKey, _NETWORK_ERR_MSG } from './state.js';
 import { ApiError, requestEnvelope } from './api.js';
-import { escapeHtml } from './utils.js';
+import {
+    updateNetworkBanner,
+    updateNetworkDisabledButtons,
+    checkNetworkBeforeAction,
+    onNetworkRecovered,
+    dismissNetworkToast,
+} from './network.js';
+import { checkCookiesStatus, dismissCookieWarning, updateLoginCard, refreshLoginInfo } from './auth-card.js';
+export { updateNetworkBanner, updateNetworkDisabledButtons, checkNetworkBeforeAction, onNetworkRecovered, dismissNetworkToast } from './network.js';
+export { checkCookiesStatus, dismissCookieWarning, updateLoginCard, refreshLoginInfo } from './auth-card.js';
 import { switchTab, showQRCodeLogin, refreshQRCode, closeQRCodeModal, toggleManualCookie, saveManualCookie, logoutAccount } from './bootstrap.js';
 import { loadMoreManualQuery, doManualResolve } from './manual.js';
 import { getDownloadLinks, downloadAudioWithQuality, downloadVideoWithQuality, downloadDanmaku, downloadComments } from './media-links.js';
 import {
     showAddBloggerModal,
+    closeBloggerModal,
+    confirmBloggerModal,
     closeAddBloggerModal,
     confirmAddBlogger,
     showContextMenu,
@@ -23,10 +34,10 @@ import { saveBloggers, selectBlogger, renderBloggerLogs, startLogRefresh, cleanu
 import { removeKnownBlogger, clearKnownBloggers, closeBloggerNoticeModal, acknowledgeBloggerChange, acknowledgeAllBloggerChanges } from './blogger-search.js';
 import { updateDownloadLists, patchSingleCardProgress, pauseDownload, resumeDownload } from './download-queue.js';
 import { switchBoardTab, loadHistoryBoard, updateDownloadProgressInList } from './history.js';
-import { startProgressUpdates, showToast, confirmDialog } from './download-status.js';
+import { startProgressUpdates, showToast, confirmDialog, closeConfirmDialog } from './download-status.js';
 import { addTimePoint, removeTimePoint, browseFFmpegPath, testFFmpeg, saveSettings, resetSettings, loadSettings, testDownload, restartAria2 } from './settings.js';
 import { openVideoDrawer, closeVideoDrawer, openVideoDrawerFromManual } from './drawer.js';
-import { burnMedia, deleteVideoRecord, refreshVideoInfo, loadBvidLogs, loadDrawerComments, loadDrawerDanmaku, selectQualityPill, startVideoDownload, retryVideoDownload, startVideoDownloadFromManual, toggleAllPages, openVideoPage, downloadCover, startSeasonDownload, toggleAllEpisodes } from './media-actions.js';
+import { burnMedia, deleteVideoRecord, refreshVideoInfo, loadBvidLogs, loadDrawerComments, loadDrawerDanmaku, selectQualityPill, startVideoDownload, retryVideoDownload, startVideoDownloadFromManual, toggleAllPages, openVideoPage, downloadCover, openHistoryDirectory, startSeasonDownload, toggleAllEpisodes } from './media-actions.js';
 import './live.js';
 
 // B站视频监控助手 - feature modules
@@ -85,12 +96,14 @@ const _declarativeActions = {
     'save-settings': el => saveSettings(el),
     'reset-settings': () => resetSettings(),
     'load-settings': () => loadSettings(),
+    'close-blogger-modal': () => closeBloggerModal(),
+    'confirm-blogger-modal': () => confirmBloggerModal(),
     'close-add-blogger-modal': () => closeAddBloggerModal(),
     'confirm-add-blogger': () => confirmAddBlogger(),
     'close-edit-blogger-modal': () => closeEditBloggerModal(),
     'confirm-edit-blogger': () => confirmEditBlogger(),
-    'add-active-window': el => addActiveWindowRow(el.dataset.scope || 'edit'),
-    'active-window-preset': el => addActiveWindowPreset(el.dataset.scope || 'edit', el.dataset.preset),
+    'add-active-window': el => addActiveWindowRow(el.dataset.scope || 'blogger'),
+    'active-window-preset': el => addActiveWindowPreset(el.dataset.scope || 'blogger', el.dataset.preset),
     'remove-active-window': el => removeActiveWindowRow(el),
     'close-blogger-notice-modal': () => closeBloggerNoticeModal(),
     'acknowledge-all-blogger-changes': () => acknowledgeAllBloggerChanges(),
@@ -125,6 +138,7 @@ const _declarativeActions = {
     'refresh-video-info': el => refreshVideoInfo(el.dataset.bvid),
     'download-cover': el => downloadCover(el.dataset.bvid),
     'open-video-page': el => openVideoPage(el.dataset.bvid),
+    'open-history-directory': el => openHistoryDirectory(el.dataset.bvid, el.dataset.path),
     'load-bvid-logs': el => loadBvidLogs(el.dataset.bvid),
     'burn-media': el => burnMedia(el.dataset.bvid, el.dataset.kind, el),
     'select-quality': el => selectQualityPill(el, Number(el.dataset.qn)),
@@ -137,7 +151,7 @@ const _declarativeActions = {
 };
 
 const _declarativeChangeActions = {
-    'toggle-active-window-mode': el => toggleActiveWindowMode(el.dataset.scope || 'edit'),
+    'toggle-active-window-mode': el => toggleActiveWindowMode(el.dataset.scope || 'blogger'),
     'load-known-blogger-config': () => loadKnownBloggerIntoAddForm(),
 };
 
@@ -199,15 +213,6 @@ document.addEventListener('error', event => {
             break;
     }
 }, true);
-
-// ==================== 全局网络状态追踪 ====================
-_state.networkFailCount = 0;          // 连续网络（连接）失败计数；仅统计真正的连接失败
-const _NETWORK_FAIL_THRESHOLD = 1;  // 达到即显示顶栏横幅（真正断连时立即提示，与右上角 toast 同步）
-// 各模块共用的网络错误文案由 state.js 导出。
-// 当前显示中的网络错误 toast（单例，避免大量请求失败时堆叠）
-_state.networkToastEl = null;
-// 浏览器在线状态（navigator.onLine 可能不准，这里以浏览器事件 + apiRequest 失败计数共同维护）
-_state.isNetworkOnline = navigator.onLine !== false;
 
 // 初始化WebSocket连接
 export function initWebSocket() {
@@ -378,6 +383,11 @@ export function initWebSocket() {
             showSystemModal('磁盘空间不足', data.message || '下载已暂停，请释放磁盘空间后重试。');
         });
 
+        _state.socket.on('download:disk-recovered', function(data) {
+            if (!acceptWebSocketMessage('download:disk-recovered', data)) return;
+            closeConfirmDialog('磁盘空间不足');
+        });
+
     } catch (e) {
         updateServerStatus('disconnected');
     }
@@ -455,13 +465,14 @@ export async function apiRequest(url, options = {}) {
     const controller = createAbortController();
     try {
         const method = (options.method || 'GET').toUpperCase();
+        const callerSignal = options.signal;
         const headers = { ...(options.headers || {}) };
         if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && _state.csrfToken) {
             headers['X-CSRF-Token'] = _state.csrfToken;
         }
         const envelope = await requestEnvelope(url, {
-            signal: controller.signal,
             ...options,
+            signal: callerSignal || controller.signal,
             headers,
         }, {
             onUnauthorized: error => {
@@ -490,83 +501,25 @@ export async function apiRequest(url, options = {}) {
         if (index > -1) _state.currentControllers.splice(index, 1);
     }
 }
-export function updateNetworkBanner() {
-    let banner = document.getElementById('network-error-banner');
-    if (!banner) return;
-
-    if (_state.networkFailCount >= _NETWORK_FAIL_THRESHOLD) {
-        banner.classList.add('show');
-    } else {
-        banner.classList.remove('show');
-    }
-}
-
-// 给需要联网的按钮统一加/解 disabled 类（不破坏原有 disabled 属性语义）
-export function updateNetworkDisabledButtons() {
-    const selectors = [
-        '#tab-manual .btn-primary',
-        '#tab-manual .manual-download-btn',
-        '.drawer-btn-primary',
-        '#detail-start-btn',
-        '#board-refresh-btn',
-    ];
-    document.querySelectorAll(selectors.join(',')).forEach(btn => {
-        if (!_state.isNetworkOnline) {
-            btn.dataset.networkDisabled = 'true';
-            btn.classList.add('network-disabled');
-        } else {
-            delete btn.dataset.networkDisabled;
-            btn.classList.remove('network-disabled');
-        }
-    });
-}
-
-// 检查按钮是否因断网被禁用，若是则提示用户
-export function checkNetworkBeforeAction() {
-    if (!_state.isNetworkOnline) {
-        showToast('网络未恢复，请检查网络后重试', 'warning');
-        return false;
-    }
-    return true;
-}
-
-// 网络恢复：清零计数、隐藏顶栏横幅、关闭右上角网络错误 toast
-export function onNetworkRecovered() {
-    if (_state.networkFailCount !== 0) {
-        _state.networkFailCount = 0;
-        updateNetworkBanner();
-    }
-    dismissNetworkToast();
-    _state.isNetworkOnline = true;
-    updateNetworkDisabledButtons();
-}
-
-// 关闭当前的网络错误 toast（若有）
-export function dismissNetworkToast() {
-    if (_state.networkToastEl) {
-        const el = _state.networkToastEl;
-        _state.networkToastEl = null;
-        el.classList.add('msg-toast-leaving');
-        setTimeout(() => el.remove(), 300);
-    }
-}
-
-export async function apiPost(url, data) {
+export async function apiPost(url, data, options = {}) {
     return apiRequest(url, {
+        ...options,
         method: 'POST',
         body: JSON.stringify(data)
     });
 }
 
-export async function apiPut(url, data) {
+export async function apiPut(url, data, options = {}) {
     return apiRequest(url, {
+        ...options,
         method: 'PUT',
         body: JSON.stringify(data)
     });
 }
 
-export async function apiGet(url) {
+export async function apiGet(url, options = {}) {
     return apiRequest(url, {
+        ...options,
         method: 'GET'
     });
 }
@@ -581,96 +534,6 @@ _state.isTaskRunning = false;
 _state.progressUpdateInterval = null;
 _state.urlExpiryTimers = {};
 _state.videoTitles = {};
-_state.cookieWarningShown = false;
-_state.loginValid = false;  // 由 updateLoginCard 维护：当前是否已登录且有效
-
-// ==================== Cookies 警告横幅 ====================
-export async function checkCookiesStatus() {
-    const banner = document.getElementById('cookie-warning-banner');
-    try {
-        const result = await apiGet('/api/cookies/status');
-        // 断网时不改动登录态/横幅（避免断网误报“未登录”），网络提示统一由 toast + 顶栏横幅处理
-        if (result.offline) return;
-        // 顺带刷新顶部登录卡片与设置页登录状态
-        const data = result.data || {};
-        updateLoginCard(data);
-        if (data.valid) {
-            if (banner) banner.hidden = true;
-            _state.cookieWarningShown = false;
-        } else {
-            if (banner) {
-                const span = banner.querySelector('span');
-                if (span) span.textContent = data.has_cookies
-                    ? '当前 B 站登录已失效，请重新登录，部分功能受限（仅能获取低清晰度视频）。'
-                    : '未登录 B 站账号，部分功能受限（仅能获取低清晰度视频）。';
-                banner.hidden = false;
-            }
-            _state.cookieWarningShown = true;
-        }
-    } catch (e) {
-        updateLoginCard(null);
-        if (banner) banner.hidden = false;
-        _state.cookieWarningShown = true;
-    }
-}
-
-export function dismissCookieWarning() {
-    const banner = document.getElementById('cookie-warning-banner');
-    if (banner) {
-        banner.hidden = true;
-    }
-}
-
-// 渲染顶部登录用户卡片 + 设置页登录状态（info 来自 /api/cookies/status）
-export function updateLoginCard(info) {
-    _state.loginValid = !!(info && info.valid);
-    const card = document.getElementById('login-user-card');
-    const prompt = document.getElementById('login-prompt-btn');
-    const settingsStatus = document.getElementById('cookie-login-status');
-
-    if (_state.loginValid) {
-        const face = info.face ? `/api/video/proxy-image?url=${encodeURIComponent(info.face)}` : '';
-        const isVip = (info.vip_status || 0) > 0;
-        const vipText = info.vip_label || (isVip ? '大会员' : '');
-        const faceImg = face
-            ? `<img class="login-user-face" src="${face}" alt="" data-image-error="hide">`
-            : `<div class="login-user-face login-user-face-ph"><i class="fa-solid fa-user"></i></div>`;
-        const vipBadge = isVip ? `<span class="login-vip-badge">${escapeHtml(vipText || '大会员')}</span>` : '';
-        if (card) {
-            card.hidden = false;
-            card.innerHTML = `
-                ${faceImg}
-                <div class="login-user-meta">
-                    <span class="login-user-name">${escapeHtml(info.uname || '')}</span>
-                    <span class="login-user-sub">Lv${Number(info.level) || 0} ${vipBadge}</span>
-                </div>
-                <button class="login-switch-btn" data-action="show-qr-login" title="切换账号"><i class="fa-solid fa-right-left"></i></button>`;
-        }
-        if (prompt) prompt.hidden = true;
-        if (settingsStatus) {
-            settingsStatus.innerHTML = `
-                ${faceImg}
-                <div class="login-user-meta">
-                    <span class="login-user-name">${escapeHtml(info.uname || '')} ${vipBadge}</span>
-                    <span class="login-user-sub">UID ${escapeHtml(String(info.mid || '--'))} · Lv${Number(info.level) || 0} · 已登录</span>
-                </div>`;
-        }
-    } else {
-        if (card) card.hidden = true;
-        if (prompt) {
-            prompt.hidden = false;
-            prompt.innerHTML = `<i class="fa-solid fa-user"></i> ${info && info.has_cookies ? '登录失效·重新登录' : '未登录·点击登录'}`;
-        }
-        if (settingsStatus) {
-            settingsStatus.innerHTML = `<span class="login-user-sub"><i class="fa-solid fa-circle-exclamation"></i> ${info && info.has_cookies ? '当前 Cookie 无效或已过期' : '尚未登录 B 站账号'}</span>`;
-        }
-    }
-}
-
-// 刷新登录信息（登录卡片 + 警告横幅）
-export async function refreshLoginInfo() {
-    await checkCookiesStatus();
-}
 
 // 当前选中的博主ID
 _state.selectedBloggerId = null;

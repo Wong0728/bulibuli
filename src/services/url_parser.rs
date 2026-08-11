@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult};
+use reqwest::header::LOCATION;
 use serde::Serialize;
 use std::sync::LazyLock;
 
@@ -62,15 +63,72 @@ pub async fn resolve_media_input(
     if let Ok(url) = url::Url::parse(trimmed) {
         let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
         if host == "b23.tv" || host.ends_with(".b23.tv") {
-            let response = client
-                .get(url)
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await?;
-            return parse_media_input(response.url().as_str());
+            let mut current = url;
+            for hop in 0..=3 {
+                if !is_allowed_b23_redirect_host(&current) {
+                    return Err(AppError::BadRequest(
+                        "B23 短链重定向到不受信任的主机".to_string(),
+                    ));
+                }
+                let response = client
+                    .get(current.clone())
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send()
+                    .await?;
+                if !response.status().is_redirection() {
+                    let final_url = response.url();
+                    if !is_final_bilibili_url(final_url) {
+                        return Err(AppError::BadRequest(
+                            "B23 短链最终地址必须是 HTTPS B 站地址".to_string(),
+                        ));
+                    }
+                    return parse_media_input(final_url.as_str());
+                }
+                if hop == 3 {
+                    return Err(AppError::BadRequest(
+                        "B23 短链重定向次数超过 3 次".to_string(),
+                    ));
+                }
+                let location = response
+                    .headers()
+                    .get(LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or_else(|| {
+                        AppError::BadRequest("B23 短链缺少有效的重定向地址".to_string())
+                    })?;
+                current = response
+                    .url()
+                    .join(location)
+                    .map_err(|_| AppError::BadRequest("B23 短链重定向地址无效".to_string()))?;
+            }
         }
     }
     parse_media_input(trimmed)
+}
+
+fn is_allowed_b23_redirect_host(url: &url::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url
+            .host_str()
+            .map(|host| {
+                let host = host.to_ascii_lowercase();
+                host == "b23.tv"
+                    || host.ends_with(".b23.tv")
+                    || host == "bilibili.com"
+                    || host.ends_with(".bilibili.com")
+            })
+            .unwrap_or(false)
+}
+
+fn is_final_bilibili_url(url: &url::Url) -> bool {
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .map(|host| {
+                let host = host.to_ascii_lowercase();
+                host == "bilibili.com" || host.ends_with(".bilibili.com")
+            })
+            .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -99,5 +157,21 @@ mod tests {
             parse_media_input("fp789").expect("FP input"),
             ResolvedMedia::Course(789)
         );
+    }
+
+    #[test]
+    fn b23_redirect_policy_only_allows_bilibili_hosts() {
+        assert!(is_allowed_b23_redirect_host(
+            &url::Url::parse("https://b23.tv/BV1xx411c7mD").expect("b23")
+        ));
+        assert!(is_final_bilibili_url(
+            &url::Url::parse("https://www.bilibili.com/video/BV1xx411c7mD").expect("bilibili")
+        ));
+        assert!(!is_final_bilibili_url(
+            &url::Url::parse("http://www.bilibili.com/video/BV1xx411c7mD").expect("http")
+        ));
+        assert!(!is_allowed_b23_redirect_host(
+            &url::Url::parse("https://evil.example/BV1xx411c7mD").expect("evil")
+        ));
     }
 }
