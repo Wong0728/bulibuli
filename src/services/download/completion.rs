@@ -5,6 +5,7 @@
 use crate::models::download_task;
 use crate::services::aria2::Aria2Status;
 use sea_orm::Set;
+use std::time::Instant;
 use tracing::{error, info, warn};
 
 use super::{file_stem_for, DownloadManager};
@@ -26,6 +27,7 @@ impl DownloadManager {
         task: &download_task::Model,
         status: &Aria2Status,
     ) -> CompleteOutcome {
+        let started = Instant::now();
         // 条件更新只允许匹配 generation 的首次完成事件执行副作用。
         match self
             .state_service
@@ -47,8 +49,12 @@ impl DownloadManager {
             }
         }
         info!(
-            "[DownloadManager] 下载完成: {} ({}) 进度 100%",
-            task.bvid, task.task_type
+            operation = "download_complete",
+            bvid = %task.bvid,
+            task_type = %task.task_type,
+            bytes = status.total_size,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "下载完成"
         );
 
         // 获取下载目录与 UP 主 uid（用于 MD5 去重与历史记录）

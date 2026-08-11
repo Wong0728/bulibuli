@@ -1,12 +1,12 @@
 <div class="settings-fragment" aria-label="设置分组">
     <div class="settings-group-switcher" role="toolbar" aria-label="设置分组">
-        <button type="button" class="btn btn-sm" data-settings-group="basic" aria-pressed="true">基础</button>
-        <button type="button" class="btn btn-sm" data-settings-group="downloads" aria-pressed="false">下载</button>
-        <button type="button" class="btn btn-sm" data-settings-group="advanced" aria-pressed="false">高级</button>
-        <button type="button" class="btn btn-sm" data-settings-group="security" aria-pressed="false">安全</button>
+        <button type="button" class="btn btn-sm" data-settings-group="basic" aria-pressed="true" aria-controls="settings-sections">基础</button>
+        <button type="button" class="btn btn-sm" data-settings-group="downloads" aria-pressed="false" aria-controls="settings-sections">下载</button>
+        <button type="button" class="btn btn-sm" data-settings-group="advanced" aria-pressed="false" aria-controls="settings-sections">高级</button>
+        <button type="button" class="btn btn-sm" data-settings-group="security" aria-pressed="false" aria-controls="settings-sections">安全</button>
     </div>
     <p class="form-note settings-fragment-note">设置按用途分组；首次进入默认显示基础设置。</p>
-    <div class="settings-sections">
+    <div class="settings-sections" id="settings-sections">
         <!-- B站账号登录 -->
         <div class="section-collapsible" data-section="account">
             <div class="section-header">

@@ -130,7 +130,7 @@ pub(super) async fn proxy_image(
         &query.url,
         "image/*,*/*;q=0.8",
         false,
-        Some(MAX_IMAGE_BYTES),
+        MAX_IMAGE_BYTES,
     )
     .await?;
     let content_type = image_content_type(response.headers())?;
@@ -168,7 +168,7 @@ pub(super) async fn download_cover(
         &info.pic,
         "image/*,*/*;q=0.8",
         false,
-        Some(MAX_IMAGE_BYTES),
+        MAX_IMAGE_BYTES,
     )
     .await?;
     let content_type = image_content_type(response.headers())?;

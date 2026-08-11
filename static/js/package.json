@@ -2,9 +2,11 @@
   "type": "module",
   "scripts": {
     "build": "esbuild app.js --bundle --minify --outfile=../dist/app.bundle.js",
-    "build:dev": "esbuild app.js --bundle --outfile=../dist/app.bundle.js"
+    "build:dev": "esbuild app.js --bundle --outfile=../dist/app.bundle.js",
+    "test:smoke": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "esbuild": "^0.25.0"
   }
 }

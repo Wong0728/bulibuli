@@ -45,6 +45,8 @@ impl BloggerService {
     /// - 数据库只返回超出保留范围的记录，不加载保留范围内的数据。
     /// - 文件删除失败只 warn，不阻塞 DB 删除。
     pub async fn enforce_retain(&self, uid: &str) -> Result<()> {
+        let validated_uid = crate::services::file_safety::validate_uid(uid)?;
+        let uid = validated_uid.as_str();
         let b = blogger::Entity::find()
             .filter(blogger::Column::Uid.eq(uid))
             .one(&self.db)
@@ -67,7 +69,7 @@ impl BloggerService {
             return Ok(());
         }
 
-        let download_dir = self.paths.download_dir.join(uid);
+        let download_dir = self.paths.download_dir.join(validated_uid.as_str());
         info!(
             "[enforce_retain] 博主 {uid} 保留 {} 条，删除 {} 条",
             retain_limit,

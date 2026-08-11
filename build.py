@@ -308,7 +308,11 @@ def run_quality_checks():
         ],
         ["cargo", "test", "--all-targets"],
     ]
-    frontend_tests = sorted((ROOT / "tests").glob("*.mjs"))
+    # Playwright specs use the same .mjs suffix but are executed by its runner;
+    # keep them out of the dependency-free Node contract test command.
+    frontend_tests = sorted(
+        path for path in (ROOT / "tests").glob("*.mjs") if not path.name.endswith(".spec.mjs")
+    )
     if frontend_tests:
         commands.append(
             ["node", "--test", *(str(path.relative_to(ROOT)) for path in frontend_tests)]

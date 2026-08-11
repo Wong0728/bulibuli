@@ -68,7 +68,7 @@ pub(super) async fn download_proxy(
             .map_err(|e| AppError::Internal(format!("构建拒绝响应失败: {e}")));
     }
 
-    let resp = BiliResourceClient::get(&state, &q.url, "*/*", true, Some(MAX_PROXY_BYTES)).await?;
+    let resp = BiliResourceClient::get(&state, &q.url, "*/*", true, MAX_PROXY_BYTES).await?;
 
     let content_type = resp
         .headers()
