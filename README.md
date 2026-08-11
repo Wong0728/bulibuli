@@ -2,7 +2,9 @@
 
 > 下架之前，先下为敬。
 
-补哩补哩是一个基于 Rust/Axum 的 B 站视频监控、补档下载与直播录制工具。当前 Rust 版本为 v2 Alpha；GitHub `main` 中的 Python 版本保留为 v1 历史版本。
+补哩补哩是一个基于 Rust/Axum 的 B 站视频监控、补档下载与直播录制工具。当前 `main` 是 Rust v2 Alpha 主线；Python v1 仅保留在 `v1-python` 分支、`v1.0` 标签和旧历史中，不属于当前产品。
+
+主线只包含本项目的 Rust 服务、前端、部署脚本、运行资源、测试和文档。外部项目、参考代码和示例目录不属于主线，也不会进入 Release 归档。
 
 ## 快速开始
 
@@ -28,7 +30,7 @@ npm run build
 
 ## 发布版本
 
-Windows 便携版、Linux x86_64 和 macOS Intel/Apple Silicon 归档均通过 GitHub Release 发布。Windows 便携包可直接解压运行，Linux 包包含一键安装脚本。
+`v2.0.0-alpha.1` 是 Rust v2 Alpha 预发布版本，包含 4 个平台归档及其 `.sha256` 校验文件：Windows x86_64、Linux x86_64、macOS Intel 和 macOS Apple Silicon。Windows 便携包可直接解压运行，Linux 包包含一键安装脚本。Release 归档只包含运行所需文件，不包含仓库源码、测试、外部项目或本地数据。
 
 Linux 一键安装：
 
