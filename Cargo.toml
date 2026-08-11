@@ -4,6 +4,7 @@ version = "2.0.0-alpha.1"
 edition = "2021"
 authors = ["Wong0728"]
 description = "补哩补哩（bulibuli）——下架之前，先下为敬。"
+publish = false
 rust-version = "1.85"
 
 [[bin]]
