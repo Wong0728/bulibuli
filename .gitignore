@@ -7,3 +7,5 @@
 *.py[cod]
 clippy_output*.txt
 .codex_*
+# 外部参考项目不属于 bulibuli 主线
+【EXAMPLE】*/
