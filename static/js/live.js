@@ -448,7 +448,13 @@ function interactionMarkup(session) {
             </select>
             <span id="live-events-status" class="live-events-status" role="status">实时互动状态：等待检查</span>
         </div>
-        <div id="live-heat-bar" class="live-heat-bar" aria-label="30 秒弹幕热度"></div>
+        <div class="live-heat-wrap">
+            <div class="live-heat-heading">
+                <span><i class="fa-solid fa-chart-column"></i> 弹幕热度</span>
+                <span>每格 30 秒 · 点击柱体定位到对应互动</span>
+            </div>
+            <div id="live-heat-bar" class="live-heat-bar" aria-label="30 秒弹幕热度"></div>
+        </div>
         <div id="live-event-timeline" class="live-event-timeline"><p class="empty-hint">录制开始后在这里显示互动</p></div>
     `;
 }
@@ -674,9 +680,9 @@ function eventRow(event) {
     const typeLabel = {
         danmaku: '弹幕', gift: '礼物', super_chat: 'SC', guard: '上舰',
         link_mic_pk: '连麦 / PK', interact: '进场', watched: '看过人数',
-        like: '点赞', entry: '进场特效', stats: '统计', system: '系统', unknown: '未识别事件',
-    }[type] || ({ user: '用户互动', stats: '统计', system: '系统', unknown: '未识别事件' }[category] || '事件');
-    const text = type === 'danmaku'
+        like: '点赞', entry: '进场特效', stats: '统计', system: '系统', unknown: '未识别命令',
+    }[type] || event.event_label || ({ user: '用户互动', stats: '统计', system: '系统', unknown: '未识别命令' }[category] || '事件');
+    const text = event.display_text || (type === 'danmaku'
         ? data.text
         : type === 'gift'
             ? `${data.gift_name || '礼物'} ×${data.num || 1}`
@@ -684,21 +690,11 @@ function eventRow(event) {
                 ? `SC ¥${data.price || 0}：${data.message || ''}`
                 : type === 'guard'
                     ? `上舰 等级 ${data.guard_level || '-'}`
-                    : type === 'interact'
-                        ? '进入直播间'
-                        : event.cmd === 'WATCHED_CHANGE'
-                            ? `看过人数：${data.count ?? '--'}`
-                            : event.cmd === 'ONLINE_RANK_V3' || event.cmd === 'ONLINE_RANK_COUNT'
-                                ? '在线榜数据更新'
-                                : event.cmd === 'LIKE_INFO_V3_CLICK'
-                                    ? (data.like_text || '点赞了')
-                                    : event.cmd === 'ENTRY_EFFECT'
-                                        ? String(data.copy_writing || '进场特效').replace(/<%([^%]*)%>/g, '$1')
-                                        : category === 'system'
-                                            ? '系统事件'
-                                            : category === 'unknown'
-                                                ? '未识别事件'
-                                                : '互动事件';
+                    : data.text || (category === 'system'
+                        ? '系统事件'
+                        : category === 'unknown'
+                            ? `未知命令：${event.cmd || '空命令'}`
+                            : '互动事件'));
     return `
         <div class="live-event-row live-event-${escapeHtml(category)}" data-time-ms="${event.media_time_ms || 0}">
             <time>${formatMediaTime(event.media_time_ms)}</time>
@@ -711,10 +707,12 @@ function eventRow(event) {
 
 function eventCategory(event) {
     if (event.event_category) return event.event_category;
-    if (['danmaku', 'gift', 'super_chat', 'guard', 'interact', 'link_mic_pk'].includes(event.event_type)) return 'user';
-    if (event.event_type === 'watched' || ['WATCHED_CHANGE', 'ONLINE_RANK_V3', 'ONLINE_RANK_COUNT', 'LIKE_INFO_V3_UPDATE'].includes(event.cmd)) return 'stats';
-    if (['INTERACT_WORD_V2', 'ENTRY_EFFECT', 'LIKE_INFO_V3_CLICK'].includes(event.cmd)) return 'user';
-    if (event.cmd === 'STOP_LIVE_ROOM_LIST') return 'system';
+    const cmd = String(event.cmd || '').split(':', 1)[0];
+    if (['danmaku', 'gift', 'super_chat', 'guard', 'interact', 'like', 'entry', 'link_mic_pk'].includes(event.event_type)) return 'user';
+    if (['watched', 'stats'].includes(event.event_type) || ['WATCHED_CHANGE', 'ONLINE_RANK_V3', 'ONLINE_RANK_V2', 'ONLINE_RANK_TOP3', 'ONLINE_RANK_COUNT', 'LIKE_INFO_V3_UPDATE', 'ROOM_REAL_TIME_MESSAGE_UPDATE', 'HOT_RANK_CHANGED', 'AREA_RANK_CHANGED'].includes(cmd)) return 'stats';
+    if (['INTERACT_WORD', 'INTERACT_WORD_V2', 'INTERACT_WORD_V3', 'WELCOME', 'WELCOME_GUARD', 'ENTRY_EFFECT', 'LIKE_INFO_V3_CLICK'].includes(cmd)) return 'user';
+    if (['system', 'capture_gap'].includes(event.event_type) || ['LIVE', 'PREPARING', 'ROOM_CHANGE', 'ROOM_LOCK', 'ROOM_BLOCK_MSG', 'ROOM_SILENT_ON', 'ROOM_SILENT_OFF', 'CUT_OFF', 'STOP_LIVE_ROOM_LIST', 'NOTICE_MSG', 'COMMON_NOTICE_DANMAKU', 'WIDGET_BANNER'].includes(cmd)) return 'system';
+    if (['VOICE_JOIN', 'LINK_MIC', 'LIVE_MULTI_VIEW'].some(prefix => cmd.startsWith(prefix)) || cmd.startsWith('PK_')) return 'user';
     return 'unknown';
 }
 
@@ -726,10 +724,19 @@ function renderHeatBar() {
         const index = Math.floor((event.media_time_ms || 0) / 30000);
         buckets[index] = (buckets[index] || 0) + 1;
     });
+    const lastIndex = buckets.length - 1;
+    if (lastIndex < 0) {
+        node.innerHTML = '<span class="live-heat-empty">暂无弹幕热度数据</span>';
+        return;
+    }
     const max = Math.max(1, ...buckets.filter(Boolean));
-    node.innerHTML = buckets.map((count = 0, index) => `
-        <button type="button" class="${count / max > 0.7 ? 'hot ' : ''}live-heat-level-${Math.min(3, Math.ceil((count / max) * 3))}" title="${formatMediaTime(index * 30000)} · ${count} 条弹幕" data-time-ms="${index * 30000}"><i></i></button>
-    `).join('');
+    node.innerHTML = Array.from({ length: lastIndex + 1 }, (_, index) => {
+        const count = buckets[index] || 0;
+        const ratio = count / max;
+        const level = count ? Math.min(3, Math.max(1, Math.ceil(ratio * 3))) : 0;
+        const label = `${formatMediaTime(index * 30000)} · ${count} 条弹幕`;
+        return `<button type="button" class="${ratio > 0.7 ? 'hot ' : ''}live-heat-level-${level}" title="${label}" aria-label="${label}" data-time-ms="${index * 30000}"><i></i></button>`;
+    }).join('');
 }
 
 function selectRoom(roomId, options = {}) {

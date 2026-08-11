@@ -1,5 +1,7 @@
 use super::RecordingInfo;
-use crate::services::danmu_collector::commands::{IncomingLiveCommand, LiveCommand};
+use crate::services::danmu_collector::commands::{
+    is_link_command, IncomingLiveCommand, LiveCommand,
+};
 use crate::services::live_source::CaptureMode;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -528,6 +530,33 @@ fn normalize(command: &LiveCommand, cmd: &str) -> (&'static str, Value, i64) {
             serde_json::to_value(command).unwrap_or(Value::Null),
             0,
         ),
+        LiveCommand::Like { uid, .. } => (
+            "like",
+            serde_json::to_value(command).unwrap_or(Value::Null),
+            *uid,
+        ),
+        LiveCommand::EntryEffect { uid, .. } => (
+            "entry",
+            serde_json::to_value(command).unwrap_or(Value::Null),
+            *uid,
+        ),
+        LiveCommand::Stats { .. } => (
+            "stats",
+            serde_json::to_value(command).unwrap_or(Value::Null),
+            0,
+        ),
+        LiveCommand::System { .. }
+        | LiveCommand::LiveStart { .. }
+        | LiveCommand::LiveEnd { .. } => (
+            "system",
+            serde_json::to_value(command).unwrap_or(Value::Null),
+            0,
+        ),
+        LiveCommand::LinkMicPk { .. } => (
+            "link_mic_pk",
+            serde_json::to_value(command).unwrap_or(Value::Null),
+            0,
+        ),
         _ if is_link_command(cmd) => (
             "link_mic_pk",
             serde_json::to_value(command).unwrap_or(Value::Null),
@@ -539,13 +568,6 @@ fn normalize(command: &LiveCommand, cmd: &str) -> (&'static str, Value, i64) {
             0,
         ),
     }
-}
-
-fn is_link_command(cmd: &str) -> bool {
-    let base = cmd.split(':').next().unwrap_or(cmd);
-    ["VOICE_JOIN", "LINK_MIC", "PK_", "LIVE_MULTI_VIEW"]
-        .iter()
-        .any(|prefix| base.starts_with(prefix))
 }
 
 fn escape_xml(value: &str) -> String {

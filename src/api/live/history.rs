@@ -1,12 +1,15 @@
 use super::{EventsQuery, HistoryQuery};
 use crate::error::{ApiResponse, AppError};
+use crate::services::danmu_collector::commands::{
+    command_base, is_link_command, is_stats_command, is_system_command, system_event_label,
+};
 use crate::services::live_recorder::ArchivedLiveEvent;
 use crate::services::security_config::can_open_directory;
 use crate::state::SharedState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use futures::{stream, StreamExt};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::Path as FsPath;
 
 pub(super) async fn events(
@@ -55,6 +58,8 @@ fn event_view(event: &ArchivedLiveEvent) -> serde_json::Value {
         "event_type": event.event_type,
         "event_category": category,
         "event_visible": category == "user",
+        "event_label": event_label(event),
+        "display_text": event_display_text(event),
         "data": event.data,
         "raw": event.raw,
         "history_backfill": event.history_backfill,
@@ -63,17 +68,207 @@ fn event_view(event: &ArchivedLiveEvent) -> serde_json::Value {
 
 fn event_category(event: &ArchivedLiveEvent) -> &'static str {
     match event.event_type.as_str() {
-        "danmaku" | "gift" | "super_chat" | "guard" | "interact" | "link_mic_pk" => "user",
-        "watched" => "stats",
-        "unknown" => match event.cmd.as_str() {
-            "INTERACT_WORD_V2" | "ENTRY_EFFECT" | "LIKE_INFO_V3_CLICK" => "user",
-            "WATCHED_CHANGE" | "ONLINE_RANK_V3" | "ONLINE_RANK_COUNT" | "LIKE_INFO_V3_UPDATE" => {
+        "danmaku" | "gift" | "super_chat" | "guard" | "interact" | "like" | "entry"
+        | "link_mic_pk" => "user",
+        "watched" | "stats" => "stats",
+        "system" | "capture_gap" => "system",
+        "unknown" => {
+            let cmd = command_base(&event.cmd);
+            if matches!(
+                cmd,
+                "INTERACT_WORD"
+                    | "INTERACT_WORD_V2"
+                    | "INTERACT_WORD_V3"
+                    | "WELCOME"
+                    | "WELCOME_GUARD"
+                    | "ENTRY_EFFECT"
+                    | "LIKE_INFO_V3_CLICK"
+            ) {
+                "user"
+            } else if matches!(cmd, "WATCHED_CHANGE" | "LIKE_INFO_V3_UPDATE")
+                || is_stats_command(cmd)
+            {
                 "stats"
+            } else if matches!(cmd, "LIVE" | "PREPARING")
+                || is_system_command(cmd)
+                || is_link_command(cmd)
+            {
+                if is_link_command(cmd) {
+                    "user"
+                } else {
+                    "system"
+                }
+            } else {
+                "unknown"
             }
-            "STOP_LIVE_ROOM_LIST" => "system",
-            _ => "unknown",
-        },
+        }
         _ => "unknown",
+    }
+}
+
+fn event_payload(event: &ArchivedLiveEvent) -> &Value {
+    event
+        .raw
+        .as_ref()
+        .and_then(|raw| raw.get("data"))
+        .unwrap_or(&event.data)
+}
+
+fn payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        payload
+            .get(*key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+    })
+}
+
+fn payload_i64(payload: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        payload.get(*key).and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+                .or_else(|| value.as_str().and_then(|value| value.parse::<i64>().ok()))
+        })
+    })
+}
+
+fn clean_entry_text(value: String) -> String {
+    let mut result = value;
+    let mut search_from = 0;
+    while let Some(start_rel) = result[search_from..].find("<%") {
+        let start = search_from + start_rel;
+        let Some(end_rel) = result[start + 2..].find("%>") else {
+            break;
+        };
+        let end = start + 2 + end_rel;
+        let inner = result[start + 2..end].to_owned();
+        result.replace_range(start..end + 2, &inner);
+        search_from = start + inner.len();
+    }
+    result
+}
+
+fn event_label(event: &ArchivedLiveEvent) -> &'static str {
+    match event.event_type.as_str() {
+        "danmaku" => "弹幕",
+        "gift" => "礼物",
+        "super_chat" => "SC",
+        "guard" => "上舰",
+        "interact" => "进场互动",
+        "like" => "点赞",
+        "entry" => "进场特效",
+        "link_mic_pk" => "连麦 / PK",
+        "watched" => "看过人数",
+        "stats" => "统计",
+        "system" | "capture_gap" => "系统",
+        "unknown" => match event_category(event) {
+            "user" => "用户互动",
+            "stats" => "统计",
+            "system" => "系统",
+            _ => "未识别命令",
+        },
+        _ => "事件",
+    }
+}
+
+fn event_display_text(event: &ArchivedLiveEvent) -> String {
+    let payload = event_payload(event);
+    let cmd = command_base(&event.cmd);
+    match event.event_type.as_str() {
+        "danmaku" => payload_string(payload, &["text"]).unwrap_or_default(),
+        "gift" => format!(
+            "{} ×{}",
+            payload_string(payload, &["gift_name", "giftName"])
+                .unwrap_or_else(|| "礼物".to_owned()),
+            payload_i64(payload, &["num"]).unwrap_or(1)
+        ),
+        "super_chat" => format!(
+            "SC ¥{}：{}",
+            payload_i64(payload, &["price"]).unwrap_or(0),
+            payload_string(payload, &["message", "text"]).unwrap_or_default()
+        ),
+        "guard" => format!(
+            "上舰 等级 {}",
+            payload_i64(payload, &["guard_level"]).unwrap_or(0)
+        ),
+        "interact" => match payload_i64(payload, &["msg_type"]).unwrap_or(0) {
+            2 => "关注了直播间".to_owned(),
+            3 => "分享了直播间".to_owned(),
+            _ => "进入直播间".to_owned(),
+        },
+        "like" => {
+            payload_string(payload, &["text", "like_text"]).unwrap_or_else(|| "点赞了".to_owned())
+        }
+        "entry" => payload_string(payload, &["text", "copy_writing"])
+            .map(clean_entry_text)
+            .unwrap_or_else(|| "进场特效".to_owned()),
+        "watched" => format!(
+            "看过人数：{}",
+            payload_i64(payload, &["count", "num"]).unwrap_or(0)
+        ),
+        "stats" => payload_string(payload, &["text", "label"])
+            .or_else(|| {
+                (payload_i64(payload, &["value", "count", "num"]).is_some()).then(|| {
+                    format!(
+                        "{}：{}",
+                        event_label(event),
+                        payload_i64(payload, &["value", "count", "num"]).unwrap_or(0)
+                    )
+                })
+            })
+            .unwrap_or_else(|| "统计更新".to_owned()),
+        "system" => {
+            if cmd == "LIVE" {
+                "直播开始".to_owned()
+            } else if cmd == "PREPARING" {
+                "直播结束".to_owned()
+            } else {
+                payload_string(payload, &["text", "message", "msg"])
+                    .unwrap_or_else(|| system_event_label(cmd).to_owned())
+            }
+        }
+        "capture_gap" => format!(
+            "互动采集发生丢失（{} 条）",
+            payload_i64(payload, &["dropped"]).unwrap_or(0)
+        ),
+        "link_mic_pk" => payload_string(payload, &["text", "message", "msg"])
+            .unwrap_or_else(|| format!("连麦 / PK：{cmd}")),
+        "unknown" => {
+            if cmd == "ENTRY_EFFECT" {
+                payload_string(payload, &["copy_writing", "msg", "message"])
+                    .map(clean_entry_text)
+                    .unwrap_or_else(|| "进场特效".to_owned())
+            } else if cmd == "LIKE_INFO_V3_CLICK" {
+                payload_string(payload, &["like_text", "msg", "message"])
+                    .unwrap_or_else(|| "点赞了".to_owned())
+            } else if cmd == "WATCHED_CHANGE" {
+                format!(
+                    "看过人数：{}",
+                    payload_i64(payload, &["num", "count"]).unwrap_or(0)
+                )
+            } else if matches!(cmd, "ONLINE_RANK_V3" | "ONLINE_RANK_COUNT") {
+                "在线榜数据更新".to_owned()
+            } else if cmd == "LIKE_INFO_V3_UPDATE" {
+                "点赞数更新".to_owned()
+            } else if matches!(cmd, "LIVE" | "PREPARING") {
+                if cmd == "LIVE" {
+                    "直播开始"
+                } else {
+                    "直播结束"
+                }
+                .to_owned()
+            } else if is_system_command(cmd) {
+                system_event_label(cmd).to_owned()
+            } else if is_link_command(cmd) {
+                format!("连麦 / PK：{cmd}")
+            } else {
+                format!("未知命令：{}", if cmd.is_empty() { "空命令" } else { cmd })
+            }
+        }
+        _ => "事件更新".to_owned(),
     }
 }
 
@@ -238,5 +433,21 @@ mod event_tests {
             event_view(&event("ONLINE_RANK_V3", "unknown"))["event_visible"],
             false
         );
+    }
+
+    #[test]
+    fn gives_known_legacy_commands_readable_text() {
+        let mut entry = event("ENTRY_EFFECT", "unknown");
+        entry.raw = Some(json!({
+            "cmd": "ENTRY_EFFECT",
+            "data": {"copy_writing": "欢迎 <%用户A%>"}
+        }));
+        assert_eq!(event_category(&entry), "user");
+        assert_eq!(event_label(&entry), "用户互动");
+        assert_eq!(event_display_text(&entry), "欢迎 用户A");
+
+        let unknown = event("SOME_NEW_CMD", "unknown");
+        assert_eq!(event_category(&unknown), "unknown");
+        assert_eq!(event_display_text(&unknown), "未知命令：SOME_NEW_CMD");
     }
 }

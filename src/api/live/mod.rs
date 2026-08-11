@@ -539,7 +539,7 @@ async fn burn_recording_danmaku(
     )))
 }
 
-/// 从直播互动 JSONL 归档提取可烧录条目：弹幕走滚动轨道，SC 走顶部固定轨道。
+/// 从直播互动 JSONL 归档提取可烧录条目：弹幕保留归档中的模式、字号和颜色，SC 走顶部固定轨道。
 async fn load_live_burn_items(events_path: &Path) -> anyhow::Result<Vec<DanmakuItem>> {
     let content = tokio::fs::read_to_string(events_path).await?;
     let mut items = Vec::new();
@@ -571,13 +571,21 @@ async fn load_live_burn_items(events_path: &Path) -> anyhow::Result<Vec<DanmakuI
                 if text.is_empty() {
                     continue;
                 }
+                let source_mode = data.get("mode").and_then(live_json_i64).unwrap_or(1);
+                let (mode, bottom) = live_danmaku_mode(source_mode);
+                let size = data
+                    .get("font_size")
+                    .and_then(live_json_i64)
+                    .unwrap_or(25)
+                    .clamp(1, 100) as i32;
+                let color = live_danmaku_color(data.get("color"));
                 items.push(DanmakuItem {
                     text,
                     time: time_secs,
-                    mode: "R2L".to_string(),
-                    size: 25,
-                    color: "FFFFFF".to_string(),
-                    bottom: false,
+                    mode: mode.to_string(),
+                    size,
+                    color,
+                    bottom,
                 });
             }
             Some("super_chat") => {
@@ -609,6 +617,26 @@ async fn load_live_burn_items(events_path: &Path) -> anyhow::Result<Vec<DanmakuI
         }
     }
     Ok(items)
+}
+
+fn live_json_i64(value: &serde_json::Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_str().and_then(|value| value.parse::<i64>().ok()))
+}
+
+fn live_danmaku_mode(mode: i64) -> (&'static str, bool) {
+    match mode {
+        4 => ("BOTTOM", true),
+        5 => ("TOP", false),
+        _ => ("R2L", false),
+    }
+}
+
+fn live_danmaku_color(value: Option<&serde_json::Value>) -> String {
+    let color = value.and_then(live_json_i64).unwrap_or(0xFFFFFF) & 0xFFFFFF;
+    format!("{color:06X}")
 }
 
 async fn merge_job(
@@ -677,7 +705,7 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let path = dir.join("events.jsonl");
         let content = [
-            r#"{"seq":1,"media_time_ms":1500,"event_type":"danmaku","data":{"text":"你好"}}"#,
+            r#"{"seq":1,"media_time_ms":1500,"event_type":"danmaku","data":{"text":"你好","mode":4,"font_size":33,"color":1122867}}"#,
             r#"{"seq":2,"media_time_ms":3000,"event_type":"super_chat","data":{"uname":"某人","price":30,"message":"唱得好"}}"#,
             r#"{"seq":3,"media_time_ms":4000,"event_type":"gift","data":{"gift_name":"烟花"}}"#,
             r#"{"seq":4,"media_time_ms":5000,"event_type":"danmaku","data":{"text":"   "}}"#,
@@ -689,7 +717,10 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].text, "你好");
         assert!((items[0].time - 1.5).abs() < 1e-9);
-        assert_eq!(items[0].mode, "R2L");
+        assert_eq!(items[0].mode, "BOTTOM");
+        assert_eq!(items[0].size, 33);
+        assert_eq!(items[0].color, "112233");
+        assert!(items[0].bottom);
         assert_eq!(items[1].mode, "TOP");
         assert!(items[1].text.contains("SC ¥30"));
         assert!(items[1].text.contains("唱得好"));
