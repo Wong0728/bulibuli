@@ -72,7 +72,7 @@ url = "2"
 urlencoding = "2"
 ipnet = { version = "2", features = ["serde"] }
 toml = "0.8"
-maxminddb = "0.24"
+maxminddb = "0.30"
 futures = "0.3"
 regex = "1"
 quick-xml = { version = "0.41", features = ["serialize"] }
