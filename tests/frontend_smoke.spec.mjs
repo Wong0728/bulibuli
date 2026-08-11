@@ -114,6 +114,7 @@ test('live schedule switches between all-day and weekly modes', async ({ page })
 
 test('drawer gates directory access and reports open-directory failure', async ({ page }) => {
     await openApp(page, { canOpenDirectory: false });
+    await page.locator('.nav-tab[data-tab="history"]').click();
     const card = page.locator(`[data-action="open-video"][data-bvid="${bvid}"]`);
     await expect(card).toBeVisible();
     await card.click();
@@ -124,6 +125,7 @@ test('drawer gates directory access and reports open-directory failure', async (
 
 test('directory capability allows the action and surfaces backend errors', async ({ page }) => {
     await openApp(page, { canOpenDirectory: true });
+    await page.locator('.nav-tab[data-tab="history"]').click();
     await page.locator(`[data-action="open-video"][data-bvid="${bvid}"]`).click();
     const button = page.locator('#video-drawer [data-action="open-history-directory"]');
     await expect(button).toHaveCount(1);
