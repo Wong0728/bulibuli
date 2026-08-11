@@ -256,9 +256,9 @@ export async function loadDrawerComments(bvid, path = '') {
             container.innerHTML = `<div class="drawer-comments-list">${data.comments.map(renderDrawerCommentCard).join('')}</div>`;
             return;
         }
-        // 兼容旧 TXT
+        // 旧 TXT 只作为本地产物保留，不在前端展开原始文本。
         if (data.content) {
-            container.innerHTML = `<pre class="drawer-comments-text">${escapeHtml(data.content)}</pre>`;
+            container.innerHTML = `<div class="drawer-comments-hint"><i class="fa-solid fa-file-lines"></i>该评论版本为原始文本，前端不提供直接查看</div>`;
             return;
         }
         container.innerHTML = `<div class="drawer-comments-hint"><i class="fa-solid fa-comment-slash"></i> 暂无评论内容</div>`;
@@ -267,7 +267,7 @@ export async function loadDrawerComments(bvid, path = '') {
     }
 }
 
-/// 加载并展示指定弹幕文件。JSON 以时间轴列表显示，XML/TXT 使用只读文本。
+/// 加载并展示指定弹幕文件。结构化 JSON 以时间轴列表显示，XML/TXT 不展开原始文本。
 export async function loadDrawerDanmaku(bvid, path) {
     const container = document.getElementById('drawer-sidecar-viewer');
     if (!container || !path) return;
@@ -292,10 +292,7 @@ export async function loadDrawerDanmaku(bvid, path) {
             `;
             return;
         }
-        container.innerHTML = `
-            <div class="drawer-sidecar-result-title"><span>弹幕文件</span><span>${escapeHtml(path)}</span></div>
-            <pre class="drawer-comments-text">${escapeHtml(data.content || '')}</pre>
-        `;
+        container.innerHTML = `<div class="drawer-comments-hint"><i class="fa-solid fa-file-lines"></i>该弹幕版本为原始文本，前端不提供直接查看</div>`;
     } catch (e) {
         container.innerHTML = `<div class="drawer-comments-hint">弹幕暂不可用</div>`;
     }
@@ -574,7 +571,7 @@ export function renderSeasonResolveResult(result, mediaType) {
             <div class="drawer-preview">
                 ${thumbUrl ? `<img src="${thumbUrl}" alt="" data-image-error="remove">` : ''}
             </div>
-            <div class="drawer-info-row" style="margin-top: 12px;">
+            <div class="drawer-info-row drawer-info-row-spaced">
                 <div class="drawer-info-item">
                     <span class="drawer-info-label">类型</span>
                     <span class="drawer-info-value">${typeLabel}</span>
@@ -589,7 +586,7 @@ export function renderSeasonResolveResult(result, mediaType) {
                 </div>
             </div>
 
-            <div class="drawer-section" style="margin-top: 16px;">
+            <div class="drawer-section drawer-section-spaced">
                 <div class="drawer-section-title">画质选择</div>
                 <div class="quality-pills" id="quality-pills-container">
                     ${qualityPills}

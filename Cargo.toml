@@ -17,7 +17,7 @@ tokio-util = { version = "0.7", features = ["rt", "io"] }
 
 # Web framework
 axum = { version = "0.8" }
-tower-http = { version = "0.7", features = ["cors", "fs", "trace"] }
+tower-http = { version = "0.7", features = ["fs"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

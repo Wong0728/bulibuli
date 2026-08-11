@@ -12,3 +12,29 @@
     outline: 2px solid var(--brand);
     outline-offset: 2px;
 }
+
+.settings-local-docs {
+    padding-left: 1.25rem;
+    margin: .5rem 0;
+    font-size: .85rem;
+    color: var(--text-secondary);
+    line-height: 1.8;
+}
+
+.settings-ai-skill-path {
+    margin-top: .75rem;
+}
+
+.settings-foundation-summary {
+    margin-top: .5rem;
+}
+
+.settings-path-preview {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+}
+
+.settings-ai-skill-note {
+    margin-top: .25rem;
+}

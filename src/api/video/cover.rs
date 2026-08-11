@@ -6,6 +6,7 @@ use axum::Json;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::Path;
 use tokio::io::AsyncWriteExt;
 
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
@@ -59,6 +60,54 @@ fn image_content_type(headers: &reqwest::header::HeaderMap) -> Result<String, Ap
         )));
     }
     Ok(content_type)
+}
+
+async fn remove_temp_file(path: &Path) {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "清理封面临时文件失败");
+        }
+    }
+}
+
+async fn save_image_stream<S>(
+    stream: S,
+    temp_path: &Path,
+    target_path: &Path,
+) -> Result<u64, AppError>
+where
+    S: futures::Stream<Item = Result<axum::body::Bytes, AppError>>,
+{
+    let write_result = async {
+        let mut file = tokio::fs::File::create(temp_path).await?;
+        let mut stream = std::pin::pin!(stream);
+        let mut written = 0_u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            written = written.saturating_add(chunk.len() as u64);
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+        Ok::<_, AppError>(written)
+    }
+    .await;
+
+    let written = match write_result {
+        Ok(written) => written,
+        Err(error) => {
+            remove_temp_file(temp_path).await;
+            return Err(error);
+        }
+    };
+
+    if let Err(error) = crate::services::file_safety::atomic_replace(temp_path, target_path).await {
+        remove_temp_file(temp_path).await;
+        return Err(error);
+    }
+
+    Ok(written)
 }
 
 #[derive(Deserialize)]
@@ -137,22 +186,9 @@ pub(super) async fn download_cover(
     tokio::fs::create_dir_all(&download_dir).await?;
     let filename = format!("{bvid}_cover.{extension}");
     let filepath = download_dir.join(&filename);
-    let mut file = tokio::fs::File::create(&filepath).await?;
-    let mut stream = response.bytes_stream();
-    let mut written = 0_u64;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        written += chunk.len() as u64;
-        if written > MAX_IMAGE_BYTES {
-            drop(file);
-            if let Err(error) = tokio::fs::remove_file(&filepath).await {
-                tracing::warn!(%error, path = %filepath.display(), "清理超限封面失败");
-            }
-            return Err(AppError::BadRequest("封面大小超过 20 MiB 限制".to_string()));
-        }
-        file.write_all(&chunk).await?;
-    }
-    file.flush().await?;
+    let temp_path = download_dir.join(format!(".{filename}.{}.downloading", uuid::Uuid::new_v4()));
+    let stream = limit_image_stream(response.bytes_stream(), MAX_IMAGE_BYTES);
+    let written = save_image_stream(stream, &temp_path, &filepath).await?;
     Ok(Json(ApiResponse::with_message(
         json!({
             "filename": filename,
@@ -190,5 +226,90 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert!(chunks[0].is_ok());
         assert!(chunks[1].is_err());
+    }
+
+    #[tokio::test]
+    async fn saves_cover_atomically_without_existing_target() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("cover.jpg");
+        let temp = dir.path().join(".cover.jpg.downloading");
+        let stream = futures::stream::iter(vec![Ok::<_, AppError>(
+            axum::body::Bytes::from_static(b"new cover"),
+        )]);
+
+        let written = save_image_stream(stream, &temp, &target)
+            .await
+            .expect("save cover");
+
+        assert_eq!(written, 9);
+        assert_eq!(
+            tokio::fs::read(&target).await.expect("read target"),
+            b"new cover"
+        );
+        assert!(!temp.exists());
+    }
+
+    #[tokio::test]
+    async fn stream_failure_preserves_existing_cover_and_cleans_temp() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("cover.jpg");
+        let temp = dir.path().join(".cover.jpg.downloading");
+        tokio::fs::write(&target, b"old cover")
+            .await
+            .expect("write old cover");
+        let stream = futures::stream::iter(vec![
+            Ok::<_, AppError>(axum::body::Bytes::from_static(b"partial")),
+            Err(AppError::BadRequest("simulated read failure".to_string())),
+        ]);
+
+        assert!(save_image_stream(stream, &temp, &target).await.is_err());
+        assert_eq!(
+            tokio::fs::read(&target).await.expect("read target"),
+            b"old cover"
+        );
+        assert!(!temp.exists());
+    }
+
+    #[tokio::test]
+    async fn oversized_cover_preserves_existing_cover_and_cleans_temp() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("cover.jpg");
+        let temp = dir.path().join(".cover.jpg.downloading");
+        tokio::fs::write(&target, b"old cover")
+            .await
+            .expect("write old cover");
+        let stream = futures::stream::iter(vec![
+            Ok::<_, reqwest::Error>(axum::body::Bytes::from_static(b"123")),
+            Ok::<_, reqwest::Error>(axum::body::Bytes::from_static(b"456")),
+        ]);
+        let stream = limit_image_stream(stream, 5);
+
+        assert!(save_image_stream(stream, &temp, &target).await.is_err());
+        assert_eq!(
+            tokio::fs::read(&target).await.expect("read target"),
+            b"old cover"
+        );
+        assert!(!temp.exists());
+    }
+
+    #[tokio::test]
+    async fn replacement_failure_cleans_temp_and_preserves_existing_cover() {
+        let target_dir = tempfile::tempdir().expect("target dir");
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let target = target_dir.path().join("cover.jpg");
+        let temp = temp_dir.path().join(".cover.jpg.downloading");
+        tokio::fs::write(&target, b"old cover")
+            .await
+            .expect("write old cover");
+        let stream = futures::stream::iter(vec![Ok::<_, AppError>(
+            axum::body::Bytes::from_static(b"new cover"),
+        )]);
+
+        assert!(save_image_stream(stream, &temp, &target).await.is_err());
+        assert_eq!(
+            tokio::fs::read(&target).await.expect("read target"),
+            b"old cover"
+        );
+        assert!(!temp.exists());
     }
 }

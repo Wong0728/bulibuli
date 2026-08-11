@@ -128,5 +128,7 @@ async fn bind_setup_port(start_port: u16) -> anyhow::Result<tokio::net::TcpListe
             }
         }
     }
-    Err(anyhow::anyhow!("Setup 端口 {start_port} 起连续 10 个端口均不可用"))
+    Err(anyhow::anyhow!(
+        "Setup 端口 {start_port} 起连续 10 个端口均不可用"
+    ))
 }

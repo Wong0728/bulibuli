@@ -21,6 +21,11 @@ pub enum AccessMode {
     Proxy,
 }
 
+/// 文件夹打开只对运行服务的本机有意义；远程访问只能复制/显示安全路径。
+pub fn can_open_directory(mode: &AccessMode) -> bool {
+    matches!(mode, AccessMode::Local)
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AccessAction {
@@ -115,6 +120,11 @@ impl SecurityConfig {
                 "受信任 FFmpeg 路径必须是绝对路径".to_string(),
             ));
         }
+        if self.auth_bypass_ips.iter().any(|ip| ip.is_unspecified()) {
+            return Err(AppError::Config(
+                "auth_bypass_ips 不能包含未指定地址".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -181,6 +191,12 @@ impl SecurityConfigService {
             config
         };
         config.validate()?;
+        if !config.auth_bypass_ips.is_empty() {
+            tracing::warn!(
+                count = config.auth_bypass_ips.len(),
+                "auth_bypass_ips 已启用：仅明确列出的客户端 IP 跳过认证，不等同于可信网络"
+            );
+        }
         let builtin_geo_db = locate_builtin_geo_db(app_root);
         if let Some(builtin) = builtin_geo_db.as_ref() {
             tracing::info!(
@@ -382,6 +398,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn directory_open_is_local_only() {
+        assert!(can_open_directory(&AccessMode::Local));
+        assert!(!can_open_directory(&AccessMode::Lan));
+        assert!(!can_open_directory(&AccessMode::Proxy));
+    }
+
+    #[test]
     fn most_specific_rule_wins() {
         let config = SecurityConfig {
             access_rules: vec![
@@ -408,5 +431,19 @@ mod tests {
             config.client_allowed("10.9.9.9".parse().expect("ip")),
             (false, false)
         );
+    }
+
+    #[test]
+    fn auth_bypass_ips_reject_unspecified_addresses() {
+        let mut config = SecurityConfig::default();
+        assert!(config.auth_bypass_ips.is_empty());
+        assert!(config.validate().is_ok());
+
+        config.auth_bypass_ips = vec!["192.0.2.10".parse().expect("ip")];
+        assert!(config.validate().is_ok());
+        assert!(config.should_bypass_auth("192.0.2.10".parse().expect("ip")));
+
+        config.auth_bypass_ips = vec!["0.0.0.0".parse().expect("ip")];
+        assert!(config.validate().is_err());
     }
 }

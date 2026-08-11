@@ -543,7 +543,7 @@ function renderHistoryBoard(items) {
             <div class="live-recording-actions">
                 ${item.is_recoverable ? `<button class="btn btn-sm btn-primary" data-action="history-merge" data-recording-id="${item.id}" ${liveState.mergePending.has(item.id) ? 'disabled' : ''}>${liveState.mergePending.has(item.id) ? '创建中...' : '重试合并'}</button>` : ''}
                 ${burnButton}
-                ${item.has_output ? `<button class="btn btn-sm btn-ghost" data-action="history-open" data-recording-id="${item.id}">打开目录</button>` : ''}
+                ${liveState.dashboard?.can_open_directory && item.has_output ? `<button class="btn btn-sm btn-ghost" data-action="history-open" data-recording-id="${item.id}">打开目录</button>` : ''}
             </div>
         </div>`;
     }).join('');
@@ -564,7 +564,7 @@ function renderAttentionBoard(jobs, recovery) {
             </div>
             <div class="live-recording-actions">
                 <progress class="live-progress" max="100" value="${job.progress || 0}"></progress>
-                <span style="font-size:12px">${job.progress || 0}%</span>
+                <span class="live-progress-text">${job.progress || 0}%</span>
                 <button class="btn btn-sm btn-ghost" data-action="merge-cancel" data-job-id="${escapeHtml(job.id)}" ${job.cancel_requested ? 'disabled' : ''}>取消</button>
             </div>
         </div>`);
@@ -576,7 +576,7 @@ function renderAttentionBoard(jobs, recovery) {
             </div>
             <div class="live-recording-actions">
                 <button class="btn btn-sm btn-primary" data-action="history-merge" data-recording-id="${item.recording_id}" ${liveState.mergePending.has(item.recording_id) ? 'disabled' : ''}>${liveState.mergePending.has(item.recording_id) ? '创建中...' : '重试合并'}</button>
-                ${item.has_output ? `<button class="btn btn-sm btn-ghost" data-action="history-open" data-recording-id="${item.recording_id}">打开目录</button>` : ''}
+                ${liveState.dashboard?.can_open_directory && item.has_output ? `<button class="btn btn-sm btn-ghost" data-action="history-open" data-recording-id="${item.recording_id}">打开目录</button>` : ''}
             </div>
         </div>`);
     node.innerHTML = [...jobRows, ...recoveryRows].join('');
@@ -728,7 +728,7 @@ function renderHeatBar() {
     });
     const max = Math.max(1, ...buckets.filter(Boolean));
     node.innerHTML = buckets.map((count = 0, index) => `
-        <button type="button" class="${count / max > 0.7 ? 'hot' : ''}" title="${formatMediaTime(index * 30000)} · ${count} 条弹幕" style="--heat:${count / max}" data-time-ms="${index * 30000}"><i></i></button>
+        <button type="button" class="${count / max > 0.7 ? 'hot ' : ''}live-heat-level-${Math.min(3, Math.ceil((count / max) * 3))}" title="${formatMediaTime(index * 30000)} · ${count} 条弹幕" data-time-ms="${index * 30000}"><i></i></button>
     `).join('');
 }
 
@@ -964,10 +964,29 @@ function writeScheduleToEditor(schedule = {}) {
     });
 }
 
-function toggleScheduleEditor() {
-    const allDay = document.getElementById('live-source-all-day').checked;
+function isAllDayScheduleMode() {
+    return document.querySelector('input[name="live-source-schedule-mode"]:checked')?.value === 'all-day';
+}
+
+function setScheduleMode(mode) {
+    const input = document.querySelector(`input[name="live-source-schedule-mode"][value="${mode}"]`);
+    if (input) input.checked = true;
+}
+
+function clearScheduleEditor() {
+    document.querySelectorAll('#live-weekly-schedule input[type="time"]').forEach(input => {
+        input.value = '';
+    });
+}
+
+function toggleScheduleEditor({ clear = false } = {}) {
+    const allDay = isAllDayScheduleMode();
+    if (allDay && clear) clearScheduleEditor();
     document.querySelectorAll('#live-weekly-schedule input[type="time"]').forEach(input => {
         input.disabled = allDay;
+    });
+    document.querySelectorAll('#live-weekly-schedule .live-schedule-clear').forEach(button => {
+        button.disabled = allDay;
     });
     updateScheduleValidation();
 }
@@ -975,7 +994,7 @@ function toggleScheduleEditor() {
 function updateScheduleValidation() {
     const errorNode = document.getElementById('live-schedule-error');
     if (!errorNode) return;
-    const allDay = document.getElementById('live-source-all-day')?.checked;
+    const allDay = isAllDayScheduleMode();
     if (allDay) {
         errorNode.textContent = '';
         return;
@@ -985,7 +1004,11 @@ function updateScheduleValidation() {
 
 function buildScheduleEditor() {
     const node = document.getElementById('live-weekly-schedule');
-    node.innerHTML = weekdays.map(([key, label]) => `
+    node.innerHTML = `
+        <div class="live-schedule-header" aria-hidden="true">
+            <span>星期</span><span>时段 1</span><span>时段 2</span>
+        </div>
+        ${weekdays.map(([key, label]) => `
         <div class="live-schedule-day" data-day="${key}">
             <span>${label}</span>
             ${[0, 1].map(index => `
@@ -997,7 +1020,7 @@ function buildScheduleEditor() {
                         <i class="fa-solid fa-xmark"></i>
                     </button>
                 </div>`).join('')}
-        </div>`).join('');
+        </div>`).join('')}`;
 }
 
 function openSettingsModal(roomId) {
@@ -1008,7 +1031,7 @@ function openSettingsModal(roomId) {
     document.getElementById('live-source-auto').checked = source.auto_record_enabled;
     document.getElementById('live-source-mode').value = source.capture_mode || 'standard';
     document.getElementById('live-source-quality').value = String(source.max_qn || 10000);
-    document.getElementById('live-source-all-day').checked = source.schedule_all_day;
+    setScheduleMode(source.schedule_all_day ? 'all-day' : 'weekly');
     writeScheduleToEditor(source.weekly_schedule || {});
     toggleScheduleEditor();
     const dashboard = liveState.dashboard;
@@ -1024,7 +1047,7 @@ function closeSettingsModal() {
 
 async function saveSource() {
     const roomId = Number(document.getElementById('live-source-room-id').value);
-    const allDay = document.getElementById('live-source-all-day').checked;
+    const allDay = isAllDayScheduleMode();
     const autoEnabled = document.getElementById('live-source-auto').checked;
     const schedule = readScheduleFromEditor();
     if (!allDay) {
@@ -1039,10 +1062,11 @@ async function saveSource() {
                 { title: '排期为空', okText: '改为全天', danger: false },
             );
             if (!confirmed) return;
-            document.getElementById('live-source-all-day').checked = true;
+            setScheduleMode('all-day');
+            toggleScheduleEditor({ clear: true });
         }
     }
-    const finalAllDay = document.getElementById('live-source-all-day').checked;
+    const finalAllDay = isAllDayScheduleMode();
     try {
         await apiPost('/api/live/source/update', {
             room_id: roomId,
@@ -1092,7 +1116,9 @@ function initLiveTab() {
     document.getElementById('live-settings-close-btn')?.addEventListener('click', closeSettingsModal);
     document.getElementById('live-settings-cancel-btn')?.addEventListener('click', closeSettingsModal);
     document.getElementById('live-source-save')?.addEventListener('click', saveSource);
-    document.getElementById('live-source-all-day')?.addEventListener('change', toggleScheduleEditor);
+    document.querySelectorAll('input[name="live-source-schedule-mode"]').forEach(input => {
+        input.addEventListener('change', () => toggleScheduleEditor({ clear: isAllDayScheduleMode() }));
+    });
     document.getElementById('live-weekly-schedule')?.addEventListener('input', event => {
         if (event.target.matches('input[type="time"]')) updateScheduleValidation();
     });

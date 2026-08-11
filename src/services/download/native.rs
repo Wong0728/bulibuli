@@ -70,11 +70,12 @@ pub(super) struct NativeDownloader {
 }
 
 impl NativeDownloader {
-    pub fn new(_tls_verify: bool) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         // 流式下载不能设总超时（大文件必然超）；用连接超时 + 读超时兜住停滞连接，
         // 与 aria2 使用相同的连接和停滞超时。
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .danger_accept_invalid_certs(false)
             .connect_timeout(Duration::from_secs(20))
             .read_timeout(Duration::from_secs(30))
             .build()

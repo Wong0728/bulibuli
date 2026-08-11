@@ -36,7 +36,7 @@ impl DownloadManager {
             warn!("Aria2 初始化失败，将保留原生下载兜底: {error}");
         }
         let max_parallel = settings.parallel_download.max_parallel;
-        let native = super::native::NativeDownloader::new(config.tls_verify)?;
+        let native = super::native::NativeDownloader::new()?;
 
         Ok(Self {
             config,

@@ -408,11 +408,21 @@
                     </select>
                     <div class="form-note">实际清晰度受账号权限限制可能被 B 站降级，录制卡片会显示实际拿到的清晰度。</div>
                 </div>
-                <div class="form-group form-full">
-                    <label><input type="checkbox" id="live-source-all-day"> 全天允许自动开始（勾选后忽略下方周排期）</label>
+                <div class="form-group form-full live-schedule-mode-group">
+                    <label><i class="fa-solid fa-calendar-week"></i> 自动录制时间策略</label>
+                    <div class="live-schedule-mode" role="radiogroup" aria-label="自动录制时间策略">
+                        <label class="live-schedule-mode-option">
+                            <input type="radio" name="live-source-schedule-mode" value="all-day" id="live-source-schedule-all-day">
+                            <span><strong>全天允许</strong><small>开播后随时自动开始</small></span>
+                        </label>
+                        <label class="live-schedule-mode-option">
+                            <input type="radio" name="live-source-schedule-mode" value="weekly" id="live-source-schedule-weekly">
+                            <span><strong>按周排期</strong><small>只在下方时间窗口内自动开始</small></span>
+                        </label>
+                    </div>
                 </div>
                 <div class="form-group form-full">
-                    <label><i class="fa-solid fa-calendar-week"></i> 自动录制周排期（每天最多 2 个时段，支持跨天如 22:00-02:00）</label>
+                    <label><i class="fa-solid fa-calendar-week"></i> 自动录制周排期 <span class="form-label-muted">每天最多 2 个时段，支持跨天如 22:00-02:00</span></label>
                     <div class="live-tz-note" id="live-tz-note">排期按服务器时区生效，正在获取服务器时间…</div>
                     <div id="live-weekly-schedule" class="live-schedule-grid"></div>
                     <div class="live-schedule-error" id="live-schedule-error" role="alert"></div>

@@ -47,3 +47,4 @@ bilibili-uid-buildownloader ctl trust ffmpeg /absolute/path/ffmpeg
 `lan` 使用 HTTP，不具备链路加密，只适合可信局域网。应用内 IP/CIDR 规则是请求级访问控制，不能代替主机防火墙，也不能保护家庭公网带宽免受 DDoS。
 
 Cloudflare 应设为 DNS-only（灰云）。这种模式不会提供 Cloudflare WAF/DDoS 代理保护；若源站有 IPv6 DNS 记录，源 IPv6 也会公开。应同时配置主机防火墙，只开放 Caddy 的 HTTPS 端口。
+如确需在受控部署中跳过会话认证，只配置 `security.toml` 的 `auth_bypass_ips` 明确单个客户端 IP。该字段不接受 CIDR，默认为空；不要填入 `0.0.0.0`、`::` 等未指定地址，也不要把它理解为可信网络。服务启动时会对非空配置打印高风险告警；反向代理场景还必须确认 `X-Forwarded-For` 的来源可信。
