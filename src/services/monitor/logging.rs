@@ -16,8 +16,8 @@ use super::{MonitorService, LOG_CLEANUP_INTERVAL};
 impl MonitorService {
     /// 日志查询（供 /api/logs/* 使用，API 层禁止直连数据库）。
     /// - `bvid=Some`：按 bvid 过滤（抽屉"日志"区）
-    /// - `uid=Some`：按博主 uid 过滤
-    /// - 两者皆 None：全局日志（uid IS NULL）
+    /// - `uid=Some`：按博主 UID 过滤。
+    /// - 两者皆 None：全局日志（uid IS NULL）。
     ///
     /// 结果按创建时间倒序（最新在前）。
     pub async fn query_logs(

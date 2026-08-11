@@ -129,7 +129,7 @@ impl Default for QrcodePollData {
     }
 }
 
-/// 扫码轮询结果（域模型：附带从响应头收集的登录 cookies）。
+/// 扫码轮询结果（域模型：附带从响应头收集的登录 Cookie）。
 #[derive(Debug, Clone, Default)]
 pub struct QrcodePoll {
     pub code: i64,

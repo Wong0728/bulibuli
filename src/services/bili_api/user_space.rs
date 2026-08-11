@@ -17,7 +17,7 @@ impl BiliApi {
     /// 获取投稿列表的指定页。监控服务用它向后扫描直到命中检查点，
     /// 避免仅查询"最新 N 条"时在高频投稿期间漏档。
     ///
-    /// 内置 30 秒 TTL 内存缓存：相同 (uid, page, page_size) 的查询在缓存有效期内
+    /// 内置 30 秒 TTL 内存缓存：相同 (UID, page, page_size) 的查询在缓存有效期内
     /// 直接返回，避免短时间内重复发起 HTTP 请求。
     pub async fn get_user_videos_page(
         &self,
@@ -46,7 +46,7 @@ impl BiliApi {
 
         let enriched = self.enrich_cookies(cookies).await?;
 
-        // B站投稿列表 ps 上限为 50，超出会被截断或返回 -400；钳制到合法区间并显式分页
+        // B 站投稿列表 ps 上限为 50，超出会被截断或返回 -400；钳制到合法区间并显式分页。
         let ps = page_size.clamp(1, 50);
         let (img_key, sub_key) = self.get_wbi_keys(&enriched).await?;
         let mut params = HashMap::new();
@@ -81,7 +81,7 @@ impl BiliApi {
         // 写入缓存
         {
             let mut cache = self.video_list_cache.write().await;
-            // 顺便清理过期条目，避免缓存无限膨胀（只清理当前 key 同 uid 的过期项）
+            // 顺便清理过期条目，避免缓存无限膨胀（只清理当前 key 同 UID 的过期项）。
             cache.retain(|_, (_, fetched_at)| fetched_at.elapsed() < VIDEO_LIST_CACHE_TTL);
             cache.insert(cache_key, (result.clone(), std::time::Instant::now()));
         }

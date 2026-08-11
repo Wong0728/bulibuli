@@ -106,7 +106,7 @@ impl MonitorService {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        // === 充电/付费前置校验 ===
+        // --- 充电/付费前置校验 ---
         // 入口前先调 get_video_info，检查 rights/state/is_upower_* 字段；命中以下任一条件则不入队、直接落 history：
         // - state == -100（用户删除）→ state='removed', pay_note='state_deleted'
         // - state in (-1, -6)（审核中/修复审核中）→ state='pay_blocked', pay_note='state_under_review'

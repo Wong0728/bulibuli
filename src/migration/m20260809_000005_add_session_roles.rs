@@ -1,17 +1,15 @@
 use sea_orm::{ConnectionTrait, Statement};
 use sea_orm_migration::prelude::*;
 
-/// Adds RBAC to existing installations.  Existing paired devices intentionally
-/// become owners so an upgrade cannot lock the administrator out.
+/// 为现有安装添加 RBAC。已配对设备会被设为 Owner，避免升级后管理员被锁在系统外。
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // SQLite has no portable `ADD COLUMN IF NOT EXISTS`.  `table_info` is
-        // stable across the supported SQLite versions and keeps this migration
-        // idempotent for databases created by a development build.
+        // SQLite 没有可移植的 `ADD COLUMN IF NOT EXISTS`。`table_info` 在支持的 SQLite
+        // 版本中保持稳定，可让此迁移对开发版本创建的数据库保持幂等。
         let rows = manager
             .get_connection()
             .query_all_raw(Statement::from_string(

@@ -1,4 +1,4 @@
-//! aria2 任务投递：并发闸门、cookies 富化与 aria2 选项组装。
+//! aria2 任务投递：并发闸门、Cookie 富化与 aria2 选项组装。
 
 use crate::services::cdn_registry::is_mcdn_url;
 use crate::services::concurrency_gate::ConcurrencyPermit;
@@ -53,7 +53,7 @@ impl DownloadManager {
         ensure_disk_space(dir, None).await?;
 
         // CDN 过滤：如果 URL 来自劣质 MCDN/PCDN 节点，记录警告但不阻塞下载
-        // （B站有时只返回单个 URL，无法换源，只能记录并依赖 aria2 重试）
+        // （B 站有时只返回单个 URL，无法换源，只能记录并依赖 aria2 重试）。
         if is_mcdn_url(url) {
             warn!(
                 "[CDN] {bvid} 使用了劣质 MCDN/PCDN 节点: {}...。\
@@ -70,9 +70,9 @@ impl DownloadManager {
         );
         headers.insert("Origin".to_string(), "https://www.bilibili.com".to_string());
 
-        // 富化 cookies：合并设备指纹（buvid3/bili_ticket/...），
-        // 否则 B站 CDN 会以 403/-799 风控拒绝 m4s/m4a 下载。
-        // enrich 失败时降级为原始 cookies，避免阻塞下载（会记录 warn 便于排查）。
+        // 富化 Cookie：合并设备指纹（buvid3/bili_ticket/...）。
+        // 否则 B 站 CDN 会以 403/-799 风控拒绝 m4s/m4a 下载。
+        // enrich 失败时降级为原始 Cookie，避免阻塞下载（会记录 warn 便于排查）。
         let enriched_cookies = match self.bili_api.enrich_cookies_public(cookies).await {
             Ok(c) => c,
             Err(e) => {

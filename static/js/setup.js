@@ -1,4 +1,4 @@
-//! Setup 向导交互逻辑
+// Setup 向导交互逻辑。
 
 const API_BASE = window.location.origin;
 
@@ -64,7 +64,7 @@ function formatHost(ip) {
     return value.includes(':') ? `[${value}]` : value;
 }
 
-// ===== Step 1: 使用场景选择 =====
+// --- 第 1 步：使用场景选择 ---
 function initStep1() {
     const cards = document.querySelectorAll('.scene-card[data-scene]');
     const remoteCards = document.querySelectorAll('.scene-card[data-remote]');
@@ -121,7 +121,7 @@ function initStep1() {
     });
 }
 
-// ===== Step 2: 场景配置 =====
+// --- 第 2 步：场景配置 ---
 function initStep2() {
     document.getElementById('step2-back').addEventListener('click', () => goToStep(1));
     document.getElementById('step2-next').addEventListener('click', applySetup);
@@ -244,7 +244,7 @@ async function applySetup() {
     }
 }
 
-// ===== Step 3: 完成 =====
+// --- 第 3 步：完成 ---
 function initStep3() {
     const aiToggle = document.getElementById('ai-skill-toggle');
     const skillSection = document.getElementById('skill-path-section');
@@ -352,7 +352,7 @@ function showSummary(scene, result = {}) {
     }
 }
 
-// ===== 工具函数 =====
+// --- 工具函数 ---
 function goToStep(step) {
     // 更新步骤面板
     document.querySelectorAll('.step-panel').forEach(panel => panel.classList.remove('active'));

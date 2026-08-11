@@ -466,11 +466,8 @@ fn draw_web_mode(
         ),
     ]);
     frame.render_widget(
-        Paragraph::new(status_line).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" B站视频监控助手 "),
-        ),
+        Paragraph::new(status_line)
+            .block(Block::default().borders(Borders::ALL).title(" 补哩补哩 ")),
         status_area,
     );
 

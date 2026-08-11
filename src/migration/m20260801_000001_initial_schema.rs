@@ -4,15 +4,14 @@ use sea_orm_migration::prelude::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-///  consolidated initial schema — replaces all 11 legacy hand-written migrations
-/// (001–011) and 13 incremental SeaORM migrations with a single `up()` that builds
-/// the complete final database state from scratch.
+/// 合并后的初始 schema：用单个 `up()` 从零构建最终数据库状态，
+/// 替代 11 个旧手写迁移（001–011）和 13 个增量 SeaORM 迁移。
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let conn = manager.get_connection();
 
-        // ── 1. bloggers ──────────────────────────────────────────────────
+        // --- 1. bloggers ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS bloggers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +44,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // ── 2. history ───────────────────────────────────────────────────
+        // --- 2. history ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +81,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // ── 3. download_tasks ────────────────────────────────────────────
+        // --- 3. download_tasks ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS download_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +118,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // ── 4. settings ──────────────────────────────────────────────────
+        // --- 4. settings ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY NOT NULL,
@@ -129,7 +128,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // ── 5. logs ──────────────────────────────────────────────────────
+        // --- 5. logs ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,7 +141,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // ── 6. auth_sessions ─────────────────────────────────────────────
+        // --- 6. auth_sessions ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS auth_sessions (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -164,7 +163,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // ── 7. protected_secrets ─────────────────────────────────────────
+        // --- 7. protected_secrets ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS protected_secrets (
                 key TEXT PRIMARY KEY NOT NULL,
@@ -174,7 +173,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // ── 8. security_meta ─────────────────────────────────────────────
+        // --- 8. security_meta ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS security_meta (
                 key TEXT PRIMARY KEY NOT NULL,
@@ -183,7 +182,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // ── 9. submission_checkpoints ────────────────────────────────────
+        // --- 9. submission_checkpoints ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS submission_checkpoints (
                 uid TEXT PRIMARY KEY NOT NULL,
@@ -195,9 +194,9 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // ── 10. Indexes ─────────────────────────────────────────────────
+        // --- 10. 索引 ---
 
-        // bloggers
+        // bloggers 表。
         conn.execute_unprepared(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_blogger_uid ON bloggers(uid)",
         )
@@ -215,7 +214,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // history
+        // history 表。
         conn.execute_unprepared("CREATE INDEX IF NOT EXISTS idx_history_uid ON history(uid)")
             .await?;
         conn.execute_unprepared("CREATE INDEX IF NOT EXISTS idx_history_bvid ON history(bvid)")
@@ -255,7 +254,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // logs
+        // logs 表。
         conn.execute_unprepared("CREATE INDEX IF NOT EXISTS idx_log_uid ON logs(uid)")
             .await?;
         conn.execute_unprepared("CREATE INDEX IF NOT EXISTS idx_logs_bvid ON logs(bvid)")
@@ -269,7 +268,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // download_tasks
+        // download_tasks 表。
         conn.execute_unprepared(
             "CREATE UNIQUE INDEX IF NOT EXISTS uix_bvid_type ON download_tasks(bvid, type)",
         )
@@ -283,14 +282,14 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        // auth_sessions
+        // auth_sessions 表。
         conn.execute_unprepared(
             "CREATE INDEX IF NOT EXISTS idx_auth_session_token ON auth_sessions(token_hash)",
         )
         .await?;
 
-        // ── 11. FTS5 full-text search on history ─────────────────────────
-        // FTS5 may not be compiled into every SQLite build; degrade gracefully.
+        // --- 11. history 的 FTS5 全文搜索 ---
+        // 部分 SQLite 构建未编译 FTS5；失败时保留基础 history 表并降级运行。
         let fts_result = conn
             .execute_unprepared(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(title, bvid, uid, content='history', content_rowid='id')",

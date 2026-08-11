@@ -4,9 +4,8 @@ use sea_orm_migration::prelude::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-/// Persist state required to distinguish recoverable recording transitions from
-/// a plain failed row. Every addition has a SQLite default so existing history
-/// remains readable after upgrade.
+/// 持久化区分可恢复录制状态与普通失败记录所需的字段。
+/// 每个新增字段都有 SQLite 默认值，确保升级后历史记录仍可读取。
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {

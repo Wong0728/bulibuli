@@ -220,7 +220,7 @@ async fn detect_network() -> Json<ApiResponse<DetectResult>> {
 fn detect_local_ips() -> Vec<String> {
     let mut ips = vec!["127.0.0.1".to_string()];
 
-    // 通过 UDP connect 检测本机出口 IPv4
+    // 通过 UDP connect 检测本机出口 IPv4。
     if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
         if socket.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = socket.local_addr() {

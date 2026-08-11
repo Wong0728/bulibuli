@@ -134,8 +134,8 @@ impl FfmpegSession {
             return Ok(());
         };
 
-        // `q` is FFmpeg's portable graceful-stop command. Closing stdin after
-        // it is written lets the muxer finish its trailer on Windows and Unix.
+        // `q` 是 FFmpeg 的可移植优雅退出命令。写入后关闭 stdin，便于复用器在
+        // Windows 和 Unix 上完成文件尾写入。
         if let Some(mut stdin) = self.stdin.take() {
             if let Err(error) = stdin.write_all(b"q\n").await {
                 debug!(room_id = self.room_id, "发送 FFmpeg 退出命令失败: {error}");
@@ -198,8 +198,8 @@ pub async fn merge_segments_to_mp4(ffmpeg_path: &Path, segments: &[PathBuf]) -> 
     merge_segments_to_mp4_inner(ffmpeg_path, segments, None).await
 }
 
-/// Merge segments while allowing a background job to terminate the FFmpeg
-/// child. Sources remain untouched when cancellation interrupts the merge.
+/// 合并分段，同时允许后台任务终止 FFmpeg 子进程。
+/// 取消合并时保留源分段文件。
 pub async fn merge_segments_to_mp4_cancelable(
     ffmpeg_path: &Path,
     segments: &[PathBuf],
@@ -299,8 +299,7 @@ async fn merge_segments_to_mp4_inner(
     }
 }
 
-/// A non-empty MP4 is not enough evidence that a concat succeeded. Probe the
-/// container before callers are allowed to remove original FLV segments.
+/// 非空 MP4 不能单独证明拼接成功；必须先探测容器，调用方才能删除原始 FLV 分段。
 async fn verify_merged_output(
     ffmpeg_path: &Path,
     output: &Path,

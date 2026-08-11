@@ -89,7 +89,7 @@ impl BiliApi {
     }
 
     /// 统一的 playurl 请求：WBI 签名 + GET /x/player/wbi/playurl。
-    /// 内部富化 cookie，返回强类型 data（含 dash / durl）。
+    /// 内部富化 Cookie，返回强类型 data（含 dash / durl）。
     async fn request_playurl(
         &self,
         bvid: &str,

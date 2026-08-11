@@ -1,6 +1,6 @@
 use tracing::warn;
 
-/// Makes an implicit transaction rollback visible in production logs.
+/// 将隐式事务回滚记录到生产日志，便于发现未提交的数据库操作。
 pub struct DbOperationGuard {
     operation: &'static str,
     committed: bool,

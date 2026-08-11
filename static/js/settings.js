@@ -38,7 +38,7 @@ export function loadSettingsFragment() {
     return settingsFragmentPromise;
 }
 
-// ==================== 设置面板 ====================
+// --- 设置面板 ---
 
 // 解析时间点字符串为数组
 export function parseTimePoints(value) {
@@ -642,7 +642,7 @@ export function loadSettings() {
     loadSettingsFromServer();
 }
 
-// ==================== 基础配置只读摘要 ====================
+// --- 基础配置只读摘要 ---
 async function loadFoundationSummary() {
     const container = document.getElementById('foundation-summary-content');
     if (!container) return;
@@ -694,7 +694,7 @@ async function copyTextWithFeedback(text, successMessage) {
     }
 }
 
-// ==================== AI Skill ====================
+// --- AI Skill ---
 function loadAiSkillInfo() {
     const pathBox = document.getElementById('ai-skill-path-box');
 
@@ -718,7 +718,7 @@ function loadAiSkillInfo() {
     }
 }
 
-// ==================== 移动端适配 ====================
+// --- 移动端适配 ---
 export function initMobileSidebar() {
     const dashboard = document.querySelector('.blogger-dashboard');
     if (!dashboard) return;
@@ -765,7 +765,7 @@ export function initMobileSidebar() {
     }
 }
 
-// ==================== 测试功能 ====================
+// --- 测试功能 ---
 export async function testDownload() {
     const bvid = prompt('请输入要测试的BVID（例如：BV1xx411c7mD）:');
     if (!bvid) return;

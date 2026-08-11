@@ -10,7 +10,7 @@ use super::BiliApi;
 
 impl BiliApi {
     /// 获取当前登录态信息（头像/昵称/大会员/等级），基于 /x/web-interface/nav。
-    /// 未登录时返回 `NavStatus { is_login: false, .. }`（B 站对未登录 cookie 常返回 -101，
+    /// 未登录时返回 `NavStatus { is_login: false, .. }`（B 站对未登录 Cookie 常返回 -101，
     /// 由统一入口 classify 转成 Err；调用方据此判定）。
     pub async fn get_nav_info(&self, cookies: &str) -> Result<NavStatus> {
         let enriched = self
@@ -34,7 +34,7 @@ impl BiliApi {
     }
 
     pub async fn get_qrcode_url(&self) -> Result<QrcodeGenerate> {
-        // enrich 失败时显式报错，避免静默退化为空 cookie 导致风控
+        // enrich 失败时显式报错，避免静默退化为空 Cookie 导致风控。
         let enriched = self
             .enrich_cookies("")
             .await
@@ -84,7 +84,7 @@ impl BiliApi {
             .await;
         let resp = self.send_with_retry(request).await?;
         debug!(url, qrcode_key, "B站 API 请求: check_qrcode_status");
-        // 注意：必须先收集 cookies 再读 body，否则可能丢失
+        // 注意：必须先收集 Cookie，再读取 body，否则可能丢失。
         let response_cookies: HashMap<String, String> = resp
             .cookies()
             .map(|c| (c.name().to_string(), c.value().to_string()))

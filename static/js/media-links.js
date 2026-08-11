@@ -4,7 +4,7 @@ import { setTone, checkNetworkBeforeAction, apiPost } from './core.js';
 import { updateDownloadProgressInList } from './history.js';
 import { showToast } from './download-status.js';
 
-// ==================== 下载链接管理（支持多清晰度）====================
+// --- 下载链接管理（支持多清晰度） ---
 export function startUrlExpiryTimer(bvid, title, expirySeconds = 1800) {
     _state.videoTitles[bvid] = title;
     const expiryTime = Date.now() + expirySeconds * 1000;
@@ -248,7 +248,7 @@ export function downloadVideoWithQuality(bvid, title, target) {
 
 export function downloadToBrowser(url, filename) {
     // 使用下载代理 - 每次新建 iframe 触发下载，避免复用单 iframe 时浏览器忽略连续请求
-    // 安全：cookie 由后端从 DB 读取，前端不再拼接到 URL
+    // 安全：Cookie 由后端从 DB 读取，前端不再拼接到 URL。
     const proxyUrl = `/api/download/proxy?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`;
 
     const iframe = document.createElement('iframe');
@@ -368,7 +368,7 @@ export function updateManualDownloadProgress(bvid, type) {
 
 // 添加下载任务到服务器
 export async function downloadToServer(bvid, title, type = 'video', quality = null, isManual = false, directUrl = null) {
-    // 安全：cookie 由后端从 DB 读取，前端不再传递
+    // 安全：Cookie 由后端从 DB 读取，前端不再传递。
     // 如果没有传入清晰度，从设置读取
     if (quality === null) {
         quality = parseInt(document.getElementById('setting-video-quality')?.value) || 80;

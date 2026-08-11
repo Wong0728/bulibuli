@@ -1,4 +1,4 @@
-//! BiliApi 请求管线：WBI 签名获取、风控参数注入、cookie 富化、
+//! BiliApi 请求管线：WBI 签名获取、风控参数注入、Cookie 富化、
 //! 统一 GET 构建、网络重试与 JSON 响应解析。
 
 use crate::error::{BiliApiError, BiliErrorKind};
@@ -20,7 +20,7 @@ use super::BiliApi;
 impl BiliApi {
     /// 获取 WBI img_key/sub_key。
     ///
-    /// `enriched_cookies` 必须是已经过 `enrich_cookies` 合并设备指纹后的 cookie 字符串。
+    /// `enriched_cookies` 必须是已经过 `enrich_cookies` 合并设备指纹后的 Cookie 字符串。
     /// `/x/web-interface/nav` 在新风控策略下要求携带登录态 Cookie，否则返回 -101。
     pub(super) async fn get_wbi_keys(&self, enriched_cookies: &str) -> Result<(String, String)> {
         // WBI keys 来自 api.bilibili.com，必须走严格 TLS 的 api_client。
@@ -90,13 +90,13 @@ impl BiliApi {
         }
     }
 
-    /// 富化用户 cookie：合并设备指纹 cookie（buvid3/bili_ticket/...）。
+    /// 富化用户 Cookie：合并设备指纹 Cookie（buvid3/bili_ticket/...）。
     pub(super) async fn enrich_cookies(&self, user_cookies: &str) -> Result<String> {
         self.cookie_manager.enrich(user_cookies).await
     }
 
-    /// 公开 cookie 富化入口，供 DownloadManager.add_to_aria2 复用。
-    /// 下载流（m4s/m4a）需要带设备指纹 cookie 才能绕过 B站风控（403/-799 等）。
+    /// 公开 Cookie 富化入口，供 DownloadManager.add_to_aria2 复用。
+    /// 下载流（m4s/m4a）需要带设备指纹 Cookie 才能绕过 B 站风控（403/-799 等）。
     pub async fn enrich_cookies_public(&self, user_cookies: &str) -> Result<String> {
         self.enrich_cookies(user_cookies).await
     }
@@ -133,9 +133,8 @@ impl BiliApi {
         req
     }
 
-    /// Execute a cloneable API request with the retry policy shared by every
-    /// Bilibili endpoint. Business errors are intentionally handled later by
-    /// `parse_json_response` and are never retried here.
+    /// 按所有 B 站接口共享的重试策略执行可克隆请求。
+    /// 业务错误由后续解析函数处理，不在此处重试。
     pub(super) async fn send_with_retry(
         &self,
         request: RequestBuilder,
@@ -216,9 +215,8 @@ impl BiliApi {
         deserialize_payload(envelope.data, api_name, "data")
     }
 
-    /// Parse a speculative/fallback API response without broadcasting global
-    /// auth or risk-control events. The caller must retry its fallback and use
-    /// the regular parser for the terminal attempt.
+    /// 解析试探或回退接口的响应，但不广播全局登录和风控事件。
+    /// 调用方必须继续尝试回退接口，并在最终尝试时使用普通解析器。
     pub(super) async fn parse_data_silent<T: DeserializeOwned>(
         &self,
         response: reqwest::Response,

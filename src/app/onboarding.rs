@@ -136,7 +136,7 @@ pub async fn run(
 /// 首次启动终端输出：打印 Setup URL + 提示。
 fn print_first_launch(port: u16) {
     println!("═══════════════════════════════════════════════════════");
-    println!("  B站视频监控助手 v{}", env!("CARGO_PKG_VERSION"));
+    println!("  补哩补哩 bulibuli v{}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("  请在浏览器中完成初始设置：");
     println!("  → http://127.0.0.1:{port}");
@@ -228,7 +228,7 @@ async fn run_qr_login_inner(state: &SharedState, paths: &AppPaths) -> Result<()>
     }
 }
 
-/// 登录成功后查询当前 uid 并回写 startup_state.json，供下次启动摘要展示。
+/// 登录成功后查询当前 UID 并回写 startup_state.json，供下次启动摘要展示。
 async fn refresh_bili_uid(state: &SharedState, paths: &AppPaths) {
     let cookies = state
         .infra
@@ -248,7 +248,7 @@ async fn refresh_bili_uid(state: &SharedState, paths: &AppPaths) {
     }
 }
 
-/// 主流程在 AppState 就绪后调用：刷新 B 站登录 uid 到 startup_state.json（无论是否扫码，确保摘要准确）。
+/// 主流程在 AppState 就绪后调用：刷新 B 站登录 UID 到 startup_state.json（无论是否扫码，确保摘要准确）。
 pub async fn sync_bili_uid(state: &SharedState, paths: &AppPaths) {
     let cookies = state
         .infra

@@ -1,10 +1,10 @@
-# 预编译运行时二进制（Windows）
+# 运行时资源
 
-本目录内的可执行文件是 Windows 便携版打包所需的第三方运行时依赖，直接随仓库分发。
+`aria2c.exe` 和 `ffmpeg.exe` 是 Windows 便携版打包所需的第三方运行时依赖，直接随 Windows 包分发。
 `geo/` 子目录下的 GeoIP 数据库为跨平台数据文件，所有平台共用。
 
-Linux / Termux 通过系统包管理器安装对应依赖，不使用本目录文件（见 `deploy/` 安装脚本）。
-但 `geo/GeoLite2-Country.mmdb` 在所有平台下都会被程序自动发现并使用。
+Linux、macOS 和 Termux 通过系统/Homebrew/Termux 包管理器安装 aria2 与 FFmpeg，不使用本目录中的 Windows 可执行文件（见 `deploy/` 安装脚本）。
+`geo/GeoLite2-Country.mmdb` 在所有平台下都会被程序自动发现并使用。
 
 ## 清单
 

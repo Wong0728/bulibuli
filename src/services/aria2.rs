@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use tokio::process::Child;
 use tokio::sync::Mutex;
 
-/// Build the only RPC endpoint accepted by the application.  Aria2 host is
-/// stored as an authority, never as a user-controlled URL fragment.
+/// 构造应用唯一接受的 RPC 端点。
+/// Aria2 主机只作为 authority 使用，不接受用户可控的 URL 片段。
 pub(crate) fn rpc_endpoint(host: &str, port: u16) -> anyhow::Result<String> {
     let host = host.trim();
     if host.is_empty()
@@ -134,7 +134,7 @@ struct Aria2Inner {
     mode: Aria2Mode,
     child: Option<Child>,
     rpc_url: String,
-    /// is_available 结果缓存：(可用性, 写入时间)。
+    /// `is_available` 结果缓存：（可用性、写入时间）。
     /// TTL 由 AVAILABILITY_CACHE_TTL 控制，过期后下次调用重新发起 RPC。
     available_cache: Option<(bool, Instant)>,
     /// 当前启动/连接尝试开始时间；用于限制 `starting` 状态的最长持续时间。

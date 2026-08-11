@@ -1,4 +1,4 @@
-// B站设备指纹 cookie 管理。
+// B 站设备指纹 Cookie 管理。
 //
 // 参考 Bili23-Downloader 的 CookieManager 实现：
 // 1. 本地生成 _uuid / b_lsid / b_nut / buvid_fp（见 `fingerprint`）
@@ -6,7 +6,7 @@
 // 3. 在线获取 bili_ticket（POST /bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket，HMAC-SHA256 签名）
 // 4. 激活 buvid3（POST /x/internal/gaia-gateway/ExClimbWuzhi，固定设备指纹 payload）
 // 5. 注入 CURRENT_FNVAL=4048 / CURRENT_QUALITY=0
-// 6. 与用户登录 cookie 合并后返回（缓存与持久化见 `lifecycle`）
+// 6. 与用户登录 Cookie 合并后返回（缓存与持久化见 `lifecycle`）。
 
 mod device_api;
 mod fingerprint;
@@ -23,10 +23,10 @@ use tokio::sync::RwLock;
 const CACHE_TTL: Duration = Duration::from_secs(3600);
 /// buvid3 提前刷新窗口：到期前 1 小时即视为过期，避免边界请求被风控
 const BUVID_REFRESH_LEAD: i64 = 3600;
-/// DB 中 device_cookies 键名
+/// DB 中 device_cookies 的键名。
 const SECRET_KEY: &str = "bili_device_cookies";
 
-/// 持久化到 DB 的设备 cookie 状态（不含合成结果，运行时合并用户 cookie）。
+/// 持久化到 DB 的设备 Cookie 状态（不含合成结果，运行时合并用户 Cookie）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceCookies {
     pub buvid3: String,
@@ -81,7 +81,7 @@ impl CookieManager {
         })
     }
 
-    /// 主入口：返回合并了设备指纹 + 用户登录态的 cookie 字符串。
+    /// 主入口：返回合并了设备指纹和用户登录态的 Cookie 字符串。
     /// 内部带 DB 持久化 + 内存缓存，过期才触发 init。
     pub async fn enrich(&self, user_cookies: &str) -> Result<String> {
         let device = self.get_or_init().await?;

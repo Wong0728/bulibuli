@@ -43,7 +43,7 @@ export async function loadDrawerComments(bvid, path = '') {
     }
 }
 
-/// 加载并展示指定弹幕文件。结构化 JSON 以时间轴列表显示，XML/TXT 不展开原始文本。
+// 加载并展示指定弹幕文件。结构化 JSON 以时间轴列表显示，XML/TXT 不展开原始文本。
 export async function loadDrawerDanmaku(bvid, path) {
     const container = document.getElementById('drawer-sidecar-viewer');
     if (!container || !path) return;

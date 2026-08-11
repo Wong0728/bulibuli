@@ -12,7 +12,7 @@ import { startPollingScheduler } from './polling.js';
 import { closeVideoDrawer } from './drawer.js';
 import { getQRCodePayload, getQRCodePollState } from './qrcode-contract.js';
 
-// ==================== 初始化 ====================
+// --- 初始化 ---
 window.addEventListener('DOMContentLoaded', () => {
     bootstrapApp().catch(showStartupError);
 });
@@ -49,7 +49,7 @@ async function bootstrapApp() {
     await loadBloggersFromServer();
     await loadDownloadStatus();
 
-    // 初始化WebSocket连接（"任务状态已恢复"提示在 connect 回调中弹出，确保后端可用）
+    // 初始化 WebSocket 连接；“任务状态已恢复”提示在 connect 回调中弹出，确保后端可用。
     initWebSocket();
 
     // 启动状态轮询
@@ -70,7 +70,7 @@ async function bootstrapApp() {
         });
     }
 
-    // 初始化 MD5 校验模式切换
+    // 初始化 MD5 校验模式切换。
     onVerifyModeChange();
 
     // Cookie、基础配置和可执行路径只对 Owner 可见/可请求。
@@ -79,10 +79,10 @@ async function bootstrapApp() {
     // FFmpeg 路径属于基础配置，Operator / Viewer 不请求该接口。
     if (_state.sessionRole === 'owner') refreshFFmpegDetectedPath();
 
-    // 渲染已添加博主列表（博主搜索标签页）- 异步加载
+    // 异步加载并渲染已添加博主列表（博主搜索标签页）。
     renderKnownBloggers();
 
-    // 初始化手动查询页的博主快捷选择下拉 - 异步加载
+    // 异步加载并初始化手动查询页的博主快捷选择下拉。
     renderUidHistorySelect();
 
     // 检查博主资料变更通知（黄点）
@@ -181,8 +181,7 @@ async function bootstrapApp() {
 
 function applySessionRole(role) {
     if (role === 'owner') return;
-    // Credential and foundation controls are never rendered for delegated
-    // sessions.  Backend RBAC is the authoritative enforcement mechanism.
+    // delegated 会话不渲染凭证和基础配置控件；后端 RBAC 才是最终权限边界。
     ['account', 'local-config', 'aria2', 'ffmpeg']
         .forEach(section => document.querySelector(`[data-section="${section}"]`)?.setAttribute('hidden', ''));
     document.getElementById('cookie-warning-banner')?.setAttribute('hidden', '');
@@ -263,10 +262,10 @@ export function switchTab(tabName) {
     }
 }
 
-// ==================== 配置管理 ====================
+// --- 配置管理 ---
 // 博主与设置以服务端数据为准，前端不持久化副本。
 
-// ==================== Cookies 管理 ====================
+// --- Cookie 管理 ---
 _state.qrcodePollInterval = null;
 _state.qrcodePollGeneration = 0;
 _state.qrcodePollInFlight = null;

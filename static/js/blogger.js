@@ -5,7 +5,7 @@ import { switchTab } from './bootstrap.js';
 import { loadHistoryBoard } from './history.js';
 import { showToast, confirmDialog } from './download-status.js';
 
-// ==================== 博主管理（从服务器加载）====================
+// --- 博主管理（从服务器加载） ---
 export async function loadBloggersFromServer() {
     try {
         const result = await apiGet('/api/blogger/list');
@@ -522,7 +522,7 @@ export async function stopSelectedBlogger() {
     }
 }
 
-/// 按全局保留策略立即整理指定博主。
+// 按全局保留策略立即整理指定博主。
 export async function cleanupBloggerNowByUid(uid) {
     if (!uid) return;
     if (!(await confirmDialog(`确认立即整理博主 ${uid}？\n\n将按保留数删除多余的旧视频（文件 + 记录）。`, { title: '立即整理', okText: '开始整理' }))) return;
@@ -539,7 +539,7 @@ export async function cleanupBloggerNowByUid(uid) {
     }
 }
 
-// ==================== 状态轮询 ====================
+// --- 状态轮询 ---
 _state.countdownInterval = null;
 _state.statusPollingInterval = null;
 

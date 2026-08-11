@@ -218,7 +218,7 @@ impl BloggerService {
             .map(|v| v as i32)
     }
 
-    // ==================== API 层数据访问（handler 禁止直连 DB）====================
+    // --- API 层数据访问（handler 禁止直连 DB） ---
 
     /// 自动任务列表。仅在搜索页收藏、尚未创建任务的博主不会出现在这里。
     pub async fn list_auto_tasks(&self) -> Result<Vec<blogger::Model>> {
@@ -249,7 +249,7 @@ impl BloggerService {
         Ok(blogger::Entity::find_by_id(id).one(&self.db).await?)
     }
 
-    /// uid 是否已被其他博主（id 不同）占用。
+    /// UID 是否已被其他博主（ID 不同）占用。
     pub async fn uid_taken_by_other(&self, uid: &str, id: i32) -> Result<bool> {
         Ok(self
             .find_by_uid(uid)

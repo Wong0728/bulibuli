@@ -20,7 +20,7 @@ const VERIFY_SCAN_INTERVAL: StdDuration = StdDuration::from_secs(60);
 /// on_completion 兼容旧数据时的回填批量。
 const BACKFILL_BATCH: u64 = 50;
 
-/// MD5 校验 worker：
+/// MD5 校验 worker。
 /// - `off`：不跑。
 /// - `on_completion`：下载完成时已由 `add_to_history` 立即计算；worker 只补齐 md5 为空的旧数据。
 /// - `periodic`：按 `periodic_days` 选最久未校验的 N 条，读本地 → 算 MD5 → 不一致则标 `tampered`。

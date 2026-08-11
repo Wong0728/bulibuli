@@ -59,7 +59,7 @@ pub struct RecordingInfo {
     pub recording_id: Option<i32>,
     pub title: String,
     pub status: RecordingStatus,
-    /// Internal filesystem path; deliberately omitted from API serialization.
+    /// 内部文件系统路径；出于安全考虑不序列化到 API 响应。
     #[serde(skip_serializing)]
     pub output_path: String,
     pub started_at: String,
@@ -413,9 +413,8 @@ impl LiveRecorder {
         let snapshot = Arc::new(Mutex::new(initial_info));
         let recent = Arc::new(Mutex::new(VecDeque::with_capacity(100)));
         let segment_index = Arc::new(AtomicU32::new(0));
-        // The collector owns the sender.  Do not share this cancellation token
-        // with the writer: cancellation must first close the sender and let the
-        // writer drain every queued event before it finalizes the archive.
+        // sender 由 collector 持有。不要让 writer 共享此取消令牌：
+        // 必须先关闭 sender，再让 writer 排空队列中的事件并完成归档。
         let collector_cancel = CancellationToken::new();
         let (reload_tx, reload_rx) = mpsc::channel(8);
         let (danmu_failure_tx, danmu_failure_rx) = mpsc::channel(1);
@@ -581,8 +580,8 @@ impl LiveRecorder {
             .await;
             return Err(error).context("persist initial recording segment failed");
         }
-        // FFmpeg is intentionally the final startup side effect: all metadata,
-        // interaction wiring and the durable recording row already exist.
+        // FFmpeg 刻意作为启动阶段的最后一个副作用：此时元数据、互动绑定和
+        // 持久化录制记录都已准备完毕。
         let mut ffmpeg = match FfmpegSession::start(
             &ffmpeg_path,
             &stream_url,
@@ -773,8 +772,7 @@ impl LiveRecorder {
         result
     }
 
-    /// Request stop without keeping the HTTP request open while interaction
-    /// drain and FFmpeg/ffprobe merge complete.
+    /// 请求停止，但不让 HTTP 请求等待互动事件排空和 FFmpeg/ffprobe 合并完成。
     pub async fn request_stop(&self, room_id: i64) -> Result<MergeJobInfo> {
         let (handle, existing_job) = {
             let sessions = self.inner.sessions.lock().await;
@@ -955,8 +953,8 @@ impl LiveRecorder {
         events
     }
 
-    /// Completed and failed sessions are retained as first-class product data;
-    /// callers receive the database record rather than an in-memory session.
+    /// 已完成和失败的会话都会作为正式业务数据保留；调用方读取数据库记录，
+    /// 而不是临时会话对象。
     pub async fn history(&self, limit: usize) -> Result<Vec<live_recording::Model>> {
         Ok(live_recording::Entity::find()
             .order_by_desc(live_recording::Column::StartedAt)
@@ -1023,8 +1021,8 @@ impl LiveRecorder {
         merge_job_from_row(&row).ok()
     }
 
-    /// Rebuild a failed/recoverable recording in the background.  The source
-    /// FLV segments are never removed until FFmpeg and ffprobe both succeed.
+    /// 在后台重建失败或可恢复的录制任务。
+    /// 只有 FFmpeg 和 ffprobe 都成功后，源 FLV 分段才会删除。
     pub async fn retry_merge(&self, recording_id: i32) -> Result<MergeJobInfo> {
         let row = live_recording::Entity::find_by_id(recording_id)
             .one(&self.inner.db)
@@ -1261,9 +1259,8 @@ impl LiveRecorder {
         Ok(())
     }
 
-    /// Mark sessions left in a running state by a previous crash as failed and
-    /// report residual FLV segments for manual recovery instead of silently
-    /// presenting them as active recordings.
+    /// 将上次崩溃后仍处于运行态的会话标记为失败，并报告残留 FLV 分段供人工恢复，
+    /// 避免把它们继续伪装成活动录制。
     pub async fn recover_incomplete_records(&self) -> Result<()> {
         let rows = live_recording::Entity::find()
             .filter(live_recording::Column::Status.is_in(["starting", "recording", "stopping"]))
@@ -1297,8 +1294,8 @@ impl LiveRecorder {
         Ok(())
     }
 
-    /// Gracefully stop every active session. One failed session must not keep
-    /// the remaining FFmpeg children alive during application shutdown.
+    /// 优雅停止所有活动会话。单个会话失败时，也不能阻止应用关停期间
+    /// 清理其余 FFmpeg 子进程。
     pub async fn stop_all(&self) {
         let room_ids = {
             let sessions = self.inner.sessions.lock().await;
@@ -1526,9 +1523,9 @@ impl RecordingWorker {
                                 next_refresh_retry = Instant::now();
                             }
                             Err(error) => {
-                                // refresh_segment stops the old process before starting the next
-                                // segment. Preserve the failure as an unexpected-exit recovery so
-                                // the next health tick cannot leave a session active without FFmpeg.
+                                // refresh_segment 会先停止旧进程，再启动下一分段。
+                                // 将失败保留为异常退出恢复状态，避免下一次健康检查把
+                                // 没有 FFmpeg 进程的会话继续视为活动状态。
                                 self.unexpected_exit_detail = Some(format!(
                                     "刷新直播流分段失败: {error}"
                                 ));
@@ -2445,8 +2442,7 @@ mod tests {
             .await
             .expect("temp output");
 
-        // Simulate the process stopping immediately after replacing the file,
-        // before the persisted status can move from finalizing to completed.
+        // 模拟文件替换完成后、持久化状态从 finalizing 变为 completed 前进程立即停止。
         atomic_replace(&temp, &output)
             .await
             .expect("atomic replace");

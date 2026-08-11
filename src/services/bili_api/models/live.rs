@@ -1,7 +1,7 @@
 //! 直播间 API 响应模型：新版 getRoomPlayInfo / getDanmuInfo 与旧版兼容接口。
 //!
 //! `getDanmuInfo` 自 2025 年起必须使用有效登录态和 WBI 签名；播放接口是否
-//! 需要登录由 B站当前策略决定。
+//! 是否需要登录由 B 站当前策略决定。
 //! 只声明用到的字段，配合 `#[serde(default)]` 容忍缺失。
 
 use serde::Deserialize;
@@ -95,7 +95,7 @@ pub struct LivePlayUrl {
 
 /// 新版 `getRoomPlayInfo` 的播放地址树。
 ///
-/// B站会按协议、封装、编码和 CDN 线路分层返回 URL；这里保留完整的
+/// B 站会按协议、封装、编码和 CDN 线路分层返回 URL；这里保留完整的
 /// 中间层，业务层再统一展平为 `LivePlayUrl.durl`，便于旧版 fallback 与
 /// 录制器复用同一套线路选择逻辑。
 #[derive(Debug, Clone, Default, Deserialize)]

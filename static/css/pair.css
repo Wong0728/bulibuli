@@ -1,4 +1,4 @@
-/* 复用主界面同款 JetBrains Mono 本地字体（经 /pair-font.woff2 公开路由提供） */
+/* 复用主界面同款 JetBrains Mono 本地字体（经 /pair-font.woff2 公开路由提供）。 */
 @font-face {
     font-family: 'JetBrains Mono';
     font-style: normal;
@@ -39,7 +39,7 @@ body {
     position: relative;
 }
 
-/* --- Hero 背景元素 (视差数据碎片) --- */
+/* --- Hero 背景元素（视差数据碎片） --- */
 .stage {
     position: absolute;
     inset: 0;
@@ -63,7 +63,7 @@ body {
     will-change: transform;
 }
 
-/* 碎片固定散点布局：避开中央卡片区域（位置由 CSS 接管，JS 不写内联样式） */
+/* 碎片固定散点布局：避开中央卡片区域（位置由 CSS 接管，JS 不写内联样式）。 */
 .floating-bit:nth-child(1) { left: 4%; top: 8%; }
 .floating-bit:nth-child(2) { left: 18%; top: 15%; }
 .floating-bit:nth-child(3) { left: 32%; top: 6%; }
@@ -192,7 +192,7 @@ h1 {
     box-shadow: 0 0 0 4px var(--brand-soft);
 }
 
-/* 占位符与输入后的文字保持同字体同大小，仅用浅色区分 */
+/* 占位符与输入后的文字保持同字体同大小，仅用浅色区分。 */
 .pairing-input::placeholder {
     font-family: var(--font-mono);
     font-size: 24px;

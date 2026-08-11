@@ -1,5 +1,5 @@
-//! Read-only foundation-configuration summary exposed to the main Web.
-//! The writable Setup API is deliberately served only by `setup_server`.
+//! 主 Web 暴露的只读基础配置摘要。
+//! 可写的 Setup API 只由 `setup_server` 提供。
 
 use crate::error::ApiResponse;
 use crate::services::security_config::AccessMode;
@@ -38,8 +38,8 @@ async fn status(State(state): State<SharedState>) -> Json<ApiResponse<Foundation
         configuration_status: "normal",
         ai_skill_enabled: state.infra.ai_skill_enabled.load(Ordering::Relaxed),
         access_mode,
-        // The Setup listener binds to loopback by design.  A future signed
-        // short-lived setup URL can change this without widening the main API.
+        // Setup 监听器按设计只绑定回环地址；未来的短时签名 Setup URL
+        // 可以在不扩大主 API 暴露面的前提下改变这一点。
         setup_access: if state.infra.actual_setup_port.load(Ordering::Relaxed) == 0 {
             "unavailable"
         } else {

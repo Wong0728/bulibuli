@@ -136,7 +136,7 @@ impl DownloadManager {
                 );
             }
         }
-        // 回退：从 history 获取 uid 派生目录
+        // 回退：从 history 获取 UID 派生目录。
         let uid = self.get_blogger_uid_from_history(&task.bvid).await;
         self.download_dir(uid.as_deref()).await
     }

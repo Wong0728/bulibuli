@@ -1,4 +1,4 @@
-//! 本地指纹生成器与 cookie 合并逻辑（纯计算，无网络/DB 依赖）。
+//! 本地指纹生成器与 Cookie 合并逻辑（纯计算，无网络/DB 依赖）。
 
 use std::collections::HashMap;
 
@@ -8,12 +8,12 @@ use rand::Rng;
 use super::{CookieManager, DeviceCookies};
 
 impl CookieManager {
-    /// 合并设备 cookie + 用户 cookie，返回 cookie 字符串。
-    /// 设备 cookie 提供基础设备指纹，用户 cookie 提供登录态。
-    /// 同名字段时用户 cookie 优先（如 SESSDATA 等登录态字段不应被覆盖）。
+    /// 合并设备 Cookie 和用户 Cookie，返回 Cookie 字符串。
+    /// 设备 Cookie 提供基础设备指纹，用户 Cookie 提供登录态。
+    /// 同名字段时用户 Cookie 优先（如 SESSDATA 等登录态字段不应被覆盖）。
     pub(super) fn merge_cookies(device: &DeviceCookies, user_cookies: &str) -> String {
         let mut map: HashMap<String, String> = HashMap::new();
-        // 1. 设备 cookie
+        // 1. 设备 Cookie。
         map.insert("_uuid".to_string(), device.uuid.clone());
         map.insert("b_lsid".to_string(), device.b_lsid.clone());
         map.insert("b_nut".to_string(), device.b_nut.to_string());
@@ -27,7 +27,7 @@ impl CookieManager {
         map.insert("buvid4".to_string(), device.buvid4.clone());
         map.insert("CURRENT_FNVAL".to_string(), "4048".to_string());
         map.insert("CURRENT_QUALITY".to_string(), "0".to_string());
-        // 2. 用户 cookie 覆盖（登录态优先）
+        // 2. 用户 Cookie 覆盖（登录态优先）。
         for (k, v) in Self::parse_cookie_str(user_cookies) {
             map.insert(k, v);
         }
@@ -37,7 +37,7 @@ impl CookieManager {
         parts.join("; ")
     }
 
-    /// 解析 cookie 字符串为 map。
+    /// 解析 Cookie 字符串为 map。
     fn parse_cookie_str(s: &str) -> HashMap<String, String> {
         s.split(';')
             .filter_map(|part| {
@@ -54,7 +54,7 @@ impl CookieManager {
             .collect()
     }
 
-    // ---------- 本地生成器 ----------
+    // --- 本地生成器 ---
 
     /// 生成 _uuid：与 Bili23 get_uuid() 格式一致。
     /// 格式: `{8}-{4}-{4}-{4}-{12}{5位时间戳补0}infoc`
@@ -178,7 +178,7 @@ mod tests {
         assert!(merged.contains("buvid3=USER_OVERRIDE"));
         assert!(merged.contains("SESSDATA=abc"));
         assert!(!merged.contains("buvid3=DEV_BUVID3"));
-        // 设备 cookie 应保留
+        // 设备 Cookie 应保留。
         assert!(merged.contains("CURRENT_FNVAL=4048"));
         assert!(merged.contains("CURRENT_QUALITY=0"));
     }

@@ -1,4 +1,4 @@
-//! 设备 cookie 生命周期：内存缓存 → DB 缓存 → 完整初始化，以及 DB 持久化。
+//! 设备 Cookie 生命周期：内存缓存 → DB 缓存 → 完整初始化，以及 DB 持久化。
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -79,7 +79,7 @@ impl CookieManager {
             .await?
             .unwrap_or_else(|| self.fresh_skeleton());
 
-        // 1. buvid3/buvid4 + 联动生成的本地 cookie
+        // 1. buvid3/buvid4 + 联动生成的本地 Cookie。
         let now = Local::now().timestamp();
         if device.buvid3.is_empty() || now >= (device.buvid_expires - BUVID_REFRESH_LEAD) {
             let (b3, b4) = self.get_buvid().await?;
@@ -129,7 +129,7 @@ impl CookieManager {
         }
     }
 
-    // ---------- DB 持久化 ----------
+    // --- DB 持久化 ---
 
     async fn load_from_db(&self) -> Result<Option<DeviceCookies>> {
         match self.secret_store.get(SECRET_KEY).await? {

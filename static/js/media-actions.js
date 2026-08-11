@@ -7,7 +7,7 @@ import { loadHistoryBoard, formatViewCount } from './history.js';
 import { showToast, confirmDialog } from './download-status.js';
 import { openVideoDrawer, closeVideoDrawer, refreshQualityPills, _ALL_QUALITY_OPTIONS } from './drawer.js';
 
-/// 通用烧录入口（弹幕 / 字幕 / 两者）。
+// 通用烧录入口（弹幕、字幕或两者）。
 export async function burnMedia(bvid, source, button) {
     if (!bvid || !button) return;
     if (!checkNetworkBeforeAction()) return;
@@ -53,7 +53,7 @@ export async function burnMedia(bvid, source, button) {
     }
 }
 
-/// 轮询烧录状态。
+// 轮询烧录状态。
 export async function pollBurnStatus(bvid, taskId, button, originalHtml, source) {
     let completed = false;
     let attempts = 0;
@@ -97,7 +97,7 @@ export async function pollBurnStatus(bvid, taskId, button, originalHtml, source)
     }
 }
 
-/// 删除视频记录（文件 + DB）。
+// 删除视频记录（文件和 DB）。
 export async function deleteVideoRecord(bvid) {
     if (!bvid) return;
     if (!(await confirmDialog(`确认删除视频 ${bvid} 的记录？\n\n将同时删除：\n- 本地视频文件\n- 本地封面文件\n- 弹幕 / 字幕侧车文件\n- download_task 记录\n- history 记录\n\n此操作不可撤销。`, { title: '删除记录', okText: '删除', danger: true }))) {
@@ -118,7 +118,7 @@ export async function deleteVideoRecord(bvid) {
     }
 }
 
-/// 从 B 站拉取最新视频数据并渲染到"实时数据"区。
+// 从 B 站拉取最新视频数据并渲染到“实时数据”区。
 export async function refreshVideoInfo(bvid) {
     const container = document.getElementById('drawer-live-stats');
     if (!container) return;
@@ -140,7 +140,7 @@ export async function refreshVideoInfo(bvid) {
         const stat = data.stat || {};
         const owner = data.owner || {};
 
-        // 把最新数据写回看板缓存，保证抽屉刷新后看板同步
+        // 把最新数据写回看板缓存，保证抽屉刷新后看板同步。
         if (_state.currentBoardVideos && _state.currentBoardVideos[bvid]) {
             const cached = _state.currentBoardVideos[bvid];
             cached.view = stat.view ?? cached.view;
@@ -183,7 +183,7 @@ export async function refreshVideoInfo(bvid) {
     }
 }
 
-/// 加载该 bvid 的日志到抽屉"日志"区。
+// 加载该 bvid 的日志到抽屉“日志”区。
 export async function loadBvidLogs(bvid) {
     const container = document.getElementById('drawer-logs');
     if (!container) return;
@@ -224,7 +224,7 @@ export async function loadBvidLogs(bvid) {
     }
 }
 
-/// 加载并展示已下载的评论（抽屉“评论”区）。优先渲染结构化卡片，兼容旧 TXT。只读本地文件。
+// 加载并展示已下载的评论（抽屉“评论”区）。优先渲染结构化卡片，兼容旧 TXT；只读本地文件。
 // 渲染抽屉内容（手动查询版本）
 export function renderDrawerContentForManualQuery(video, bvid) {
     const bodyEl = document.getElementById('drawer-body');
@@ -322,7 +322,7 @@ async function loadManualPages(bvid) {
             section.hidden = true;
             return;
         }
-        // 缓存到手动查询视频信息，供下载时读取 cid/part
+        // 缓存到手动查询视频信息，供下载时读取 cid/part。
         if (_state.manualQueryVideos && _state.manualQueryVideos[bvid]) {
             _state.manualQueryVideos[bvid].pages = pages;
         }
@@ -346,7 +346,7 @@ async function loadManualPages(bvid) {
             <div class="drawer-pages-list">${items}</div>`;
         section.hidden = false;
     } catch (e) {
-        // 获取失败时静默隐藏分P区，退回单P下载（默认 cid），不阻塞主流程
+        // 获取失败时静默隐藏分 P 区，退回单 P 下载（默认 cid），不阻塞主流程。
         section.hidden = true;
     }
 }
@@ -359,12 +359,12 @@ export function toggleAllPages() {
     checks.forEach(c => { c.checked = !allChecked; });
 }
 
-// ==================== 番剧 / 课程链接解析结果渲染与下载 ====================
+// --- 番剧 / 课程链接解析结果渲染与下载 ---
 
-/// 渲染番剧/课程季信息 + 分集选集 UI（链接解析模式）。
-/// result 是 /api/video/resolve 返回的 payload，包含 season_title / cover / episodes / current_ep_id?。
-/// mediaType 为 "pgc" 或 "cheese"，透传到下载请求。
-/// pay_blocked 时 result.pay_blocked=true，渲染可读权限提示而非分集列表。
+// 渲染番剧或课程的季信息和分集选择 UI（链接解析模式）。
+// result 是 /api/video/resolve 返回的 payload，包含 season_title、cover、episodes 和 current_ep_id。
+// mediaType 为 "pgc" 或 "cheese"，透传到下载请求。
+// pay_blocked 时 result.pay_blocked=true，渲染可读权限提示而不是分集列表。
 export function renderSeasonResolveResult(result, mediaType) {
     const resultDiv = document.getElementById('manual-result');
     if (!resultDiv) return;
@@ -493,9 +493,9 @@ export function toggleAllEpisodes() {
     checks.forEach(c => { c.checked = !allChecked; });
 }
 
-/// 提交番剧/课程分集下载：收集勾选的分集，构造 pages 数组（携带 ep_id/bvid/aid/cid），
-/// 调用 /api/download/start 并携带 media_type=pgc/cheese + season_title。
-/// 后端按 media_type 走 pgc/cheese 取流路径，每集当分P入队。
+// 提交番剧或课程分集下载：收集勾选的分集，构造携带 ep_id/bvid/aid/cid 的 pages 数组，
+// 调用 /api/download/start，并携带 media_type=pgc/cheese 和 season_title。
+// 后端按 media_type 选择 pgc/cheese 取流路径，每集作为一个分 P 入队。
 export async function startSeasonDownload(mediaType, seasonTitle) {
     if (!mediaType) return;
     if (!checkNetworkBeforeAction()) return;
@@ -534,7 +534,7 @@ export async function startSeasonDownload(mediaType, seasonTitle) {
         }
     }
 
-    // 番剧/课程用任意一集的 bvid 作为请求顶层 bvid（后端仅用于日志，实际取流按 pages 中的 ep_id）
+    // 番剧/课程用任意一集的 bvid 作为请求顶层 bvid；后端仅用于日志，实际取流按 pages 中的 ep_id 处理。
     const fallbackBvid = pages.find(p => p.bvid)?.bvid
         || _state.resolvedSeason?.episodes?.find(e => e.bvid)?.bvid
         || '';
@@ -581,8 +581,8 @@ export function selectQualityPill(el, qn) {
     _state.selectedQuality = qn;
 }
 
-/// 下载前权限探测：充电/付费/下架视频拦截。
-/// 后端未实现时默认放行，避免阻塞现有功能。
+// 下载前权限探测：拦截充电、付费或下架视频。
+// 后端未实现时默认放行，避免阻塞现有功能。
 export async function gateDownloadCheck(bvid) {
     try {
         const result = await apiPost('/api/video/gate-download', { bvid });
@@ -775,7 +775,7 @@ export function copyFilePath(path) {
     }
 }
 
-// 事件委托：处理 data-copy-path 按钮的点击（避免 inline onclick 中反斜杠被 JS 解释为转义字符）
+// 事件委托：处理 data-copy-path 按钮的点击，避免 inline onclick 中的反斜杠被 JS 解释为转义字符。
 document.addEventListener('click', function(e) {
     const btn = e.target.closest('[data-copy-path]');
     if (btn) {

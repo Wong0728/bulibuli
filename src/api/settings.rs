@@ -192,8 +192,8 @@ async fn save_settings(
     if let Some(expected_revision) = request.expected_revision {
         settings.revision = expected_revision;
     } else if settings.revision == 0 {
-        // Keep clients from before revisioning usable; new clients send the
-        // explicit expected_revision field and receive conflict detection.
+        // 兼容未引入 revision 的旧客户端；新客户端通过 expected_revision
+        // 字段启用冲突检测。
         settings.revision = before.revision;
     }
     validate_sensitive_settings(&state, before.as_ref(), &settings)?;

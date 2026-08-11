@@ -5,10 +5,10 @@ import { fetchDownloadSnapshot } from './download-status-store.js';
 import { retryDownload, loadHistoryBoard } from './history.js';
 import { showToast, confirmDialog } from './download-status.js';
 
-// ==================== 下载管理页面功能 ====================
+// --- 下载管理页面功能 ---
 
-/// 暂停/恢复成功后刷新看板（仅当下载管理 tab 激活时），让按钮与状态点及时切换。
-/// 若抽屉打开则同步刷新抽屉，使暂停/恢复按钮与进度立即更新。
+        // 暂停/恢复成功后刷新看板（仅当下载管理 tab 激活时），让按钮与状态点及时切换。
+        // 若抽屉打开则同步刷新抽屉，使暂停/恢复按钮与进度立即更新。
 function refreshBoardIfActive() {
     if (document.getElementById('tab-history')?.classList.contains('active')) {
         loadHistoryBoard(_state.currentBoardTab || 'completed');
@@ -36,8 +36,8 @@ export async function updateDownloadLists() {
     }
 }
 
-/// 高频进度补丁：遍历看板上的 .board-video-card，按 bvid 匹配 statuses 更新进度条 + 速度。
-/// 用于 L0 高频轮询（1.5s），避免每次都整版重渲染看板。
+// 高频进度补丁：遍历看板上的 .board-video-card，按 bvid 匹配 statuses 更新进度条和速度。
+// 用于 L0 高频轮询（1.5s），避免每次都整版重渲染看板。
 export function patchBoardCardProgress(statuses) {
     _state.boardCardIndex ||= new Map();
     const byBvid = new Map();
@@ -66,7 +66,7 @@ function taskStatusPriority(status) {
     return ({ downloading: 4, pending: 3, retrying: 3, paused: 3, failed: 2, completed: 1 })[status] || 0;
 }
 
-/// WebSocket 实时推送时直接更新单张看板卡片（无需等 HTTP 轮询）
+// WebSocket 实时推送时直接更新单张看板卡片，无需等待 HTTP 轮询。
 export function patchSingleCardProgress(bvid, data) {
     _state.boardCardIndex ||= new Map();
     let card = _state.boardCardIndex.get(bvid);
@@ -78,7 +78,7 @@ export function patchSingleCardProgress(bvid, data) {
     _applyProgressToCard(card, data);
 }
 
-/// 内部：将进度数据应用到卡片 DOM（含 "(X/N) 步骤名 进度%" 分数式展示）
+// 内部：将进度数据应用到卡片 DOM，包含“(X/N) 步骤名 进度%”展示。
 function _applyProgressToCard(card, status) {
     const progress = clampPercent(status.progress_percent);
     const speed = status.speed ? formatSpeed(status.speed) : '';
@@ -185,7 +185,7 @@ export async function removeDownload(bvid, taskType = 'video') {
     }
 }
 
-/// 暂停单个下载任务（task_id 来自 /api/download/status 返回的 task_id 字段）
+// 暂停单个下载任务（task_id 来自 /api/download/status 返回的 task_id 字段）。
 export async function pauseDownload(taskId) {
     if (!taskId) {
         showToast('缺少任务 ID，无法暂停', 'error');
@@ -205,7 +205,7 @@ export async function pauseDownload(taskId) {
     }
 }
 
-/// 恢复单个下载任务
+// 恢复单个下载任务。
 export async function resumeDownload(taskId) {
     if (!taskId) {
         showToast('缺少任务 ID，无法恢复', 'error');
@@ -225,7 +225,7 @@ export async function resumeDownload(taskId) {
     }
 }
 
-/// 全局暂停所有下载任务
+// 全局暂停所有下载任务。
 export async function pauseAllDownloads() {
     if (!(await confirmDialog('确定要暂停所有下载任务吗？', { title: '全部暂停', okText: '暂停' }))) return;
     try {
@@ -242,7 +242,7 @@ export async function pauseAllDownloads() {
     }
 }
 
-/// 全局恢复所有暂停任务
+// 全局恢复所有暂停任务。
 export async function resumeAllDownloads() {
     try {
         const result = await apiPost('/api/download/resume', { task_id: null });

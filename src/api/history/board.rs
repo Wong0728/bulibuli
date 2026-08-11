@@ -29,7 +29,7 @@ pub(super) async fn list_history(
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let server_time = Local::now().timestamp();
 
-    // 单视频详情查询：返回该 bvid 的 history + sidecar + 最新 download_task 状态
+    // 单视频详情查询：返回该 bvid 的 history、sidecar 和最新 download_task 状态。
     if let Some(bvid) = q.bvid.as_deref() {
         let can_open_directory = can_open_directory(&state.bili.security.current().mode);
         let data = build_single_video_response(
@@ -121,7 +121,7 @@ async fn build_board_response(
         configured_path_display_mode
     };
 
-    // 按 uid 分组
+    // 按 UID 分组。
     let mut groups: HashMap<String, Vec<history::Model>> = HashMap::new();
     for h in histories {
         let uid = h.uid.clone().unwrap_or_else(|| "unknown".to_string());
@@ -162,7 +162,7 @@ async fn build_board_response(
         }));
     }
 
-    // 按 uid 排序，保证稳定
+    // 按 UID 排序，保证结果稳定。
     result_groups.sort_by(|a, b| {
         a["uid"]
             .as_str()
@@ -271,7 +271,7 @@ async fn build_single_video_response(
         .sidecar_status(&h.bvid, h.uid.as_deref(), h.file_path.as_deref())
         .await;
 
-    // 查博主信息（未监控博主时用 history 的 owner 快照兜底）
+    // 查询博主信息；未监控博主时使用 history 的 owner 快照兜底。
     let blogger_info = if let Some(uid) = h.uid.as_deref() {
         business
             .blogger_service

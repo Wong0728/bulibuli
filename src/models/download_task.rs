@@ -36,7 +36,7 @@ pub struct Model {
     /// 下载目录绝对路径，用于完成后定位文件（避免跨天日期变化导致找不到文件）
     pub download_dir: Option<String>,
     /// 任务来源：auto（自动监控）/ manual（手动下载）；NULL 视为 auto（存量旧数据）。
-    /// 仅 auto 任务的下载完成/失败日志携带 uid 写入博主日志。
+    /// 仅 auto 任务的下载完成/失败日志携带 UID 写入博主日志。
     #[sea_orm(nullable)]
     pub source: Option<String>,
     pub generation: i64,

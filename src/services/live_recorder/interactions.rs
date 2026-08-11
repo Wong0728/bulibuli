@@ -300,8 +300,8 @@ async fn archive_legacy_and_xml(
 ) -> Result<bool> {
     const MAX_ARCHIVE_EVENTS: usize = 500_000;
     const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
-    // ponytail: bounded archive output prevents one corrupt JSONL from exhausting memory;
-    // move archival to an external stream processor if larger captures become a requirement.
+    // ponytail：限制归档输出，避免损坏的 JSONL 耗尽内存；
+    // 如果未来需要更大规模采集，再迁移到外部流式处理器。
     let mut input = BufReader::new(tokio::fs::File::open(&paths.events).await?).lines();
     let mut legacy = tokio::fs::File::create(&paths.legacy).await?;
     let title_json = serde_json::to_string(title)?;

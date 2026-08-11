@@ -1,0 +1,78 @@
+name: bulibuli Alpha release artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to validate against Cargo.toml
+        required: true
+        default: v2.0.0-alpha.1
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            platform: linux
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            platform: macos
+            arch: x86_64
+            target: x86_64-apple-darwin
+          - os: macos-14-arm64
+            platform: macos
+            arch: arm64
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Check release tag
+        shell: bash
+        run: test "${{ inputs.tag }}" = "v2.0.0-alpha.1"
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install macOS runtime tools
+        if: matrix.platform == 'macos'
+        run: brew install aria2 ffmpeg
+
+      - name: Build frontend bundle
+        working-directory: static/js
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Build portable archive
+        run: python build.py --portable --platform ${{ matrix.platform }} --target ${{ matrix.target }}
+
+      - name: Upload archive and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulibuli-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7

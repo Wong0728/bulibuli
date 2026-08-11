@@ -203,7 +203,7 @@ impl MonitorService {
             .await;
         }
 
-        // === 重投检测（纯提示，可关闭）：新发现 bvid 与该博主最近 90 天 history 标题相似 ===
+        // --- 重投检测（纯提示，可关闭）：新发现 bvid 与该博主最近 90 天 history 标题相似 ---
         let detect_reupload = settings
             .get("monitor")
             .and_then(|m| m.get("detect_reupload"))
@@ -312,11 +312,11 @@ impl MonitorService {
                 .await;
         }
 
-        // === 博主黄点检测：拉取最新 face/name，与 last_seen_* 比对 ===
+        // --- 博主黄点检测：拉取最新 face/name，与 last_seen_* 比对 ---
         // 注意：此处不写 last_seen_*，只写当前 face/name/level/sign；差异时落 last_seen_*=旧值
         self.check_blogger_profile_change(&uid, blogger).await;
 
-        // === 博主保留数清理：每轮监控跑完触发一次 ===
+        // --- 博主保留数清理：每轮监控跑完触发一次 ---
         if let Err(e) = self.blogger_service.enforce_retain(&uid).await {
             warn!("博主 {} 保留数清理失败: {e}", uid);
         }

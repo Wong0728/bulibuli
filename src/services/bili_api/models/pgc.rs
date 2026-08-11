@@ -45,7 +45,7 @@ pub struct PgcEpisode {
 }
 
 impl PgcEpisode {
-    /// 对外展示用标题：优先 long_title，其次 title，最终回退 ep_id
+    /// 对外展示用标题：优先 long_title，其次 title，最终回退 ep_id。
     pub fn display_title(&self) -> String {
         if !self.long_title.is_empty() {
             self.long_title.clone()
@@ -58,7 +58,7 @@ impl PgcEpisode {
 }
 
 impl PgcSeason {
-    /// 季标题：B 站两个字段都可能存在，优先 title，回退 season_title
+    /// 季标题：B 站两个字段都可能存在，优先 title，回退 season_title。
     pub fn title(&self) -> String {
         if !self.title.is_empty() {
             self.title.clone()

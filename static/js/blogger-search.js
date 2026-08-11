@@ -4,7 +4,7 @@ import { apiPost, apiGet } from './core.js';
 import { loadManualSeriesList } from './manual.js';
 import { showToast, confirmDialog } from './download-status.js';
 
-// ==================== 博主搜索与已添加博主管理 ====================
+// --- 博主搜索与已添加博主管理 ---
 // “已添加博主”与“自动任务”是两个独立集合，前端不做本地持久化。
 
 // 从后端加载已知博主列表
@@ -144,10 +144,10 @@ export function formatFans(n) {
     return n.toString();
 }
 
-// ==================== 博主资料变更通知（黄点） ====================
+// --- 博主资料变更通知（黄点） ---
 
-/// 检查所有博主的资料变更通知状态，更新博主搜索页右上角黄点。
-/// 黄点 = 后端某 blogger.last_seen_at IS NOT NULL（即有未确认的改名/改头像）。
+// 检查所有博主的资料变更通知状态，更新博主搜索页右上角黄点。
+// 黄点表示后端存在 blogger.last_seen_at 非空的未确认资料变更。
 export async function checkBloggerProfileNotices() {
     try {
         const result = await apiGet('/api/blogger/saved/list');
@@ -167,7 +167,7 @@ export async function checkBloggerProfileNotices() {
         }
         btn.hidden = false;
         badge.textContent = changed.length;
-        // 缓存给 modal 用
+        // 缓存给 modal 使用。
         _state.bloggerProfileChanges = changed;
     } catch (e) {
         // 静默失败
@@ -180,7 +180,7 @@ export function hideBloggerNoticeDot() {
     if (btn) btn.hidden = true;
 }
 
-/// 显示博主资料变更模态框。
+// 显示博主资料变更模态框。
 export function showBloggerNoticeModal() {
     const list = _state.bloggerProfileChanges || [];
     const container = document.getElementById('blogger-notice-list');
@@ -234,7 +234,7 @@ export function closeBloggerNoticeModal() {
     if (modal) modal.classList.remove('active');
 }
 
-/// 单个博主"知道了"：调后端 acknowledge 后刷新黄点 + modal 列表。
+// 单个博主“知道了”：调用后端 acknowledge，然后刷新黄点和模态框列表。
 export async function acknowledgeBloggerChange(uid) {
     try {
         const result = await apiPost('/api/blogger/acknowledge', { uid });
@@ -242,12 +242,12 @@ export async function acknowledgeBloggerChange(uid) {
             showToast(result.message || '确认失败', 'error');
             return;
         }
-        // 从缓存移除
+        // 从缓存移除。
         if (_state.bloggerProfileChanges) {
             _state.bloggerProfileChanges = _state.bloggerProfileChanges.filter(b => b.uid !== uid);
         }
         await checkBloggerProfileNotices();
-        // 若已无变更通知则关闭 modal，否则刷新列表
+        // 若已无变更通知则关闭 modal，否则刷新列表。
         const remaining = (_state.bloggerProfileChanges || []).length;
         if (remaining === 0) {
             closeBloggerNoticeModal();
@@ -260,7 +260,7 @@ export async function acknowledgeBloggerChange(uid) {
     }
 }
 
-/// 全部"知道了"：批量调后端 acknowledge。
+// 全部“知道了”：批量调用后端 acknowledge。
 export async function acknowledgeAllBloggerChanges() {
     const list = _state.bloggerProfileChanges || [];
     if (list.length === 0) {

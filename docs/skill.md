@@ -1,4 +1,4 @@
-# Bilibili 下载器 Skill
+# 补哩补哩 Skill
 
 > 本文档供本机 AI 调用 `ctl` 命令使用，由 `COMMAND_REGISTRY` 自动生成，请勿手改。
 > 命令清单与代码同步：修改命令后运行 `cargo test test_skill_doc_in_sync` 更新文档。
@@ -8,7 +8,7 @@
 所有命令通过本机 IPC 调用（无网络端口暴露）：
 
 ```
-bilibili-dl.exe ctl <command> [args...]
+bulibuli.exe ctl <command> [args...]
 ```
 
 返回 JSON 信封：
@@ -96,7 +96,7 @@ dl pause <task_id> --expected-version 42
 ## 实时事件订阅
 
 ```
-bilibili-dl.exe ctl events --watch
+bulibuli.exe ctl events --watch
 ```
 
 流式输出 JSON Lines（每行一条审计事件），30 秒无事件发空行保活。

@@ -15,9 +15,9 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let conn = manager.get_connection();
 
-        // ── 1. 乐观锁 version 列（SQLite ALTER TABLE 一次只能加一列）──
+        // --- 1. 乐观锁 version 列（SQLite ALTER TABLE 一次只能加一列） ---
         for table in ["download_tasks", "bloggers", "history"] {
-            // IF NOT EXISTS 在 SQLite 的 ALTER TABLE ADD COLUMN 不被支持，需要先查 PRAGMA
+            // IF NOT EXISTS 在 SQLite 的 ALTER TABLE ADD COLUMN 不被支持，需要先查 PRAGMA。
             let columns = conn
                 .query_all_raw(Statement::from_string(
                     conn.get_database_backend(),
@@ -35,7 +35,7 @@ impl MigrationTrait for Migration {
             }
         }
 
-        // ── 2. operation_log 审计表 ──
+        // --- 2. operation_log 审计表 ---
         conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS operation_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

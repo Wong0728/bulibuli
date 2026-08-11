@@ -109,7 +109,7 @@ impl WbiKeysCache {
 
     /// 获取 img_key/sub_key，带 TTL 缓存。
     ///
-    /// `cookies` 应为已富化（含设备指纹）的 cookie 字符串：B站对新风控策略下的
+    /// `cookies` 应为已富化（含设备指纹）的 Cookie 字符串：B 站在新风控策略下的
     /// 匿名/冷设备请求 `/x/web-interface/nav` 会直接返回 -101「账号未登录」，
     /// 必须携带登录态 Cookie 才能拿到 wbi_img keys。
     pub async fn get(
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_mixin_key_length() {
-        // img_key+sub_key 通常为 64 字符，mixin_key 取前 32 位
+        // img_key + sub_key 通常为 64 个字符，mixin_key 取前 32 位。
         let orig = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let mk = mixin_key(orig).unwrap();
         assert_eq!(mk.len(), 32);

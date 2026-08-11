@@ -1,4 +1,4 @@
-//! 弹幕/评论下载服务：BV 号解码与 cookie 工具在本文件，
+//! 弹幕/评论下载服务：BV 号解码与 Cookie 工具在本文件，
 //! protobuf 弹幕下载见 `fetch`，评论抓取见 `comments`，评论 HTML 渲染见 `comment_html`。
 
 mod archive;

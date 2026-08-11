@@ -4,19 +4,19 @@ use serde::Serialize;
 use std::sync::LazyLock;
 
 static BV_RE: LazyLock<regex::Regex> =
-    // SAFETY: the expression is a compile-time literal covered by parser tests.
+    // SAFETY: 表达式是编译期常量，并由解析器测试覆盖。
     LazyLock::new(|| regex::Regex::new(r"(?i)(BV[0-9A-Za-z]{10})").expect("static BV regex"));
 static AV_RE: LazyLock<regex::Regex> =
-    // SAFETY: the expression is a compile-time literal covered by parser tests.
+    // SAFETY: 表达式是编译期常量，并由解析器测试覆盖。
     LazyLock::new(|| regex::Regex::new(r"(?i)(?:^|/|\\b)av([0-9]+)").expect("static AV regex"));
 static EP_RE: LazyLock<regex::Regex> =
-    // SAFETY: the expression is a compile-time literal covered by parser tests.
+    // SAFETY: 表达式是编译期常量，并由解析器测试覆盖。
     LazyLock::new(|| regex::Regex::new(r"(?i)(?:^|/|\\b)ep([0-9]+)").expect("static EP regex"));
 static SS_RE: LazyLock<regex::Regex> =
-    // SAFETY: the expression is a compile-time literal covered by parser tests.
+    // SAFETY: 表达式是编译期常量，并由解析器测试覆盖。
     LazyLock::new(|| regex::Regex::new(r"(?i)(?:^|/|\\b)ss([0-9]+)").expect("static SS regex"));
 static FP_RE: LazyLock<regex::Regex> =
-    // SAFETY: the expression is a compile-time literal covered by parser tests.
+    // SAFETY: 表达式是编译期常量，并由解析器测试覆盖。
     LazyLock::new(|| regex::Regex::new(r"(?i)(?:^|/|\\b)fp([0-9]+)").expect("static FP regex"));
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

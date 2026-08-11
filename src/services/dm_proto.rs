@@ -1,4 +1,4 @@
-//! B站弹幕 protobuf 解析（端点 /x/v2/dm/wbi/web/seg.so）。
+//! B 站弹幕 protobuf 解析（端点 /x/v2/dm/wbi/web/seg.so）。
 //!
 //! 字段编号参考社区文档与 Bili23-Downloader 实现。
 //! 手写 prost 结构体，避免引入 protoc/build.rs 依赖。
@@ -16,7 +16,7 @@ pub struct DanmakuSeg {
 /// 单条弹幕。
 #[derive(Clone, PartialEq, Message)]
 pub struct DanmakuElem {
-    /// 弹幕 dmid（数值形式，B站已推荐用 id_str）。
+    /// 弹幕 dmid（数值形式，B 站已推荐使用 id_str）。
     #[prost(int64, tag = "1")]
     pub id: i64,
     /// 视频内出现时间（毫秒）。

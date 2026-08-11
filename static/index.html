@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>B站视频监控助手</title>
+    <title>补哩补哩 bulibuli</title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="css/lib/jetbrains-mono.css?v=4">
     <link rel="stylesheet" href="css/lib/fontawesome.min.css?v=4">
@@ -14,9 +14,9 @@
     <link rel="stylesheet" href="css/live.css?v=1">
     <link rel="stylesheet" href="css/drawer.css?v=1">
     <link rel="stylesheet" href="css/style.css?v=20">
-    <!-- Socket.IO 客户端库 - 本地版本，支持离线使用 -->
+    <!-- Socket.IO 客户端库：本地版本，支持离线使用。 -->
     <script src="js/socket.io.min.js?v=3"></script>
-    <!-- QRCode 库 - 本地版本，支持离线使用 -->
+    <!-- QRCode 库：本地版本，支持离线使用。 -->
     <script src="js/qrcode.min.js?v=3"></script>
 </head>
 <body>
@@ -26,8 +26,8 @@
 <div class="container">
     <header class="header">
         <div class="header-left">
-            <h1>B站视频监控助手</h1>
-            <p>博主搜索 / 手动查询 / 自动任务 / 下载管理 / 直播 / 设置</p>
+            <h1>补哩补哩 <span class="brand-latin">bulibuli</span></h1>
+            <p>下架之前，先下为敬。　博主搜索 / 手动查询 / 自动任务 / 下载管理 / 直播 / 设置</p>
         </div>
         <div class="header-right">
             <div id="login-user-card" class="login-user-card" hidden></div>
@@ -41,7 +41,7 @@
         </div>
     </header>
 
-    <!-- Cookies 未配置警告横幅 -->
+    <!-- Cookie 未配置警告横幅。 -->
     <div id="cookie-warning-banner" class="cookie-warning-banner" hidden>
         <i class="fa-solid fa-exclamation-triangle"></i>
         <span>未配置有效的 Cookies，部分功能受限（仅能获取低清晰度视频）。</span>
@@ -49,7 +49,7 @@
         <button class="cookie-warning-close" title="关闭">&times;</button>
     </div>
 
-    <!-- 网络异常横幅 -->
+    <!-- 网络异常横幅。 -->
     <div id="network-error-banner" class="network-error-banner">
         <i class="fa-solid fa-wifi html-style-3"></i>
         <span>网络连接异常，部分功能不可用，请检查网络或后端服务状态</span>
@@ -67,7 +67,7 @@
         <button type="button" class="nav-tab" data-tab="settings" role="tab" aria-selected="false"><i class="fa-solid fa-cog"></i> 设置</button>
     </nav>
 
-    <!-- 博主搜索 Tab -->
+    <!-- 博主搜索 Tab。 -->
     <main id="main-content">
     <section id="tab-search" class="tab-panel active">
         <div class="card">
@@ -106,7 +106,7 @@
         </div>
     </section>
 
-    <!-- 手动查询 Tab -->
+    <!-- 手动查询 Tab。 -->
     <section id="tab-manual" class="tab-panel">
         <div class="card">
             <div class="card-title">
@@ -156,16 +156,16 @@
         <div id="manual-load-more" class="manual-load-more" hidden></div>
     </section>
 
-    <!-- 自动任务 Tab -->
+    <!-- 自动任务 Tab。 -->
     <section id="tab-auto" class="tab-panel">
-        <!-- 博主看板 -->
+        <!-- 博主看板。 -->
         <div class="card">
             <div class="card-title">
                 <span><i class="fa-solid fa-users"></i> 博主监控看板</span>
                 <span id="auto-board-summary" class="last-pull-time" title="监控博主与运行中的任务概览">--</span>
             </div>
             <div class="blogger-dashboard">
-                <!-- 博主列表侧边栏 -->
+                <!-- 博主列表侧边栏。 -->
                 <aside class="blogger-sidebar">
                     <div class="blogger-sidebar-title">
                         <span><i class="fa-solid fa-list"></i> 监控列表</span>
@@ -174,7 +174,7 @@
                         </button>
                     </div>
                     <div id="blogger-sidebar-list">
-                        <!-- 动态生成博主列表 -->
+                        <!-- 动态生成博主列表。 -->
                     </div>
                     <div class="blogger-sidebar-actions">
                         <button class="btn btn-primary btn-block" id="save-bloggers-btn" data-action="save-bloggers">
@@ -183,7 +183,7 @@
                     </div>
                 </aside>
                 
-                <!-- 博主详情面板 -->
+                <!-- 博主详情面板。 -->
                 <div class="blogger-detail-panel" id="blogger-detail-panel">
                     <div class="blogger-empty-state" id="blogger-empty-state">
                         <i class="fa-solid fa-user-clock"></i>
@@ -227,7 +227,7 @@
                             <i class="fa-solid fa-terminal"></i> 博主日志
                         </div>
                         <div class="blogger-logs-panel" id="detail-blogger-logs">
-                            <!-- 博主专属日志 -->
+                            <!-- 博主专属日志。 -->
                         </div>
                     </div>
                 </div>
@@ -236,7 +236,7 @@
 
     </section>
 
-    <!-- 下载管理 Tab -->
+    <!-- 下载管理 Tab。 -->
     <section id="tab-history" class="tab-panel">
         <div class="card">
             <div class="board-top-bar">
@@ -253,7 +253,7 @@
                 </div>
             </div>
 
-            <!-- 3 个子 tab -->
+            <!-- 3 个子 tab。 -->
             <div class="board-sub-tabs">
                 <div class="board-sub-tab" data-board-tab="downloading" data-action="switch-board-tab">
                     下载中 <span class="board-tab-count" id="board-count-downloading">0</span>
@@ -266,7 +266,7 @@
                 </div>
             </div>
 
-            <!-- 看板主体（按博主分组） -->
+            <!-- 看板主体（按博主分组）。 -->
             <div class="history-board" id="history-board">
                 <div class="empty-state-grid">
                     <i class="fa-solid fa-inbox"></i>
@@ -277,10 +277,10 @@
         </div>
     </section>
 
-    <!-- 侧滑抽屉遮罩 -->
+    <!-- 侧滑抽屉遮罩。 -->
     <div class="drawer-overlay" id="drawer-overlay" data-action="close-video-drawer"></div>
 
-    <!-- 视频详情侧滑抽屉 -->
+    <!-- 视频详情侧滑抽屉。 -->
     <div class="video-drawer" id="video-drawer">
         <div class="drawer-header">
             <div class="drawer-title" id="drawer-video-title">视频标题</div>
@@ -289,13 +289,13 @@
             </button>
         </div>
         <div class="drawer-body" id="drawer-body">
-            <!-- 动态内容 -->
+            <!-- 动态内容。 -->
         </div>
     </div>
 
-    <!-- 直播录制 Tab -->
+    <!-- 直播录制 Tab。 -->
     <section id="tab-live" class="tab-panel">
-        <!-- 直播看板：布局对齐博主监控看板（侧边栏 + 详情） -->
+        <!-- 直播看板：布局对齐博主监控看板（侧边栏 + 详情）。 -->
         <div class="card">
             <div class="card-title">
                 <span><i class="fa-solid fa-tower-broadcast"></i> 直播录制看板</span>
@@ -310,7 +310,7 @@
             </div>
             <div id="live-risk-notice" class="live-alert warn" hidden role="alert"></div>
             <div class="live-dashboard">
-                <!-- 房间列表侧边栏 -->
+                <!-- 房间列表侧边栏。 -->
                 <aside class="live-sidebar">
                     <div class="live-sidebar-title">
                         <span><i class="fa-solid fa-list"></i> 关注房间（<span id="live-source-count">0</span>）</span>
@@ -319,7 +319,7 @@
                         </button>
                     </div>
                     <div id="live-room-list" aria-live="polite">
-                        <!-- 动态生成房间列表 -->
+                        <!-- 动态生成房间列表。 -->
                     </div>
                     <div class="live-sidebar-actions">
                         <button class="btn btn-primary btn-block" id="live-refresh-list-btn">
@@ -328,7 +328,7 @@
                     </div>
                 </aside>
 
-                <!-- 房间详情面板 -->
+                <!-- 房间详情面板。 -->
                 <div class="live-detail-panel" id="live-detail-panel">
                     <div class="live-empty-state" id="live-empty-state">
                         <i class="fa-solid fa-tower-broadcast"></i>
@@ -336,13 +336,13 @@
                         <p class="empty-hint">点击上方“添加”输入房间号或直播链接，查询后即可关注</p>
                     </div>
                     <div id="live-detail-content" hidden>
-                        <!-- 动态生成房间详情 -->
+                        <!-- 动态生成房间详情。 -->
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- 录制任务看板：布局对齐下载管理（顶栏 + 子 tab） -->
+        <!-- 录制任务看板：布局对齐下载管理（顶栏 + 子 tab）。 -->
         <div class="card">
             <div class="board-top-bar">
                 <div class="board-top-bar-left">
@@ -374,7 +374,7 @@
         </div>
     </section>
 
-    <!-- 直播源设置弹窗（结构与添加博主弹窗一致） -->
+    <!-- 直播源设置弹窗（结构与添加博主弹窗一致）。 -->
     <div id="live-source-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="live-settings-title">
         <div class="modal-container modal-container-wide">
             <div class="modal-header">
@@ -439,7 +439,7 @@
         </div>
     </div>
 
-    <!-- 添加直播源弹窗 -->
+    <!-- 添加直播源弹窗。 -->
     <div id="live-add-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="live-add-title">
         <div class="modal-container">
             <div class="modal-header">
@@ -467,13 +467,13 @@
         </div>
     </div>
 
-    <!-- 系统设置 Tab -->
+    <!-- 系统设置 Tab。 -->
     <section id="tab-settings" class="tab-panel" role="tabpanel" aria-label="设置">
         <div id="settings-fragment-mount"></div>
     </main>
 </div>
 
-<!-- 添加博主模态框 -->
+<!-- 添加博主模态框。 -->
 <div id="blogger-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="blogger-modal-title">
     <div class="modal-container modal-container-wide">
         <div class="modal-header">
@@ -568,7 +568,7 @@
     </div>
 </div>
 
-<!-- 博主资料变更通知模态框 -->
+<!-- 博主资料变更通知模态框。 -->
 <div id="blogger-notice-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="blogger-notice-title">
     <div class="modal-container">
         <div class="modal-header">
@@ -589,7 +589,7 @@
     </div>
 </div>
 
-<!-- B站扫码登录模态框 -->
+    <!-- B 站扫码登录模态框。 -->
 <div id="qrcode-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="qrcode-modal-title">
     <div class="modal-container qrcode">
         <div class="modal-header">
@@ -614,7 +614,7 @@
     </div>
 </div>
 
-<!-- 通用确认对话框 -->
+<!-- 通用确认对话框。 -->
 <div id="confirm-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
     <div class="modal-container html-style-13">
         <div class="modal-header">
@@ -631,7 +631,7 @@
     </div>
 </div>
 
-<!-- 右键菜单 -->
+<!-- 右键菜单。 -->
 <div id="context-menu" class="context-menu hidden" role="menu" aria-label="博主操作">
     <button type="button" class="context-menu-item" data-action="context-menu-edit" role="menuitem">
         <i class="fa-solid fa-edit"></i> 编辑博主

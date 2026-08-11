@@ -1,6 +1,8 @@
-# BilibiliUIDBuildownloader
+# 补哩补哩 bulibuli
 
-B 站 UID 视频监控与下载助手，后端使用 Rust/Axum，前端使用原生 JavaScript。
+> 下架之前，先下为敬。
+
+补哩补哩是一个基于 Rust/Axum 的 B 站视频监控、补档下载与直播录制工具。当前 Rust 版本为 v2 Alpha；GitHub `main` 中的 Python 版本保留为 v1 历史版本。
 
 ## 快速开始
 
@@ -24,6 +26,24 @@ npm ci --ignore-scripts
 npm run build
 ```
 
+## 发布版本
+
+Windows 便携版、Linux x86_64 和 macOS Intel/Apple Silicon 归档均通过 GitHub Release 发布。Windows 便携包可直接解压运行，Linux 包包含一键安装脚本。
+
+Linux 一键安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/v2.0.0-alpha.1/deploy/linux/install.sh | bash
+```
+
+Linux 安装脚本支持 `install`、`run`、`service`、`unservice` 和 `status`。Termux 请使用：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/v2.0.0-alpha.1/deploy/termux/install.sh | bash
+```
+
+Termux 首次运行会使用本机 Rust 编译，并通过 `pkg` 安装 aria2、FFmpeg 和 Termux 所需工具；开机自启还需要 Termux:Boot 应用。
+
 ## 文档
 
 - [代码规范](代码规范.md)
@@ -33,30 +53,15 @@ npm run build
 - [部署安全说明](deploy/SECURITY.md)
 - [内置资源清单与校验](resources/README.md)
 
-## 部署
-
-Linux、Termux 和 Caddy 示例位于 [`deploy/`](deploy/)。Windows 便携包使用 `python build.py --portable` 构建。
-
 安全模式、配对、访问控制、代理和内置资源说明以 [`deploy/SECURITY.md`](deploy/SECURITY.md) 与 [`resources/README.md`](resources/README.md) 为准；不要把 LAN 模式或 `auth_bypass_ips` 当作公网安全边界。
 
-## 发布与恢复最短流程
+## 发布与恢复
 
 1. 升级或迁移前停止服务，并备份 `data/`（尤其是数据库、`security.toml` 和下载目录）。
-2. 先运行 `cargo test --all-targets`、`npm run build`、`python build.py --check`；依赖审计、Bash 语法和 Windows release 以 CI 为准。
+2. 先运行 `cargo test --all-targets`、`npm run build`、`python build.py --check`；依赖审计、Shell 和跨平台 release 以 CI 为准。
 3. 迁移失败时保留原数据库和日志，不删除临时文件；从备份恢复后重新运行迁移，确认 `/api/ready` 正常再开放服务。
 4. 回滚时停止新版本、恢复程序与 `data/` 备份，再启动旧版本；不要让新旧版本同时写同一数据库。
 5. 服务重启后检查下载队列、直播恢复列表和 `recovery_state`；临时文件或 FLV 分段保留到确认恢复/清理完成。
-6. 更新 `resources/` 中的内置资源时，同时更新 [`resources/README.md`](resources/README.md) 的版本、来源、许可证和 SHA-256，随后运行资源哈希检查。
-
-运行时日志只记录操作类型、耗时、字节数、重试/恢复次数和队列长度等诊断字段；不要把 Cookie、token、完整查询参数或敏感绝对路径复制到工单中。
-
-## 发布与恢复最短流程
-
-1. 升级或迁移前停止服务，并备份 `data/`（尤其是数据库、`security.toml` 和下载目录）。
-2. 先运行 `cargo test --all-targets`、`npm run build`、`python build.py --check`；依赖审计、Bash 语法和 Windows release 以 CI 为准。
-3. 迁移失败时保留原数据库和日志，不删除临时文件；从备份恢复后重新运行迁移，确认 `/api/ready` 正常再开放服务。
-4. 回滚时停止新版本、恢复程序与 `data/` 备份，再启动旧版本；不要让新旧版本同时写同一数据库。
-5. 服务重启后检查下载队列、直播恢复列表和 `recovery_state`；临时文件或 FLV 分段保留到确认恢复/清理完成。
-6. 更新 `resources/` 中的内置资源时，同时更新 [`resources/README.md`](resources/README.md) 的版本、来源、许可证和 SHA-256，随后运行资源哈希检查。
+6. 更新 `resources/` 中的内置资源时，同时更新 [`resources/README.md`](resources/README.md) 的版本、来源、许可证和 SHA-256。
 
 运行时日志只记录操作类型、耗时、字节数、重试/恢复次数和队列长度等诊断字段；不要把 Cookie、token、完整查询参数或敏感绝对路径复制到工单中。

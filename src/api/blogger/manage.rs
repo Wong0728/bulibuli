@@ -156,7 +156,7 @@ pub(super) async fn add_blogger(
     }
 
     // 创建记录前获取当前资料，避免首屏展示空字段。
-    // get_user_info 成功即代表资料可用；失败（不存在/风控/网络）则回退到用户传入信息。
+    // `get_user_info` 成功即表示资料可用；不存在、风控或网络错误时回退到用户传入信息。
     let cookies = state.infra.settings_service.cookie_header().await?;
     let fallback_name = if name.is_empty() {
         None
@@ -326,7 +326,7 @@ pub(super) async fn update_blogger(
         update.max_interval = Some(max);
     }
 
-    // validate min <= max using the values that will be written
+    // 使用即将写入的值校验 min <= max。
     let min = update.min_interval.unwrap_or(b.min_interval);
     let max = update.max_interval.unwrap_or(b.max_interval);
     validate_intervals(min, max)?;

@@ -75,9 +75,8 @@ pub fn select_stream_candidates(
 pub fn select_best_stream(
     durl: &[crate::services::bili_api::models::live::LiveStreamUrl],
 ) -> Result<crate::services::bili_api::models::live::LiveStreamUrl> {
-    // Prefer the actual highest quality, broadly compatible AVC, direct FLV
-    // when available, then the upstream CDN order. HLS/fMP4 remains available
-    // as a fallback for partitions that do not expose a direct FLV stream.
+    // 优先选择实际最高画质且兼容性较好的 AVC 直连 FLV；没有时遵循上游 CDN 顺序。
+    // 对不提供直连 FLV 的分区，保留 HLS/fMP4 作为回退。
     let mut sorted = durl
         .iter()
         .filter(|stream| {

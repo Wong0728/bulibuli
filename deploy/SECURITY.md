@@ -3,14 +3,14 @@
 程序首次初始化会在本机终端显示一次性配对码。以后需要新增设备时，只能在服务主机上执行：
 
 ```text
-bilibili-uid-buildownloader ctl pair
+bulibuli ctl pair
 ```
 
 默认 `local` 模式只监听 `127.0.0.1`。可信局域网可显式切换为 `lan`；公网必须配置 HTTPS 反向代理：
 
 ```text
-bilibili-uid-buildownloader ctl mode lan
-bilibili-uid-buildownloader ctl mode proxy downloads.example.com
+bulibuli ctl mode lan
+bulibuli ctl mode proxy downloads.example.com
 ```
 
 模式切换后重启服务。`proxy` 固定监听 `127.0.0.1:5000`，端口被占用时直接启动失败。复制 `deploy/caddy/Caddyfile.example`，替换域名并让 Caddy 加载配置。示例会覆盖 `X-Forwarded-For`、代理 Socket.IO，并发送 HSTS、CSP、`nosniff`、`DENY` 和 `no-referrer`；默认不记录包含完整查询参数的访问日志。
@@ -18,16 +18,16 @@ bilibili-uid-buildownloader ctl mode proxy downloads.example.com
 常用本机控制：
 
 ```text
-bilibili-uid-buildownloader ctl sessions
-bilibili-uid-buildownloader ctl revoke <session-id|all>
-bilibili-uid-buildownloader ctl access deny 203.0.113.0/24
-bilibili-uid-buildownloader ctl access allow 198.51.100.8 --minutes 30
-bilibili-uid-buildownloader ctl access list
-bilibili-uid-buildownloader ctl geo cn on
-bilibili-uid-buildownloader ctl geo db /absolute/path/GeoLite2-Country.mmdb
-bilibili-uid-buildownloader ctl geo db remove
-bilibili-uid-buildownloader ctl trust aria2 http://127.0.0.1:6800/jsonrpc
-bilibili-uid-buildownloader ctl trust ffmpeg /absolute/path/ffmpeg
+bulibuli ctl sessions
+bulibuli ctl revoke <session-id|all>
+bulibuli ctl access deny 203.0.113.0/24
+bulibuli ctl access allow 198.51.100.8 --minutes 30
+bulibuli ctl access list
+bulibuli ctl geo cn on
+bulibuli ctl geo db /absolute/path/GeoLite2-Country.mmdb
+bulibuli ctl geo db remove
+bulibuli ctl trust aria2 http://127.0.0.1:6800/jsonrpc
+bulibuli ctl trust ffmpeg /absolute/path/ffmpeg
 ```
 
 ### 内置 GeoIP 数据库（开箱即用）

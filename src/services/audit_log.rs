@@ -6,7 +6,7 @@
 //! - **查询接口**：`list` / `by_target` 供 `ctl audit` 子命令调用，支持过滤
 //!
 //! 与 `conflict_guard.rs` 配合：ConflictGuard 在校验版本前后调用 `record`，
-//! 业务 handler 也可直接调用 `record` 记录不经过 ConflictGuard 的操作（如 cookie 保存）。
+//! 业务 handler 也可直接调用 `record` 记录不经过 ConflictGuard 的操作（如 Cookie 保存）。
 
 use crate::error::AppResult;
 use crate::models::operation_log::{
@@ -116,8 +116,8 @@ impl AuditLogService {
             .await;
     }
 
-    /// 与 `record` 相同，但**不广播事件**。用于敏感操作（cookie 保存等）：
-    /// 审计日志仍写 DB 便于追溯，但事件流不暴露"cookie 已保存"这类信息。
+    /// 与 `record` 相同，但**不广播事件**。用于敏感操作（Cookie 保存等）：
+    /// 审计日志仍写 DB 便于追溯，但事件流不暴露“Cookie 已保存”这类信息。
     pub async fn record_silent(
         &self,
         ctx: &AuditContext,
