@@ -664,7 +664,7 @@ impl DownloadManager {
     /// - `task_id = None`：全局恢复（aria2.unpauseAll + 重新调度所有 paused 任务）。
     /// - `task_id = Some(id)`：仅恢复指定任务。仅 paused 可恢复。
     ///
-    /// 恢复时重新解析 URL（B站 CDN URL 带 deadline 签名，过期会 403），
+    /// 恢复时重新解析 URL（B 站 CDN URL 带 deadline 签名，过期会 403），
     /// 然后重新 dispatch_transfer 进入引擎调度。aria2 路径天然支持断点续传；
     /// 原生路径当前为整段重下（不依赖 .part 续传）。
     pub async fn resume_task(&self, task_id: Option<i32>) -> Result<TaskOutcome> {
@@ -915,7 +915,7 @@ impl DownloadManager {
         }
 
         // 路径二：重建（native 必走；aria2 gid 失效时降级走）
-        // B站 m4s/m4a 的 CDN URL 带 deadline 签名（约 2h），暂停时间过长会过期，必须重新解析
+        // B 站 m4s/m4a 的 CDN URL 带 deadline 签名（约 2h），暂停时间过长会过期，必须重新解析。
         let url = match self.resolve_resume_url(task).await {
             Some(u) if !u.is_empty() => u,
             _ => {

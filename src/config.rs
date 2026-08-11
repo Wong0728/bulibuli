@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-const DEFAULT_APP_NAME: &str = "B站视频监控助手";
-const DEFAULT_APP_VERSION: &str = "2.0.0";
+const DEFAULT_APP_NAME: &str = "补哩补哩";
+const DEFAULT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 // 默认仅回环：实际监听地址由 security.toml 的模式决定（local/lan/proxy），
 // 此处默认值与 SECURITY.md 承诺保持一致，更开放的监听必须显式配置。
 const DEFAULT_PORT: u16 = 5000;

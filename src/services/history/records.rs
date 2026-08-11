@@ -21,7 +21,7 @@ impl HistoryService {
             .await?)
     }
 
-    /// 按 uid 查询该博主的历史记录（按下载时间倒序）。
+    /// 按 UID 查询该博主的历史记录（按下载时间倒序）。
     pub async fn list_by_uid(&self, uid: &str) -> AppResult<Vec<history::Model>> {
         Ok(history::Entity::find()
             .filter(history::Column::Uid.eq(uid))

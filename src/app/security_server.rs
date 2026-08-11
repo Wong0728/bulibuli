@@ -90,7 +90,7 @@ pub async fn bind_main_listener(
     let listener = if security.mode == AccessMode::Lan {
         bind_lan_with_port_fallback(port).await?
     } else {
-        // Local / Proxy 统一走 IPv4 fallback
+        // Local/Proxy 模式统一使用 IPv4 fallback。
         bind_with_port_fallback(host, port).await?
     };
     let actual_port = listener.local_addr()?.port();
@@ -151,7 +151,7 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
         .route("/", get(index))
         .route_service(
             "/favicon.ico",
-            ServeFile::new(static_root.join("bilibili.ico")),
+            ServeFile::new(static_root.join("bulibuli.ico")),
         )
         .route_service(
             "/pair.css",
@@ -328,17 +328,15 @@ async fn enforce_request_security(
     response
 }
 
-/// Server-side RBAC boundary for the main Web.  UI hiding is only a usability
-/// feature; this check prevents direct API calls from escalating a paired
-/// Operator or Viewer session.
+/// 主 Web 界面的服务端 RBAC 边界。隐藏 UI 仅改善使用体验；
+/// 此检查阻止已配对的 Operator/Viewer 会话通过直接调用 API 越权。
 fn authorize_session(request: &Request<Body>, session: &SessionAuth) -> Result<(), Box<Response>> {
     let path = request.uri().path();
     let mutating = is_mutating(request.method());
 
-    // Account credentials, all infrastructure settings, and device invitations
-    // are Owner-only.  `/api/settings` currently contains both business and
-    // process-level values, so it remains Owner-only until its business subset
-    // is split into its own endpoint.
+    // 账号凭证、全部基础设施设置和设备邀请仅限 Owner 操作。
+    // `/api/settings` 目前同时包含业务和进程级配置，因此在拆分出独立业务接口前，
+    // 在拆分出独立业务接口前，继续保持 Owner-only。
     let owner_only = path.starts_with("/api/cookies/")
         || path.starts_with("/api/settings")
         || path.starts_with("/api/auth/invitations");
@@ -350,7 +348,7 @@ fn authorize_session(request: &Request<Body>, session: &SessionAuth) -> Result<(
         )));
     }
 
-    // A viewer may inspect status, history, and logs, but never change tasks,
+    // Viewer 可查看状态、历史和日志，但不能修改任务、
     // bloggers, rules, or recordings.  Logging out is the single safe write.
     if mutating && !session.role.can_operate() && path != "/api/auth/logout" {
         return Err(Box::new(api_error(
@@ -555,7 +553,8 @@ fn add_security_headers(response: &mut Response, path: &str) {
     );
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        // connect-src 仅同源（Socket.IO/WebSocket 均同源），不开放裸 wss: 防连向任意主机
+        // connect-src 仅允许同源（Socket.IO/WebSocket 均同源），不开放裸 wss:，
+        // 防止页面连接到任意主机。
         HeaderValue::from_static(
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         ),

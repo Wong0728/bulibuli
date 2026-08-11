@@ -17,8 +17,8 @@ unsafe impl Send for Job {}
 impl Drop for Job {
     fn drop(&mut self) {
         if self.0 != 0 {
-            // SAFETY: `self.0` is a live Job Object handle created by
-            // `CreateJobObjectW`; this guard owns it and closes it once.
+            // SAFETY: `self.0` 是由 `CreateJobObjectW` 创建的有效 Job Object 句柄；
+            // 当前 guard 拥有该句柄，并且只关闭一次。
             unsafe {
                 if CloseHandle(self.0 as HANDLE) == 0 {
                     warn!("CloseHandle(Job) 失败");
@@ -30,9 +30,8 @@ impl Drop for Job {
 
 /// 创建一个 kill-on-close 的 Job Object。
 pub fn create() -> Option<Job> {
-    // SAFETY: All pointers passed to the Win32 API are either null as
-    // explicitly permitted or point to initialized values for the call.
-    // Every non-null handle is transferred to `Job` or closed on failure.
+    // SAFETY: 传给 Win32 API 的指针要么按接口要求为空，要么指向本次调用所需的
+    // 已初始化值。所有非空句柄都会转移给 `Job`，或在失败时关闭。
     unsafe {
         let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
         if job.is_null() {
@@ -60,7 +59,7 @@ pub fn create() -> Option<Job> {
 
 /// 把指定进程句柄分配到 Job。返回是否成功。
 pub fn assign(job: &Job, process_handle: *mut core::ffi::c_void) -> bool {
-    // SAFETY: `job` owns a live Job Object handle and `process_handle`
-    // comes from the spawned child's platform-specific process handle.
+    // SAFETY: `job` 持有有效的 Job Object 句柄，`process_handle` 来自已启动子进程的
+    // 平台句柄。
     unsafe { AssignProcessToJobObject(job.0 as HANDLE, process_handle as HANDLE) != 0 }
 }

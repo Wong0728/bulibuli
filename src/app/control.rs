@@ -1,11 +1,11 @@
-//! 本机控制通道：IPC 服务器 + 双轨命令分发。
+//! 本机控制通道：提供 IPC 服务并分发两套命令入口。
 //!
 //! 命令体系（P1 重构后）：
-//! - **专家模式**：扁平命令，`bilibili-dl.exe ctl <command> [args...]` 直接调用，AI 脚本化友好
+//! - **专家模式**：扁平命令，`bulibuli.exe ctl <command> [args...]` 直接调用，AI 脚本化友好
 //! - **引导模式**：TUI 内的菜单包装，最终翻译为扁平命令调用 `execute()`（UI 在 `tui.rs`）
 //! - **`>` 前缀**：TUI/stdin 输入时以 `>` 开头表示专家模式直输，由 `submit` 层剥离后调用 `execute()`
 //!
-//! 命令分 5 个主题 + 旧名 alias：
+//! 命令分为 5 个主题，另保留旧名 alias：
 //! - `ai` / `dl` / `blg` / `sys` / `cred` —— 主题前缀，二级分发到各主题命令
 //! - `status` / `pair` / `sessions` / `revoke` / `access` / `mode` / `geo` / `trust` / `config` / `quit` / `help`
 //!   —— 旧名 alias 保留，避免破坏存量脚本
@@ -37,11 +37,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const MAX_COMMAND_BYTES: usize = 8 * 1024;
 #[cfg(windows)]
-const PIPE_NAME: &str = r"\\.\pipe\bilibili-uid-buildownloader";
+const PIPE_NAME: &str = r"\\.\pipe\bulibuli";
 
-// ---------------------------------------------------------------------------
-// 命令清单（自动生成 help；docs/skill.md 在 P3 由测试断言与此同步）
-// ---------------------------------------------------------------------------
+// --- 命令清单（自动生成 help；由测试断言与 docs/skill.md 同步） ---
 
 /// 命令分类。`help` 输出按此分组；后续 `docs/skill.md` 也按此分节。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -293,9 +291,7 @@ const COMMAND_REGISTRY: &[CommandSpec] = &[
     },
 ];
 
-// ---------------------------------------------------------------------------
-// IPC 服务器入口（保留原实现）
-// ---------------------------------------------------------------------------
+// --- IPC 服务器入口（保留原实现） ---
 
 pub fn start_server(state: SharedState) {
     tokio::spawn(async move {
@@ -359,17 +355,15 @@ pub async fn run_client(data_dir: &Path, args: &[String]) -> AppResult<String> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 命令分发
-// ---------------------------------------------------------------------------
+// --- 命令分发 ---
 
-/// Execute a command arriving through the AI-only `ctl` IPC.
+/// 执行通过仅供 AI 使用的 `ctl` IPC 到达的命令。
 pub async fn execute(state: &SharedState, args: &[String]) -> AppResult<Value> {
     execute_from(state, args, CommandOrigin::AiCtl).await
 }
 
-/// Execute a command with its trusted local origin.  Only TUI/stdin may pass
-/// `HumanTerminal`; IPC callers always use the `execute` wrapper above.
+/// 按可信的本机来源执行命令。只有 TUI/stdin 可以传入 `HumanTerminal`；
+/// IPC 调用方始终使用上面的 `execute` 包装函数。
 pub(crate) async fn execute_from(
     state: &SharedState,
     args: &[String],
@@ -389,7 +383,7 @@ pub(crate) async fn execute_from(
         )));
     }
     match command {
-        // —— 旧名 alias（保留，避免破坏存量脚本）——
+        // 旧名 alias（保留以兼容现有脚本）
         "help" => Ok(help()),
         "status" => Ok(legacy_status(state).await),
         "pair" => pair_command(state, args, origin).await,
@@ -403,13 +397,13 @@ pub(crate) async fn execute_from(
         "trust" => trust_command(state, args).await,
         "config" => Ok(sys_config_value(state)),
         "quit" => quit_command(state).await,
-        // —— 5 主题分发（新）——
+        // 新主题分发
         "ai" => ai_command(state, args).await,
         "dl" => dl_command(state, args).await,
         "blg" => blg_command(state, args).await,
         "sys" => sys_command(state, args).await,
         "cred" => cred_command(state, args).await,
-        // —— P2 审计与事件 ——
+        // P2 审计与事件
         "audit" => audit_command(state, args).await,
         "events" => events_command(state, args).await,
         _ => Err(AppError::BadRequest(format!(
@@ -419,7 +413,7 @@ pub(crate) async fn execute_from(
 }
 
 /// `pair [close]`：开启/关闭配对模式。
-/// 开启配对生成 pair code 是敏感操作（一次性访问凭证），审计走 record_silent 不广播。
+/// 开启配对会生成配对码，这是敏感操作（一次性访问凭证）；审计走 record_silent，不广播事件。
 async fn pair_command(
     state: &SharedState,
     args: &[String],
@@ -438,9 +432,8 @@ async fn pair_command(
         auth.close_pairing().await;
         Ok(json!({"pairing_open": false}))
     } else {
-        // `ctl` is an AI-only IPC, so it needs an explicit short-lived human
-        // grant.  The local TUI/stdin is the human recovery path and can
-        // always issue a single-use Owner pairing code.
+        // `ctl` 是仅供 AI 使用的 IPC，因此需要人工授予短时权限。
+        // 本机 TUI/stdin 是人工恢复入口，始终可以生成一次性 Owner 配对码。
         if pair_requires_foundation_authorization(origin) {
             ensure_foundation_authorized(state)?;
         }
@@ -486,9 +479,7 @@ async fn quit_command(state: &SharedState) -> AppResult<Value> {
     Ok(json!({"shutting_down": true}))
 }
 
-// ---------------------------------------------------------------------------
-// 主题 1：策略 - ai 命令（mode/access/geo/trust 保留旧实现）
-// ---------------------------------------------------------------------------
+// --- 主题 1：策略（ai 命令；mode/access/geo/trust 保留旧实现） ---
 
 async fn ai_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
     let Some(value) = args.get(1).map(String::as_str) else {
@@ -577,9 +568,7 @@ async fn ai_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
     .await
 }
 
-// ---------------------------------------------------------------------------
-// 主题 2：下载 - dl 命令
-// ---------------------------------------------------------------------------
+// --- 主题 2：下载（dl 命令） ---
 
 async fn dl_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
     let Some(sub) = args.get(1).map(String::as_str) else {
@@ -633,7 +622,7 @@ async fn dl_add(state: &SharedState, args: &[String]) -> AppResult<Value> {
     let qn = settings.query.video_quality;
     let fnval = settings.query.video_format;
 
-    // 取标题
+    // 获取标题
     let info = state
         .bili
         .bili_api
@@ -646,7 +635,7 @@ async fn dl_add(state: &SharedState, args: &[String]) -> AppResult<Value> {
         info.title.clone()
     };
 
-    // 取流（单 P，cid=None 走默认）
+    // 获取单 P 流（cid=None 使用默认分 P）
     let streams = state
         .bili
         .bili_api
@@ -710,7 +699,7 @@ async fn dl_pause_resume(state: &SharedState, args: &[String], action: &str) -> 
     let (args, expected_version) = extract_expected_version(args);
     let target = required(&args, 2, &format!("dl {action} 需要 task_id 或 all"))?;
     let task_id = parse_task_id_or_all(target)?;
-    // all 模式：bulk 操作不走乐观锁（影响多行，version 无意义）
+    // all 模式为批量操作，不使用乐观锁（影响多行，version 无意义）
     let (target_id_for_guard, version_for_ctx) = match task_id {
         Some(id) => (Some(id.to_string()), expected_version),
         None => (None, None),
@@ -879,9 +868,7 @@ async fn dl_priority(state: &SharedState, args: &[String]) -> AppResult<Value> {
     Ok(result)
 }
 
-// ---------------------------------------------------------------------------
-// 主题 3：博主 - blg 命令
-// ---------------------------------------------------------------------------
+// --- 主题 3：博主（blg 命令） ---
 
 async fn blg_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
     let Some(sub) = args.get(1).map(String::as_str) else {
@@ -1090,7 +1077,7 @@ async fn blg_monitor(state: &SharedState, args: &[String]) -> AppResult<Value> {
             ))
         }
     };
-    // 解析 uid → id 用于乐观锁（find_by_uid 内部缓存，开销小）
+    // 解析 UID → ID 用于乐观锁（find_by_uid 内部缓存，开销小）。
     let blogger = state
         .business
         .blogger_service
@@ -1147,9 +1134,7 @@ async fn blg_monitor(state: &SharedState, args: &[String]) -> AppResult<Value> {
     Ok(result)
 }
 
-// ---------------------------------------------------------------------------
-// 主题 4：系统 - sys 命令
-// ---------------------------------------------------------------------------
+// --- 主题 4：系统（sys 命令） ---
 
 async fn sys_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
     let Some(sub) = args.get(1).map(String::as_str) else {
@@ -1361,9 +1346,7 @@ async fn sys_refresh(state: &SharedState, args: &[String]) -> AppResult<Value> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 主题 5：凭证 - cred 命令
-// ---------------------------------------------------------------------------
+// --- 主题 5：凭证（cred 命令） ---
 
 async fn cred_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
     let Some(sub) = args.get(1).map(String::as_str) else {
@@ -1421,7 +1404,7 @@ async fn cred_command(state: &SharedState, args: &[String]) -> AppResult<Value> 
         }
         "qrcode-poll" => {
             let key = required(args, 2, "cred qrcode-poll 需要 qrcode_key")?;
-            // 扫码登录是敏感操作（cookie 落盘）：审计走 record_silent 不广播事件
+            // 扫码登录是敏感操作（Cookie 落盘）：审计走 record_silent，不广播事件。
             let ctx = ctl_audit_ctx(
                 &format!("cred qrcode-poll {key}"),
                 OperationTarget::Cookie,
@@ -1436,7 +1419,7 @@ async fn cred_command(state: &SharedState, args: &[String]) -> AppResult<Value> 
                     .check_qrcode_status(key)
                     .await
                     .map_err(|e| AppError::Internal(format!("轮询扫码状态失败: {e}")))?;
-                // code=0 成功时落盘 cookie
+                // code=0 成功时落盘 Cookie。
                 if poll.code == 0 {
                     if let Some(cookies) = poll.cookies.as_deref().filter(|c| !c.trim().is_empty())
                     {
@@ -1518,9 +1501,7 @@ async fn cred_status_value(state: &SharedState) -> AppResult<Value> {
     }))
 }
 
-// ---------------------------------------------------------------------------
-// 旧名 alias 的实现（access / mode / geo / trust / revoke 保留；status 简化）
-// ---------------------------------------------------------------------------
+// --- 旧名 alias 实现（保留 access/mode/geo/trust/revoke；简化 status） ---
 
 async fn legacy_status(state: &SharedState) -> Value {
     json!({
@@ -1562,7 +1543,7 @@ async fn revoke_command(state: &SharedState, args: &[String]) -> AppResult<Value
 }
 
 async fn access_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
-    // list 是只读操作，不审计
+    // list 仅查询，不写入审计日志
     if args.get(1).map(String::as_str) == Some("list") {
         return Ok(serde_json::to_value(
             state.bili.security.current().access_rules,
@@ -1828,9 +1809,7 @@ async fn trust_command(state: &SharedState, args: &[String]) -> AppResult<Value>
     .await
 }
 
-// ---------------------------------------------------------------------------
-// 主题 6：审计与事件（P2）- audit / events 命令
-// ---------------------------------------------------------------------------
+// --- 主题 6：审计与事件（audit/events 命令） ---
 
 /// `audit list [--source <s>] [--since <1h|24h|7d>] [--limit N]`
 /// `audit by-target <task|blogger|cookie|session> <id>`
@@ -1904,7 +1883,7 @@ where
 {
     use tokio::sync::broadcast::error::RecvError;
     let mut rx = state.infra.audit_log.subscribe();
-    // 先发一条 hello 让客户端知道流已建立
+    // 先发送 hello，让客户端确认流已建立
     let hello = json!({
         "type": "stream_opened",
         "message": "audit event stream connected",
@@ -1916,7 +1895,7 @@ where
             Ok(Ok(event)) => {
                 let line = serde_json::to_string(&event).unwrap_or_default() + "\n";
                 if stream.write_all(line.as_bytes()).await.is_err() {
-                    break; // 客户端断开
+                    break; // 客户端已断开
                 }
                 if stream.flush().await.is_err() {
                     break;
@@ -1924,13 +1903,13 @@ where
             }
             Ok(Err(RecvError::Closed)) => break,
             Ok(Err(RecvError::Lagged(_))) => {
-                // 跟不上节奏丢事件：发一条 warning 让客户端知道
+                // 客户端跟不上节奏导致事件丢失，发送一条 warning 说明情况
                 let warn = json!({"type": "lagged", "message": "部分事件被丢弃"});
                 let _ = stream.write_all(format!("{}\n", warn).as_bytes()).await;
                 let _ = stream.flush().await;
             }
             Err(_) => {
-                // 30 秒超时：发空行保活（客户端据此判断连接仍存活）
+                // 30 秒超时：发送空行保活，供客户端判断连接仍存活
                 if stream.write_all(b"\n").await.is_err() {
                     break;
                 }
@@ -1942,9 +1921,7 @@ where
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// 辅助函数
-// ---------------------------------------------------------------------------
+// --- 辅助函数 ---
 
 /// 从参数中提取 `--expected-version N`，返回 (剩余参数, expected_version)。
 /// 调用方据此决定是否启用乐观锁。
@@ -2197,10 +2174,9 @@ fn parse_minutes(args: &[String]) -> AppResult<Option<u64>> {
         .map_err(|_| AppError::BadRequest("minutes 必须是正整数".to_string()))
 }
 
-/// High-impact controls (network exposure, GeoIP and trusted executables) are
-/// unavailable to AI until a human grants a short-lived capability in TUI or
-/// Setup Web via `ai assist on`.  The capability is process-local, expires on
-/// its own, and every granted/revoked operation is audited by the caller.
+/// 高影响操作（网络暴露、GeoIP 和可信可执行文件）在人工通过 TUI 或 Setup Web
+/// 执行 `ai assist on` 授予短时权限前，对 AI 不可用。权限仅在当前进程内有效，
+/// 会自动过期；每次授予或撤销都会由调用方写入审计日志。
 fn ensure_foundation_authorized(state: &SharedState) -> AppResult<()> {
     let now = chrono::Utc::now().timestamp();
     let until = state
@@ -2245,7 +2221,7 @@ fn outcome_to_value(outcome: TaskOutcome) -> Value {
     })
 }
 
-/// 涉及 B 站 API 的命令前置：取 cookie 并校验已登录，未登录返回结构化错误。
+/// 涉及 B 站 API 的命令前置：取 Cookie 并校验已登录，未登录返回结构化错误。
 async fn require_bili_login(state: &SharedState) -> AppResult<String> {
     let cookies = state.infra.settings_service.cookie_header().await?;
     if !Credential::from_cookie_header(&cookies).is_logged_in() {
@@ -2316,7 +2292,7 @@ pub(crate) fn format_response(value: &Value) -> String {
 #[cfg(test)]
 fn generate_skill_markdown() -> String {
     let mut out = String::new();
-    out.push_str("# Bilibili 下载器 Skill\n\n");
+    out.push_str("# 补哩补哩 Skill\n\n");
     out.push_str(
         "> 本文档供本机 AI 调用 `ctl` 命令使用，由 `COMMAND_REGISTRY` 自动生成，请勿手改。\n",
     );
@@ -2327,7 +2303,7 @@ fn generate_skill_markdown() -> String {
     // 调用方式
     out.push_str("## 调用方式\n\n");
     out.push_str("所有命令通过本机 IPC 调用（无网络端口暴露）：\n\n");
-    out.push_str("```\nbilibili-dl.exe ctl <command> [args...]\n```\n\n");
+    out.push_str("```\nbulibuli.exe ctl <command> [args...]\n```\n\n");
     out.push_str("返回 JSON 信封：\n");
     out.push_str("- 成功：`{\"ok\": true, \"data\": {...}}`\n");
     out.push_str("- 失败：`{\"ok\": false, \"error\": \"...\", \"code\": \"...\"}`\n\n");
@@ -2377,7 +2353,7 @@ fn generate_skill_markdown() -> String {
 
     // 事件流
     out.push_str("## 实时事件订阅\n\n");
-    out.push_str("```\nbilibili-dl.exe ctl events --watch\n```\n\n");
+    out.push_str("```\nbulibuli.exe ctl events --watch\n```\n\n");
     out.push_str("流式输出 JSON Lines（每行一条审计事件），30 秒无事件发空行保活。\n");
     out.push_str("敏感操作（cookie 保存、pair code 生成）不广播，仅在审计日志中可查。\n\n");
 

@@ -71,9 +71,8 @@ pub struct SessionAuth {
     pub role: SessionRole,
 }
 
-/// Web-session capability.  The value is stored with the session rather than
-/// inferred from IP, so an IPv6/proxy deployment cannot accidentally turn a
-/// paired viewer into an administrator.
+/// Web 会话能力。能力绑定到会话而不是 IP，避免 IPv6 或反向代理部署中
+/// 因地址判断错误而将已配对的 Viewer 提升为管理员。
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionRole {
@@ -185,9 +184,8 @@ impl AuthService {
         self.open_pairing_for_role(SessionRole::Owner).await
     }
 
-    /// Owner-only callers use this to create a deliberately limited device
-    /// invitation.  It replaces any older outstanding code, keeping the
-    /// single-use and short-lived pairing model intact.
+    /// Owner-only 调用方用此方法创建受限的设备邀请。
+    /// 新邀请会替换旧的未使用码，保持配对码一次性且短时有效。
     pub async fn open_operator_invitation(&self) -> String {
         self.open_pairing_for_role(SessionRole::Operator).await
     }

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-BilibiliUIDBuildownloader 构建脚本
+补哩补哩 bulibuli 构建脚本
 
 用法:
     python build.py              # 编译并直接启动程序（测试模式）
-    python build.py --portable   # 构建便携版
+    python build.py --portable   # 构建当前平台便携版
+    python build.py --portable --platform linux --target x86_64-unknown-linux-gnu
 
 产物:
-    dist/BilibiliUIDBuild_portable/   便携版目录
+    dist/bulibuli-<platform>-<arch>-portable-v<version>/   便携版目录
 """
 
 import argparse
@@ -18,17 +19,54 @@ import subprocess
 import sys
 import time
 import tomllib
+import platform as host_platform
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-APP_NAME = "BilibiliUIDBuild"
+APP_SLUG = "bulibuli"
+APP_DISPLAY_NAME = "补哩补哩"
+APP_SLOGAN = "下架之前，先下为敬。"
 with (ROOT / "Cargo.toml").open("rb") as _cargo_file:
     APP_VERSION = tomllib.load(_cargo_file)["package"]["version"]
-EXE_NAME = "bilibili-uid-buildownloader.exe"  # cargo 生成的 exe 名
-PORTABLE_DIR_NAME = f"{APP_NAME}_portable"
-PORTABLE_RESOURCE_FILES = ("aria2c.exe", "ffmpeg.exe", "README.md")
 PORTABLE_RESOURCE_DIRS = ("geo",)
+PLATFORM_NAMES = {"windows", "linux", "macos"}
+
+
+def normalize_platform(value):
+    if value != "auto":
+        if value not in PLATFORM_NAMES:
+            raise ValueError(f"unsupported platform: {value}")
+        return value
+    if sys.platform == "win32":
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def executable_name(platform_name):
+    return f"{APP_SLUG}.exe" if platform_name == "windows" else APP_SLUG
+
+
+def architecture_name(target=None):
+    source = (target or host_platform.machine()).lower()
+    if "aarch64" in source or "arm64" in source:
+        return "arm64"
+    if "x86_64" in source or "amd64" in source:
+        return "x86_64"
+    if "i686" in source or source in {"x86", "i386"}:
+        return "x86"
+    return re.sub(r"[^a-z0-9]+", "-", source).strip("-") or "unknown"
+
+
+def release_binary_path(platform_name, target=None):
+    release_dir = ROOT / "target" / (target if target else "") / "release"
+    return release_dir / executable_name(platform_name)
+
+
+def package_stem(platform_name, target=None):
+    return f"{APP_SLUG}-{platform_name}-{architecture_name(target)}-portable-v{APP_VERSION}"
 
 
 def run(cmd, cwd=None, check=True):
@@ -69,7 +107,7 @@ def _kill_processes_by_name(exe_name, expected_path=None):
     """只终止指定可执行文件的进程，返回终止数量。
 
     使用 /FO CSV 输出：默认表格格式会将镜像名截断到 25 字符，
-    导致长进程名（如 bilibili-uid-buildownloader.exe）匹配失败。
+    导致长进程名匹配失败。
     """
     try:
         out = subprocess.run(
@@ -99,13 +137,16 @@ def _kill_processes_by_name(exe_name, expected_path=None):
     return killed
 
 
-def stop_existing_instances():
+def stop_existing_instances(platform_name, target=None):
     """关闭本程序之前残留的、且路径完全匹配的运行实例。"""
     if sys.platform != "win32":
         return
 
-    expected_path = (ROOT / "target" / "release" / EXE_NAME).resolve()
-    killed = _kill_processes_by_name(EXE_NAME, expected_path)
+    if platform_name != "windows" or target:
+        return
+    exe_name = executable_name(platform_name)
+    expected_path = release_binary_path(platform_name, target).resolve()
+    killed = _kill_processes_by_name(exe_name, expected_path)
     if killed:
         time.sleep(0.8)
 
@@ -135,11 +176,14 @@ def build_frontend_bundle():
     return bundle
 
 
-def build_release():
-    """cargo build --release"""
-    print("[2/5] 编译 Rust 项目 (release)...")
-    run(["cargo", "build", "--release"], cwd=str(ROOT))
-    exe_path = ROOT / "target" / "release" / EXE_NAME
+def build_release(platform_name, target=None):
+    """cargo build --release for the requested platform/target."""
+    print(f"[2/5] 编译 Rust 项目 (release, {platform_name})...")
+    command = ["cargo", "build", "--release"]
+    if target:
+        command.extend(["--target", target])
+    run(command, cwd=str(ROOT))
+    exe_path = release_binary_path(platform_name, target)
     if not exe_path.exists():
         print(f"  [错误] 编译产物不存在: {exe_path}")
         sys.exit(1)
@@ -147,25 +191,42 @@ def build_release():
     return exe_path
 
 
-def assemble_portable(exe_path):
-    """组装便携版目录"""
-    print("[3/5] 组装便携版目录...")
+def write_checksum(archive_path):
+    digest = hashlib.sha256()
+    with archive_path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    checksum_path = archive_path.parent / f"{archive_path.name}.sha256"
+    checksum_path.write_text(f"{digest.hexdigest()}  {archive_path.name}\n", encoding="utf-8")
+    return checksum_path
+
+
+def assemble_portable(exe_path, platform_name, target=None):
+    """组装当前平台便携版目录和归档。"""
+    print(f"[3/5] 组装便携版目录 ({platform_name})...")
     dist_dir = ROOT / "dist"
-    portable_dir = dist_dir / PORTABLE_DIR_NAME
+    stem = package_stem(platform_name, target)
+    portable_dir = dist_dir / stem
 
     if portable_dir.exists():
         shutil.rmtree(portable_dir)
     portable_dir.mkdir(parents=True)
 
-    shutil.copy2(exe_path, portable_dir / f"{APP_NAME}.exe")
-    print(f"  已复制: {APP_NAME}.exe")
+    binary_name = executable_name(platform_name)
+    shutil.copy2(exe_path, portable_dir / binary_name)
+    print(f"  已复制: {binary_name}")
+
+    readme_src = ROOT / "README.md"
+    if readme_src.is_file():
+        shutil.copy2(readme_src, portable_dir / "README.md")
 
     resources_src = ROOT / "resources"
     if resources_src.exists():
         resources_dst = portable_dir / "resources"
         resources_dst.mkdir()
         copied_resources = []
-        for name in PORTABLE_RESOURCE_FILES:
+        resource_files = ("aria2c.exe", "ffmpeg.exe") if platform_name == "windows" else ()
+        for name in (*resource_files, "README.md"):
             source = resources_src / name
             if source.is_file():
                 shutil.copy2(source, resources_dst / name)
@@ -181,7 +242,11 @@ def assemble_portable(exe_path):
 
     static_src = ROOT / "static"
     if static_src.exists():
-        shutil.copytree(static_src, portable_dir / "static")
+        shutil.copytree(
+            static_src,
+            portable_dir / "static",
+            ignore=shutil.ignore_patterns("node_modules"),
+        )
         portable_index = portable_dir / "static" / "index.html"
         if (portable_dir / "static" / "dist" / "app.bundle.js").is_file() and portable_index.is_file():
             index_text = portable_index.read_text(encoding="utf-8")
@@ -192,24 +257,42 @@ def assemble_portable(exe_path):
     else:
         print("  [警告] static/ 目录不存在，前端资源将缺失")
 
-    ico_src = ROOT / "static" / "bilibili.ico"
+    ico_src = ROOT / "static" / "bulibuli.ico"
     if ico_src.exists():
-        shutil.copy2(ico_src, portable_dir / "bilibili.ico")
-        print("  已复制: bilibili.ico")
+        shutil.copy2(ico_src, portable_dir / "bulibuli.ico")
+        print("  已复制: bulibuli.ico")
 
     (portable_dir / "data").mkdir(exist_ok=True)
     print("  已创建: data/")
 
+    if platform_name == "linux":
+        installer_src = ROOT / "deploy" / "linux" / "install.sh"
+        if installer_src.is_file():
+            shutil.copy2(installer_src, portable_dir / "install.sh")
+            print("  已复制: install.sh")
+
+    archive_format = "zip" if platform_name == "windows" else "gztar"
+    archive_path = Path(
+        shutil.make_archive(
+            str(dist_dir / stem),
+            archive_format,
+            root_dir=str(dist_dir),
+            base_dir=portable_dir.name,
+        )
+    )
+    checksum_path = write_checksum(archive_path)
     print(f"\n  便携版目录: {portable_dir}")
-    return portable_dir
+    print(f"  发布归档: {archive_path}")
+    print(f"  校验文件: {checksum_path}")
+    return portable_dir, archive_path, checksum_path
 
 
-def run_test():
+def run_test(platform_name):
     """编译并直接启动程序（测试模式）"""
     check_cargo()
     print("[0/5] 清理残留的旧实例，避免端口被占用...")
-    stop_existing_instances()
-    exe_path = build_release()
+    stop_existing_instances(platform_name)
+    exe_path = build_release(platform_name)
     print("\n[测试模式] 启动程序...")
     print(f"  运行: {exe_path}")
     print("  启动后请查看控制台输出的 \"服务器监听于 http://...\" 行，")
@@ -308,8 +391,8 @@ def run_quality_checks():
         ],
         ["cargo", "test", "--all-targets"],
     ]
-    # Playwright specs use the same .mjs suffix but are executed by its runner;
-    # keep them out of the dependency-free Node contract test command.
+    # Playwright 用例同样使用 .mjs 后缀，但由 Playwright runner 执行；
+    # 不要把它们放入无依赖的 Node 契约测试命令。
     frontend_tests = sorted(
         path for path in (ROOT / "tests").glob("*.mjs") if not path.name.endswith(".spec.mjs")
     )
@@ -437,19 +520,31 @@ def run_quality_checks():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="BilibiliUIDBuildownloader 构建脚本")
+    parser = argparse.ArgumentParser(description="补哩补哩 bulibuli 构建脚本")
     parser.add_argument("--check", action="store_true", help="运行全部规范门禁")
-    parser.add_argument("--portable", action="store_true", help="构建便携版")
+    parser.add_argument("--portable", action="store_true", help="构建当前平台便携版")
+    parser.add_argument(
+        "--platform",
+        choices=("auto", "windows", "linux", "macos"),
+        default="auto",
+        help="便携包平台（默认按当前系统判断）",
+    )
+    parser.add_argument("--target", help="可选 Rust target triple")
     args = parser.parse_args()
 
     if args.check:
         run_quality_checks()
         return
 
-    print(f"=== {APP_NAME} v{APP_VERSION} 构建脚本 ===\n")
+    try:
+        platform_name = normalize_platform(args.platform)
+    except ValueError as error:
+        parser.error(str(error))
+
+    print(f"=== {APP_DISPLAY_NAME} {APP_SLUG} v{APP_VERSION} 构建脚本 ===\n")
 
     if not args.portable:
-        run_test()
+        run_test(platform_name)
         return
 
     dist_dir = ROOT / "dist"
@@ -457,11 +552,15 @@ def main():
 
     check_cargo()
     build_frontend_bundle()
-    exe_path = build_release()
-    assemble_portable(exe_path)
+    exe_path = build_release(platform_name, args.target)
+    portable_dir, archive_path, checksum_path = assemble_portable(
+        exe_path, platform_name, args.target
+    )
 
     print("\n构建完成!")
-    print(f"  便携版: {dist_dir / PORTABLE_DIR_NAME}")
+    print(f"  便携版: {portable_dir}")
+    print(f"  归档: {archive_path}")
+    print(f"  SHA-256: {checksum_path}")
     print()
 
 

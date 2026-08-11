@@ -1,4 +1,4 @@
-//! B站开放接口客户端。
+//! B 站开放接口客户端。
 //!
 //! 子模块划分：
 //! - `client`：请求管线（WBI 签名、风控参数、重试、响应解析）
@@ -60,7 +60,7 @@ type QrCodeSession = (HashMap<String, String>, Instant);
 
 #[derive(Clone)]
 pub struct BiliApi {
-    /// B站 API 域名（api.bilibili.com / passport.bilibili.com 等）专用客户端，
+    /// B 站 API 域名（api.bilibili.com / passport.bilibili.com 等）专用客户端，
     /// 始终严格校验 TLS，防止中间人窃取 Cookie/凭据。
     api_client: Client,
     /// 下载流 CDN 域名（*.bilivideo.com / *.hdslb.com）专用客户端，
@@ -74,7 +74,7 @@ pub struct BiliApi {
     rate_limiter: Arc<governor::DefaultDirectRateLimiter>,
     ws: Arc<WebSocketManager>,
     bad_cdns: Arc<BadCdnRegistry>,
-    /// 视频列表内存缓存：key = (uid, page, page_size)，value = (响应, 写入时刻)。
+    /// 视频列表内存缓存：key = (UID, page, page_size)，value = (响应, 写入时刻)。
     video_list_cache: Arc<RwLock<HashMap<VideoListCacheKey, (UserVideosPage, Instant)>>>,
     video_info_cache: Arc<RwLock<HashMap<VideoInfoCacheKey, (VideoInfo, Instant)>>>,
     qrcode_sessions: Arc<Mutex<HashMap<String, QrCodeSession>>>,
@@ -163,7 +163,7 @@ pub(crate) fn session_fingerprint(cookies: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// 判断 URL 是否属于 B站 API 域名（强制严格 TLS）。
+/// 判断 URL 是否属于 B 站 API 域名（强制严格 TLS）。
 /// 接受任意子域的 bilibili.com；非 API 域名（bilivideo.com / hdslb.com）走 stream_client。
 fn is_api_host(url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {

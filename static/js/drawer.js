@@ -8,7 +8,7 @@ import { renderDrawerContentForManualQuery } from './media-actions.js';
 _state.drawerRequestId = 0;
 _state.drawerController = null;
 
-// 打开视频详情抽屉
+// 打开视频详情抽屉。
 // 始终走 /api/history/list?bvid=... 拉取完整详情（含 files/burned/blogger）；看板缓存仅用于秒开标题与兜底。
 export async function openVideoDrawer(bvid) {
     if (!bvid) {
@@ -33,7 +33,7 @@ export async function openVideoDrawer(bvid) {
     drawer.classList.add('active');
     document.body.classList.add('modal-open');
 
-    // 秒开：先用看板缓存把标题显示出来（缓存不含 files，仅用于即时反馈）
+    // 秒开：先用看板缓存显示标题；缓存不含 files，仅用于即时反馈。
     const cachedVideo = (_state.currentBoardVideos && _state.currentBoardVideos[bvid]) || null;
     if (cachedVideo && cachedVideo.title) {
         titleEl.textContent = cachedVideo.title;
@@ -110,7 +110,7 @@ export async function openVideoDrawer(bvid) {
     if (requestId === _state.drawerRequestId) _state.drawerController = null;
 }
 
-// 关闭视频详情抽屉
+// 关闭视频详情抽屉。
 export function closeVideoDrawer() {
     const drawer = document.getElementById('video-drawer');
     const overlay = document.getElementById('drawer-overlay');
@@ -124,7 +124,7 @@ export function closeVideoDrawer() {
     _state.currentDrawerBvid = null;
 }
 
-// 从手动查询界面打开视频详情抽屉
+// 从手动查询界面打开视频详情抽屉。
 export function openVideoDrawerFromManual(bvid) {
     // 从手动查询的全局变量中获取视频信息
     if (!_state.manualQueryVideos || !_state.manualQueryVideos[bvid]) {
@@ -155,7 +155,7 @@ export function openVideoDrawerFromManual(bvid) {
 }
 
 // 渲染抽屉内容
-// 所有可选画质（静态列表，会根据视频实际可用质量动态禁用）。导出供 media-actions.js 共用
+// 所有可选画质（静态列表，会根据视频实际可用质量动态禁用），供 media-actions.js 复用。
 export const _ALL_QUALITY_OPTIONS = [
     { qn: 127, label: '8K', tag: '8K' },
     { qn: 126, label: '杜比视界', tag: 'HDR' },
@@ -170,7 +170,7 @@ export const _ALL_QUALITY_OPTIONS = [
     { qn: 16, label: '360P 流畅', tag: '360P' }
 ];
 
-// 根据视频实际可用质量，更新 quality pills 的可用/禁用状态
+// 根据视频实际可用质量，更新 quality pills 的可用/禁用状态。
 export async function refreshQualityPills(bvid) {
     const container = document.getElementById('quality-pills-container');
     if (!container) return;

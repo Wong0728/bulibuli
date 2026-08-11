@@ -236,7 +236,7 @@ impl DownloadManager {
     }
 
     /// 内部方法：下载视频封面到服务器，返回保存到本地的文件路径。
-    /// 若 uid 已知则保存到 `downloads/{uid}/{bvid}_cover.{ext}`，否则保存到 `downloads/{bvid}_cover.{ext}`。
+    /// 若 UID 已知则保存到 `downloads/{uid}/{bvid}_cover.{ext}`，否则保存到 `downloads/{bvid}_cover.{ext}`。
     pub(super) async fn download_cover_internal(
         &self,
         bvid: &str,
@@ -359,7 +359,7 @@ impl DownloadManager {
                 }
             }
         }
-        // 否则在 download_dir(uid) 下扫描所有 {bvid}_cover.* 文件
+        // 否则在 download_dir(uid) 下扫描所有 {bvid}_cover.* 文件。
         let dir = match save_dir_override {
             Some(directory) => directory.to_path_buf(),
             None => self.download_dir(uid).await,
@@ -375,7 +375,7 @@ impl DownloadManager {
                 }
             }
         }
-        // 无 uid 的记录可能位于 downloads 根目录。
+        // 无 UID 的记录可能位于 downloads 根目录。
         if uid.is_some() && save_dir_override.is_none() {
             let root_dir = self.paths.download_dir.clone();
             if let Ok(mut entries) = tokio::fs::read_dir(&root_dir).await {

@@ -53,7 +53,7 @@ impl MonitorService {
         Ok(())
     }
 
-    /// 用 get_video_urls 探测当前 cookies 能否下载付费视频。
+    /// 用 get_video_urls 探测当前 Cookie 能否下载付费视频。
     /// 有 dash.video[] → *_paid；否则 → *_no_permission。
     async fn probe_download_permission(
         &self,

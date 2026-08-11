@@ -1,6 +1,6 @@
 //! 下载引擎选择与原生兜底任务驱动。
 //!
-//! aria2 始终是默认且优先的下载路径；仅当其重试和实例重建均失败时才降级
+//! aria2 始终是默认且优先的下载路径；仅当其重试和实例重建均失败时才降级。
 //! `Native`（reqwest 流式下载兜底，见 `native` 模块），恢复后自动切回。
 //! 兜底判定基于 aria2 服务状态，而非单个任务失败。
 
@@ -135,7 +135,7 @@ impl DownloadManager {
             .filename
             .clone()
             .unwrap_or_else(|| format!("{}.{}", task.bvid, task.task_type));
-        // 与 aria2 路径一致：富化 cookies（buvid3/bili_ticket/...）绕 CDN 403/-799 风控
+        // 与 aria2 路径一致：富化 Cookie（buvid3/bili_ticket/...）以绕过 CDN 403/-799 风控。
         let enriched_cookies = match self.bili_api.enrich_cookies_public(cookies).await {
             Ok(c) => c,
             Err(e) => {

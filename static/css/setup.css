@@ -1,4 +1,4 @@
-/* Setup 向导样式 - 复用主样式变量 */
+/* Setup 向导样式：复用主样式变量。 */
 
 :root {
     --brand: #fb7299;
@@ -71,7 +71,7 @@ body {
     margin-top: 0.25rem;
 }
 
-/* 步骤指示器 */
+/* 步骤指示器。 */
 .step-indicator {
     display: flex;
     align-items: center;
@@ -129,7 +129,7 @@ body {
     margin: 0 0.75rem;
 }
 
-/* 步骤面板 */
+/* 步骤面板。 */
 .step-panel {
     display: none;
     background: var(--surface);
@@ -154,7 +154,7 @@ body {
     margin-bottom: 1.5rem;
 }
 
-/* 场景卡片 */
+/* 场景卡片。 */
 .scene-cards {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -198,7 +198,7 @@ body {
     color: var(--text-muted);
 }
 
-/* 远程访问二级选择 */
+/* 远程访问二级选择。 */
 .remote-options {
     margin-top: 1.5rem;
     padding-top: 1.5rem;
@@ -211,7 +211,7 @@ body {
     margin-bottom: 1rem;
 }
 
-/* 配置区域 */
+/* 配置区域。 */
 .config-section {
     margin: 1rem 0;
 }
@@ -237,7 +237,7 @@ body {
     font-size: 1.5rem;
 }
 
-/* 表单元素 */
+/* 表单元素。 */
 .form-group {
     margin: 1rem 0;
 }
@@ -270,7 +270,7 @@ body {
     margin-top: 0.25rem;
 }
 
-/* 检测到的 IP 列表 */
+/* 检测到的 IP 列表。 */
 .detected-ips {
     margin-top: 1rem;
     padding: 0.75rem 1rem;
@@ -291,7 +291,7 @@ body {
     font-size: 0.85rem;
 }
 
-/* Caddy 配置 */
+/* Caddy 配置。 */
 .caddy-config {
     margin-top: 1rem;
 }
@@ -307,7 +307,7 @@ body {
     margin: 0.5rem 0;
 }
 
-/* 按钮 */
+/* 按钮。 */
 .btn {
     display: inline-flex;
     align-items: center;
@@ -362,7 +362,7 @@ body {
     border-top: 1px solid var(--border);
 }
 
-/* Toggle 开关 */
+/* 切换开关 */
 .choice-row {
     display: flex;
     align-items: center;
@@ -413,7 +413,7 @@ input:checked + .slider::before {
     transform: translateX(20px);
 }
 
-/* AI Skill 区域 */
+/* AI Skill 区域。 */
 .ai-skill-section {
     margin-top: 1.5rem;
     padding: 1.25rem;
@@ -468,7 +468,7 @@ input:checked + .slider::before {
     margin: 0.25rem 0;
 }
 
-/* 配置摘要 */
+/* 配置摘要。 */
 .config-summary {
     margin-top: 1.5rem;
 }
@@ -499,7 +499,7 @@ input:checked + .slider::before {
     font-weight: 500;
 }
 
-/* 响应式 */
+/* 响应式布局。 */
 @media (max-width: 600px) {
     .scene-cards {
         grid-template-columns: 1fr;

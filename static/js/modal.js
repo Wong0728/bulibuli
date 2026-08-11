@@ -62,7 +62,7 @@ function configureBloggerModal(mode) {
     return modal;
 }
 
-// ==================== 模态框功能 ====================
+// --- 模态框功能 ---
 export function showAddBloggerModal(prefill = null) {
     const modal = configureBloggerModal('add');
     if (modal) {
@@ -203,7 +203,7 @@ export async function confirmAddBlogger() {
     }
 }
 
-// ==================== 右键菜单与编辑功能 ====================
+// --- 右键菜单与编辑功能 ---
 _state.contextMenuBloggerId = null;
 
 export function showContextMenu(event, bloggerId) {
@@ -309,7 +309,7 @@ export function closeEditBloggerModal() {
     }
 }
 
-// ==================== 活跃检查时段（闹钟式窗口）编辑 ====================
+// --- 活跃检查时段（闹钟式窗口）编辑 ---
 
 const MAX_ACTIVE_WINDOWS = 6;
 

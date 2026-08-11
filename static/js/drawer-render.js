@@ -8,7 +8,7 @@ export function renderDrawerContent(video, bvid) {
     // 属性位插值统一用转义后的 bvid，防止含引号时发生属性逃逸
     const safeBvid = escapeHtml(bvid || '');
 
-    // 统一字段命名（兼容 history/list 与 download/status 两种来源）
+    // 统一字段命名，兼容 history/list 与 download/status 两种来源。
     const state = video.state || video.status || 'completed';
     const task = video.task || {};
     const sidecar = video.sidecar || {};
@@ -23,7 +23,7 @@ export function renderDrawerContent(video, bvid) {
         || (video.pubdate ? video.pubdate : '');
     const viewStr = (video.view !== undefined && video.view !== null) ? formatViewCount(Number(video.view)) : '--';
 
-    // 状态点 class + 文案（复用看板逻辑）
+    // 状态点 class 和文案复用看板逻辑。
     const stateDot = stateDotClass(state, video);
     const stateLabelStr = stateLabel(state, video);
 
@@ -159,7 +159,7 @@ export function renderDrawerContent(video, bvid) {
         ${filePathHtml}
         ${progressHtml}
 
-        <!-- 全部产物：同时展示 manual / 自动目录 / 历史归档 -->
+        <!-- 全部产物：同时展示 manual、自动目录和历史归档。 -->
         <div class="drawer-section">
             <div class="drawer-section-title">全部产物</div>
             ${renderArtifactOverview(primaryArtifactFiles(video.files))}
@@ -168,7 +168,7 @@ export function renderDrawerContent(video, bvid) {
             </div>
         </div>
 
-        <!-- 历史弹幕与评论浏览器 -->
+        <!-- 历史弹幕与评论浏览器。 -->
         <div class="drawer-section">
             <div class="drawer-section-title">弹幕与评论历史</div>
             ${renderSidecarBrowser(video.files, bvid)}
@@ -177,7 +177,7 @@ export function renderDrawerContent(video, bvid) {
             </div>
         </div>
 
-        <!-- 实时数据（按需加载，避免触发风控） -->
+        <!-- 实时数据（按需加载，避免触发风控）。 -->
         <div class="drawer-section">
             <div class="drawer-section-title">
                 实时数据
@@ -190,7 +190,7 @@ export function renderDrawerContent(video, bvid) {
             </div>
         </div>
 
-        <!-- 主操作 -->
+        <!-- 主操作。 -->
         <div class="drawer-section">
             <div class="drawer-section-title">操作</div>
             <div class="drawer-actions">
@@ -214,7 +214,7 @@ export function renderDrawerContent(video, bvid) {
             </div>
         </div>
 
-        <!-- 日志区（按 bvid 过滤，时间倒序） -->
+        <!-- 日志区（按 bvid 过滤，时间倒序）。 -->
         <div class="drawer-section">
             <div class="drawer-section-title">
                 日志
@@ -232,8 +232,9 @@ export function renderDrawerContent(video, bvid) {
     loadBvidLogs(bvid);
 }
 
-/// 渲染抽屉"已下载文件"列表。
-/// files: 后端扫描返回的文件数组；burned: { danmaku, subtitle }；sidecar: 无文件明细时的侧车状态。
+// 渲染抽屉“已下载文件”列表。
+// files 是后端扫描返回的文件数组；burned 为 { danmaku, subtitle }；
+// sidecar 是没有文件明细时使用的侧车状态。
 function primaryArtifactFiles(files) {
     if (!Array.isArray(files)) return [];
     return files.filter(file => !['danmaku', 'comment'].includes(file.file_type || file.type));
@@ -410,4 +411,4 @@ function preferredDanmakuVersions(files) {
     return [...groups.values()];
 }
 
-/// 在资源管理器中打开文件所在目录（后端配套接口）。
+// 在资源管理器中打开文件所在目录（后端配套接口）。

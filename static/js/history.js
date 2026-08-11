@@ -5,7 +5,7 @@ import { updateDownloadLists } from './download-queue.js';
 import { showToast } from './download-status.js';
 import { openVideoDrawer } from './drawer.js';
 
-// ==================== 看板（下载管理页） ====================
+// --- 看板（下载管理页） ---
 // 当前看板子 tab：downloading / completed / failed
 _state.currentBoardTab = 'completed';
 // 看板视频缓存：{ bvid: video }，供抽屉快速查找
@@ -20,7 +20,7 @@ _state.historyBoardRequestId = 0;
 _state.historyBoardController = null;
 _state.historyBoardInFlight = false;
 
-/// 切换看板子 tab。
+// 切换看板子 tab。
 export function switchBoardTab(tab) {
     _state.currentBoardTab = tab;
     document.querySelectorAll('.board-sub-tab').forEach(el => {
@@ -29,7 +29,7 @@ export function switchBoardTab(tab) {
     loadHistoryBoard(tab);
 }
 
-/// 加载看板数据。
+// 加载看板数据。
 export async function loadHistoryBoard(tab, { append = false } = {}) {
     const board = document.getElementById('history-board');
     if (!board) return;
@@ -59,7 +59,7 @@ export async function loadHistoryBoard(tab, { append = false } = {}) {
             return;
         }
         const data = result.data || {};
-        // 缓存 server_time + 更新"上次拉取"
+        // 缓存 server_time，并更新“上次拉取”时间。
         _state.lastBoardServerTime = data.server_time || 0;
         updateLastPullTimeDisplay();
 
@@ -98,7 +98,7 @@ export async function loadHistoryBoard(tab, { append = false } = {}) {
                 counts.pay_blocked += c.pay_blocked || 0;
             });
         }
-        // tab count 显示：下载中 = downloading；已下载 = completed + removed + pay_blocked；下载失败 = failed
+        // 更新 tab count：下载中 = downloading；已下载 = completed + removed + pay_blocked；下载失败 = failed。
         updateElement('board-count-downloading', counts.downloading || 0);
         updateElement('board-count-completed', (counts.completed || 0) + (counts.removed || 0) + (counts.pay_blocked || 0));
         updateElement('board-count-failed', counts.failed || 0);
@@ -137,7 +137,7 @@ export async function loadHistoryBoard(tab, { append = false } = {}) {
     }
 }
 
-/// 渲染看板（按博主分组）。
+// 渲染看板（按博主分组）。
 export function renderHistoryBoard(groups, tab) {
     const board = document.getElementById('history-board');
     if (!board) return;
@@ -193,7 +193,7 @@ function appendHistoryBoardPage(groups, tab) {
     }
 }
 
-/// 渲染单个博主分组。
+// 渲染单个博主分组。
 export function renderBloggerSection(g, tab) {
     const uid = escapeHtml(g.uid || '');
     const name = escapeHtml(g.name || g.uid || '未知博主');
@@ -227,7 +227,7 @@ export function renderBloggerSection(g, tab) {
     `;
 }
 
-/// 渲染单个视频卡片。
+// 渲染单个视频卡片。
 export function renderBoardVideoCard(v) {
     const bvid = escapeHtml(v.bvid || '');
     const title = escapeHtml(v.title || '未知标题');
@@ -276,7 +276,7 @@ export function renderBoardVideoCard(v) {
         </div>
     ` : '';
 
-    // 暂停 / 恢复按钮：仅活跃任务且后端返回了 task_id 时显示
+        // 暂停 / 恢复按钮：仅活跃任务且后端返回 task_id 时显示。
     // 嵌在卡片内，依靠事件委托（closest）优先匹配按钮自身的 data-action，不会触发卡片 open-video
     const taskId = task.task_id || '';
     const pauseResumeHtml = taskId && (task.status === 'downloading' || task.status === 'pending' || task.status === 'paused') ? `
@@ -308,7 +308,7 @@ export function renderBoardVideoCard(v) {
     `;
 }
 
-/// sidecar 图标：视频 / 弹幕 / 字幕
+// sidecar 图标：视频、弹幕、字幕。
 export function renderSidecarIcons(sidecar) {
     const items = [
         { key: 'video', label: '视频', icon: 'fa-film' },
@@ -324,8 +324,9 @@ export function renderSidecarIcons(sidecar) {
     }).join('');
 }
 
-/// 状态点 class（左上角小点颜色）。
-/// 绿=完成；蓝=下载中；黄=已暂停/充电可下载；红=下架/重投/失败；灰=充电不可下载/数据陈旧
+// 状态点 class（左上角小点颜色）。
+// 绿色表示完成，蓝色表示下载中，黄色表示已暂停或可下载充电视频，
+// 红色表示下架、重投或失败，灰色表示不可下载充电视频或数据陈旧。
 export function stateDotClass(state, v) {
     if (v && v.reupload_of) return 'removed';
     const payNote = (v && v.pay_note) || '';
@@ -354,7 +355,7 @@ export function stateDotClass(state, v) {
     }
 }
 
-/// 状态文本。
+// 状态文本。
 export function stateLabel(state, v) {
     if (v && v.reupload_of) return `疑似重传（${v.reupload_of}）`;
     const payNote = (v && v.pay_note) || '';
@@ -373,7 +374,7 @@ export function stateLabel(state, v) {
     return map[state] || state;
 }
 
-/// 格式化时长（秒 → mm:ss 或 hh:mm:ss）。
+// 格式化时长（秒 → mm:ss 或 hh:mm:ss）。
 export function formatDuration(sec) {
     sec = Number(sec) || 0;
     if (sec <= 0) return '';
@@ -384,7 +385,7 @@ export function formatDuration(sec) {
     return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-/// 格式化时间戳 → YYYY-MM-DD HH:MM
+// 格式化时间戳为 YYYY-MM-DD HH:MM。
 export function formatTimestamp(ts) {
     ts = Number(ts) || 0;
     if (ts <= 0) return '';
@@ -393,7 +394,7 @@ export function formatTimestamp(ts) {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/// 格式化播放量。
+// 格式化播放量。
 export function formatViewCount(view) {
     view = Number(view) || 0;
     if (view >= 100000000) return (view / 100000000).toFixed(1) + '亿';
@@ -401,7 +402,7 @@ export function formatViewCount(view) {
     return view.toString();
 }
 
-/// 更新"上次拉取"时间显示。
+// 更新“上次拉取”时间显示。
 export function updateLastPullTimeDisplay() {
     const el = document.getElementById('last-pull-time');
     if (!el) return;
@@ -414,7 +415,7 @@ export function updateLastPullTimeDisplay() {
     el.textContent = `上次拉取：${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/// 手动刷新看板（5s 防抖）。
+// 手动刷新看板（5s 防抖）。
 export async function manualRefreshBoard() {
     if (!checkNetworkBeforeAction()) return;
     const now = Date.now();
@@ -448,7 +449,7 @@ export async function manualRefreshBoard() {
     }
 }
 
-/// 更新 element 文本（安全）。
+// 安全更新 element 文本。
 export function updateElement(id, value) {
     const el = document.getElementById(id);
     if (el) el.textContent = value;
@@ -523,7 +524,7 @@ export function updateDownloadProgressInList(bvid, data) {
     if (downloadItem) {
         updateDownloadItemProgress(downloadItem, data);
         
-        // 如果状态发生变化（如从 downloading 变为 completed/failed），需要刷新整个列表
+        // 如果状态发生变化（例如从 downloading 变为 completed/failed），需要刷新整个列表。
         if (oldStatus && oldStatus !== data.status && (data.status === 'completed' || data.status === 'failed' || data.status === 'merged')) {
             setTimeout(() => updateDownloadLists(), 500);
         }

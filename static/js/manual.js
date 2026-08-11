@@ -4,7 +4,7 @@ import { checkNetworkBeforeAction, apiPost, apiGet } from './core.js';
 import { showToast } from './download-status.js';
 import { renderSeasonResolveResult } from './media-actions.js';
 
-// ==================== 手动查询 ====================
+// --- 手动查询 ---
 _state.manualQueryMode = 'submission'; // 'submission' | 'series' | 'link'
 _state.manualQueryOffset = 0;
 _state.manualQueryLimit = 20;
@@ -267,12 +267,12 @@ export function renderManualLoadMore() {
     }
 }
 
-// ==================== 链接解析（番剧 / 课程 / 普通视频） ====================
+// --- 链接解析（番剧 / 课程 / 普通视频） ---
 
-/// 解析用户输入的链接：调用 /api/video/resolve 并按媒体类型分发渲染。
-/// - 番剧/课程：渲染季信息 + 分集列表（勾选下载），见 media-actions.js
-/// - 普通视频（BV/AV）：拉取视频信息后复用既有单视频卡片流程
-/// - pay_blocked：显示可读的权限提示，不阻断页面
+// 解析用户输入的链接：调用 /api/video/resolve，并按媒体类型分发渲染。
+// - 番剧/课程：渲染季信息和分集列表（勾选下载），见 media-actions.js。
+// - 普通视频（BV/AV）：拉取视频信息后复用既有单视频卡片流程。
+// - pay_blocked：显示可读的权限提示，不阻断页面。
 export async function doManualResolve() {
     if (!checkNetworkBeforeAction()) return;
     const inputEl = document.getElementById('manual-link-input');
@@ -310,7 +310,7 @@ export async function doManualResolve() {
     }
 }
 
-/// 按 resolve 返回的媒体类型分发渲染。
+// 按 resolve 返回的媒体类型分发渲染。
 async function renderResolveResult(result) {
     const resultDiv = document.getElementById('manual-result');
     const media = result.media || {};
@@ -343,7 +343,7 @@ async function renderResolveResult(result) {
     resultDiv.innerHTML = `<div class="card empty-state"><i class="fa-solid fa-info-circle fa-2x mb-md"></i><p>未能识别的链接类型</p></div>`;
 }
 
-/// 普通视频链接解析：拉取视频信息后渲染单张卡片，复用既有手动查询数据流。
+// 普通视频链接解析：拉取视频信息后渲染单张卡片，复用既有手动查询数据流。
 async function renderResolvedNormalVideo(bvid, resultDiv) {
     resultDiv.innerHTML = `<div class="card empty-state"><i class="fa-solid fa-spinner fa-spin fa-2x mb-md"></i><p>正在获取视频信息...</p></div>`;
     try {

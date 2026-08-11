@@ -72,7 +72,7 @@ async fn run() -> anyhow::Result<()> {
     let db = init_database(&paths, &config).await?;
     let state = AppState::new(config, paths, db, false).await?;
 
-    // BiliApi 就绪后：同步 B 站登录 uid 到 startup_state.json。
+    // BiliApi 就绪后：同步 B 站登录 UID 到 startup_state.json。
     app::onboarding::sync_bili_uid(&state, &state.infra.paths).await;
 
     app::control::start_server(state.clone());
@@ -158,7 +158,7 @@ async fn run() -> anyhow::Result<()> {
             None => "未登录".to_string(),
         };
         println!("═══════════════════════════════════════════════════════");
-        println!("  B站视频监控助手 v{}", env!("CARGO_PKG_VERSION"));
+        println!("  补哩补哩 bulibuli v{}", env!("CARGO_PKG_VERSION"));
         let main_url = app::server::main_url(&state);
         println!("  网页管理: {main_url}");
         println!("  监听模式: {mode_text} | AI 模式: {ai_text} | B站: {bili_text}");

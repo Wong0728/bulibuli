@@ -191,14 +191,14 @@ fn file_stem_for(bvid: &str, page: Option<i32>) -> String {
 }
 
 /// 校验 bvid 格式是否合法。
-/// B站 bvid 格式为 BV + 10 位字符（字符集为 base58 去重后的字母数字）。
+/// B 站 bvid 格式为 BV + 10 位字符（字符集为 base58 去重后的字母数字）。
 /// 此校验防止恶意 bvid（如 "../etc/passwd"）触发的路径穿越或文件名注入。
 fn is_valid_bvid(bvid: &str) -> bool {
     // 长度必须为 12：'BV' + 10
     if bvid.len() != 12 {
         return false;
     }
-    // 必须以 'BV' 开头（大小写敏感，与 B站一致）
+    // 必须以 'BV' 开头（大小写敏感，与 B 站一致）。
     if !bvid.starts_with("BV") {
         return false;
     }

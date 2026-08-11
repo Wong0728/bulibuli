@@ -523,7 +523,7 @@ async fn touch_view_refreshed_at(db: &DatabaseConnection, id: i32) {
     }
 }
 
-/// 读取 cookies（DB key="cookies"）。
+/// 读取 Cookie（DB key="cookies"）。
 async fn read_cookies(settings_service: &SettingsService) -> String {
     match settings_service.cookie_header().await {
         Ok(cookies) => cookies,

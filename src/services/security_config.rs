@@ -88,7 +88,7 @@ pub fn is_effectively_loopback(ip: IpAddr) -> bool {
     if ip.is_loopback() {
         return true;
     }
-    // IPv4-mapped IPv6 (::ffff:127.x.x.x)
+    // IPv4 映射的 IPv6 地址（::ffff:127.x.x.x）。
     if let IpAddr::V6(v6) = ip {
         if let Some(mapped_v4) = v6.to_ipv4() {
             return mapped_v4.is_loopback();
@@ -133,7 +133,7 @@ impl SecurityConfig {
     }
 
     pub fn client_allowed(&self, ip: IpAddr) -> (bool, bool) {
-        // Loopback 地址始终放行：本机访问不受访问策略限制。
+        // 回环地址始终放行：本机访问不受访问策略限制。
         // 使用 is_effectively_loopback 覆盖 IPv4-mapped IPv6 形式（::ffff:127.x.x.x）。
         if is_effectively_loopback(ip) {
             return (true, false);

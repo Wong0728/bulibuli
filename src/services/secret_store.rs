@@ -221,8 +221,8 @@ fn ensure_master_key(path: &Path) -> AppResult<()> {
 fn macos_master_key() -> AppResult<Vec<u8>> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use std::process::Command;
-    const ACCOUNT: &str = "bilibili-uid-buildownloader";
-    const SERVICE: &str = "bilibili-uid-buildownloader-secret-store";
+    const ACCOUNT: &str = "bulibuli";
+    const SERVICE: &str = "bulibuli-secret-store";
     let existing = Command::new("security")
         .args(["find-generic-password", "-a", ACCOUNT, "-s", SERVICE, "-w"])
         .output()?;

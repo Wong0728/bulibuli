@@ -102,7 +102,7 @@ impl Aria2Manager {
 
     pub(super) async fn call(&self, method: &str, params: Vec<Value>) -> Result<Value> {
         let mode = self.inner.lock().await.mode;
-        // embedded 模式下不重试：内置进程要么在运行要么不在，重试只会产生无意义延迟
+        // embedded 模式下不重试：内置进程要么在运行要么不在，重试只会产生无意义延迟。
         let max_retries = if mode == Aria2Mode::Embedded {
             1
         } else {
@@ -219,7 +219,7 @@ impl Aria2Manager {
             .ok_or_else(|| anyhow!("Aria2 选项不是 JSON 对象"))?;
         obj.insert("out".to_string(), json!(filename));
 
-        // Per-download SSL/网络容错选项：确保即使全局配置被覆盖，单任务仍能正确处理
+        // 单任务 SSL/网络容错选项：即使全局配置被覆盖，单任务仍能正确处理。
         obj.entry("check-certificate")
             .or_insert_with(|| json!("true"));
         obj.entry("max-http-redirect").or_insert_with(|| json!("0"));
@@ -283,7 +283,7 @@ impl Aria2Manager {
         Ok(())
     }
 
-    /// Pause every active aria2 transfer when reserved disk capacity is exhausted.
+    /// 预留磁盘空间耗尽时暂停所有活动中的 aria2 传输。
     pub async fn pause_all(&self) -> Result<()> {
         self.call("aria2.pauseAll", vec![]).await?;
         Ok(())

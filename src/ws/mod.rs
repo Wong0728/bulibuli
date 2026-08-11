@@ -193,7 +193,7 @@ impl WebSocketManager {
 /// 审计事件桥接：订阅 `AuditEventSender` 广播通道，把每条审计事件转发给 WebSocket 客户端。
 ///
 /// 这样前端 Web GUI 可实时感知 AI/TUI/其他端的写操作（操作成功后才广播，符合
-/// "操作未提交前不广播"的设计原则）。敏感操作（cookie 保存等）走 `record_silent`，
+/// “操作未提交前不广播”的设计原则）。敏感操作（Cookie 保存等）走 `record_silent`，
 /// 不经此通道，事件流不暴露隐私信息。
 ///
 /// 在 `main.rs` 启动时 spawn 一次即可；任务随 `cancellation` 取消退出。

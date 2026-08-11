@@ -34,9 +34,7 @@ pub struct AppState {
 
 pub type SharedState = Arc<AppState>;
 
-// ---------------------------------------------------------------------------
-// FromRef 实现：clone 内部 Arc，零深拷贝开销
-// ---------------------------------------------------------------------------
+// --- FromRef 实现：clone 内部 Arc，无深拷贝开销 ---
 
 impl FromRef<AppState> for Arc<InfraState> {
     fn from_ref(state: &AppState) -> Self {
@@ -62,9 +60,7 @@ impl FromRef<AppState> for Arc<BusinessState> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 构造函数：按领域依赖顺序 Infra → Bili → Media → Business
-// ---------------------------------------------------------------------------
+// --- 构造函数：按领域依赖顺序 Infra → Bili → Media → Business ---
 
 impl AppState {
     pub async fn new(

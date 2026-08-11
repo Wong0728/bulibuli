@@ -180,7 +180,7 @@ impl DownloadManager {
             {
                 Ok(Some(audio)) if !audio.audio_url.is_empty() => audio.audio_url,
                 result => {
-                    // 解析 B站错误码：不可重试错误（风控 -352/-403、视频删除 -404、
+                    // 解析 B 站错误码：不可重试错误（风控 -352/-403、视频删除 -404、
                     // 充电/地区限制、未登录 -101）直接终止自动重试并降级为纯视频，
                     // 不可重试错误直接降级，避免持续触发风控。
                     if let Err(e) = &result {

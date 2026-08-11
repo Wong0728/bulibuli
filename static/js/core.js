@@ -42,13 +42,13 @@ import { loadDrawerComments, loadDrawerDanmaku } from './drawer-sidecars.js';
 import { openHistoryDirectory } from './directory-actions.js';
 import './live.js';
 
-// B站视频监控助手 - feature modules
+// B 站视频监控助手的功能模块。
 // 连接后端API
 
-// ==================== API基础配置 ====================
+// --- API 基础配置 ---
 const _API_BASE = '';
 
-// ==================== WebSocket配置 ====================
+// --- WebSocket 配置 ---
 _state.wsConnected = false;  // WebSocket 连接状态标志，用于 HTTP 轮询回退
 
 export function setElementHandler(element, eventName, handler) {
@@ -526,7 +526,7 @@ export async function apiGet(url, options = {}) {
     });
 }
 
-// ==================== 全局状态 ====================
+// --- 全局状态 ---
 _state.manualDownloadProgress = {};  // 存储手动下载的进度 {bvid: {progress, status, speed, etc}}
 _state.serverOffset = 0;
 _state.nextCheckTimestamp = 0;

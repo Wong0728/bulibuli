@@ -100,7 +100,7 @@ impl DownloadManager {
     }
 
     /// 断点续传重建前重新解析下载 URL。
-    /// B站 m4s/m4a 的 CDN URL 带 deadline 签名（约 2h），重启后旧 URL 大概率 403，
+    /// B 站 m4s/m4a 的 CDN URL 带 deadline 签名（约 2h），重启后旧 URL 大概率 403，
     /// 因此 video/audio 必须重新解析；cover/danmaku/comments 的 URL 稳定或走 API，沿用旧值。
     /// 返回 `None` 表示重新解析失败（视频被删/风控等），调用方据此置为失败终态。
     pub(super) async fn resolve_resume_url(&self, task: &download_task::Model) -> Option<String> {
@@ -178,7 +178,7 @@ impl DownloadManager {
                     continue;
                 }
             }
-            // GID 不存在，需重建任务。B站 m4s/m4a 的 CDN URL 带 deadline 签名（约 2h），
+            // GID 不存在，需重建任务。B 站 m4s/m4a 的 CDN URL 带 deadline 签名（约 2h），
             // 音视频 CDN URL 带短期签名，恢复任务时必须重新解析。
             let url = match self.resolve_resume_url(&task).await {
                 Some(u) if !u.is_empty() => u,

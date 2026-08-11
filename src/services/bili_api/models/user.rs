@@ -3,7 +3,7 @@
 use super::lenient_i64;
 use serde::{Deserialize, Serialize};
 
-// ============ 投稿列表 /x/space/wbi/arc/search ============
+// --- 投稿列表：/x/space/wbi/arc/search ---
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -49,7 +49,7 @@ pub struct PageCount {
     pub count: i64,
 }
 
-// ============ 合集/系列 /x/polymer/web-space/seasons_series_list ============
+// --- 合集/系列：/x/polymer/web-space/seasons_series_list ---
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -81,7 +81,7 @@ pub struct SeriesMeta {
     pub total: i64,
 }
 
-// ============ 合集/系列视频 seasons_archives_list / series/archives ============
+// --- 合集/系列视频：seasons_archives_list / series/archives ---
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -116,7 +116,7 @@ pub struct PageTotal {
     pub total: i64,
 }
 
-// ============ 用户搜索 /x/web-interface/wbi/search/type ============
+// --- 用户搜索：/x/web-interface/wbi/search/type ---
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -147,7 +147,7 @@ pub struct SearchPageInfo {
     pub total_results: i64,
 }
 
-// ============ 用户信息 /x/space/wbi/acc/info + /x/relation/stat ============
+// --- 用户信息：/x/space/wbi/acc/info + /x/relation/stat ---
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -172,7 +172,7 @@ pub(crate) fn normalize_image_url(url: &str) -> String {
         .unwrap_or_default()
 }
 
-// ============ 对外域模型（序列化字段名与前端契约一致） ============
+// --- 对外域模型（序列化字段名与前端契约一致） ---
 
 /// 投稿/合集视频条目。
 #[derive(Debug, Clone, Default, Serialize)]

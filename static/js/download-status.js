@@ -14,7 +14,7 @@ subscribeState('currentDownloadStatuses', statuses => {
     if (statuses) patchBoardCardProgress(statuses);
 });
 
-// ==================== 下载状态管理 ====================
+// --- 下载状态管理 ---
 // 根据 /api/download/status 返回的结果更新 Aria2 状态指示点。
 // status 可传 'connected' | 'starting' | 'disconnected'，未传时从 result 解析。
 export function updateAria2StatusDot(result, statusOverride) {
@@ -107,7 +107,7 @@ export function startProgressUpdates() {
     poll();
 }
 
-// ==================== 工具函数 ====================
+// --- 工具函数 ---
 // 全局 HTML 转义工具，避免 XSS。同时用于文本内容与属性值（' 也被转义为 &#039;）。
 export function showToast(msg, type = 'info', duration = 2700) {
     const isNetworkMessage = msg === _NETWORK_ERR_MSG;

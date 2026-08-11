@@ -3,7 +3,7 @@
 //! 播放地址保留旧版接口作为播放协议兼容路径；弹幕配置只允许
 //! WBI 签名的 `getDanmuInfo`，不会回退到旧版 `getConf`。
 //! 接口域名：`api.live.bilibili.com`，走 `api_client`（严格 TLS）。
-/// Fetch authenticated WebSocket information from WBI-signed `getDanmuInfo`.
+/// 从带 WBI 签名的 `getDanmuInfo` 获取带登录态的 WebSocket 信息。
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use tracing::{debug, warn};
@@ -20,8 +20,8 @@ use super::BiliApi;
 const LIVE_QN_RAW: i32 = 10000;
 
 impl BiliApi {
-    /// Batch status probe used by the monitor. One request covers all saved
-    /// anchors, preventing a synchronized per-room polling spike.
+    /// 监控服务使用的批量状态探测。
+    /// 一次请求覆盖所有已保存的主播，避免按房间同步轮询造成请求尖峰。
     pub async fn live_status_by_uids(
         &self,
         uids: &[i64],
@@ -58,7 +58,7 @@ impl BiliApi {
             .map(|item| (item.uid, item))
             .collect())
     }
-    /// Fetch the small recent-message window used to backfill reconnect gaps.
+    /// 获取用于补齐重连间隔的小窗口最新消息。
     pub async fn live_recent_danmaku(
         &self,
         room_id: i64,

@@ -6,7 +6,7 @@ const FAILURE_THRESHOLD: u32 = 2;
 const BLOCK_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// 检测 URL 是否来自劣质 CDN 节点（MCDN/PCDN）。
-/// B站的 MCDN 是 P2P 加速节点，常使用非标准端口（如 8082），
+/// B 站的 MCDN 是 P2P 加速节点，常使用非标准端口（如 8082），
 /// 其 SSL 证书链和连接稳定性普遍较差，容易触发 TLS 握手失败/拒连。
 pub(crate) fn is_mcdn_url(url: &str) -> bool {
     const CDN_BLACKLIST: &[&str] = &["mcdn", "pcdn", "szbdyd.com", "mountaintoys.cn"];

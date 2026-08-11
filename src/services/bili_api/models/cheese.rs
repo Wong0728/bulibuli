@@ -14,7 +14,7 @@ pub struct CheeseSeason {
     pub season_id: i64,
     pub title: String,
     pub cover: String,
-    /// 课程章节（每章含若干分集），调用方按章节顺序展平
+    /// 课程章节（每章含若干分集），调用方按章节顺序展平。
     pub sections: Vec<CheeseSection>,
 }
 
@@ -39,7 +39,7 @@ pub struct CheeseEpisode {
     #[serde(rename = "release_date")]
     pub release_date: i64,
     pub duration: i64,
-    /// 0/1/2/3：状态/付费标识，调用方据此判定是否可试看
+    /// 0/1/2/3：状态/付费标识，调用方据此判定是否可试看。
     pub status: i64,
 }
 

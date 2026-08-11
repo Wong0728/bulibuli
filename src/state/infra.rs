@@ -23,8 +23,8 @@ pub struct InfraState {
     pub(crate) cancellation: tokio_util::sync::CancellationToken,
     /// AI Skill 模式开关（来自 onboarding / `ai on|off`）。ctl 命令门控以此为准。
     pub(crate) ai_skill_enabled: Arc<AtomicBool>,
-    /// Human-granted, short-lived authority for AI to alter the security
-    /// boundary.  `0` means absent; it is never persisted across restarts.
+    /// 人工授予 AI 修改安全边界的短时权限。
+    /// `0` 表示未授权；权限不会跨进程重启持久化。
     pub(crate) ai_foundation_authorized_until: Arc<AtomicI64>,
     /// 进程启动时刻，供 `sys status` 计算运行时长。
     pub(crate) started_at: Instant,

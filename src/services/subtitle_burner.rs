@@ -19,7 +19,7 @@ use crate::services::video_processor::VideoProcessor;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-// us-danmaku 内部参考画布尺寸（不可配置，算法常量）。
+// us-danmaku 的内部参考画布尺寸（不可配置的算法常量）。
 const PLAY_RES_X: f64 = 560.0;
 const PLAY_RES_Y: f64 = 420.0;
 // 弹幕密度/丢弃策略调参常量（不暴露给用户，避免误调导致布局错乱）。

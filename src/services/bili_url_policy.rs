@@ -4,9 +4,9 @@ use url::{Host, Url};
 
 const ALLOWED_ROOTS: &[&str] = &["bilibili.com", "bilivideo.com", "hdslb.com"];
 
-/// Normalize Bilibili resource URLs at the server boundary. Bilibili APIs may
-/// return protocol-relative or legacy HTTP image URLs; both are upgraded to
-/// HTTPS before the regular allow-list validation runs.
+/// 在服务端边界规范化 B 站资源 URL。
+/// B 站 API 可能返回协议相对地址或旧版 HTTP 图片地址，统一升级为 HTTPS 后
+/// 再执行常规白名单校验。
 pub fn normalize_syntax(raw: &str) -> AppResult<Url> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -73,8 +73,8 @@ pub fn validate_live_endpoint_syntax(raw: &str, websocket: bool) -> AppResult<Ur
             "直播端点不允许携带用户信息".to_string(),
         ));
     }
-    // ponytail: no port restriction for live endpoints — B站 danmaku WSS uses 2244/2245, not 443.
-    // Domain allow-list above is the real security boundary.
+    // ponytail：直播端点不限制端口；B 站弹幕 WSS 使用 2244/2245，而不是 443。
+    // 上方的域名白名单才是实际安全边界。
     let Host::Domain(host) = parsed
         .host()
         .ok_or_else(|| AppError::BadRequest("直播端点缺少域名".to_string()))?
@@ -178,7 +178,7 @@ mod tests {
         assert!(validate_live_endpoint_syntax("https://cdn.bilivideo.com/live", false).is_ok());
         assert!(validate_live_endpoint_syntax("wss://broadcast.bilibili.com/sub", true).is_ok());
         assert!(validate_live_endpoint_syntax("http://cdn.bilivideo.com/live", false).is_err());
-        // ponytail: non-standard ports are allowed for live endpoints (danmaku WSS uses 2245)
+        // ponytail：直播端点允许使用非标准端口（弹幕 WSS 使用 2245）。
         assert!(validate_live_endpoint_syntax("wss://cdn.bilivideo.com:8443/sub", true).is_ok());
         assert!(validate_live_endpoint_syntax("wss://cdn.bilivideo.com:2245/sub", true).is_ok());
         assert!(

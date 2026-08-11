@@ -251,7 +251,7 @@ impl DownloadManager {
                         model.status = Set("failed".to_string());
                         model.error = Set(Some("Aria2 下载器不可用".to_string()));
                         model.speed = Set(0);
-                        // generation 守卫：避免覆盖用户重试后重置的新状态
+                        // generation 守卫：避免覆盖用户重试后重置的新状态。
                         self.apply_guarded_update(&task.bvid, task.id, task.generation, model)
                             .await;
                         // 任务终态：清理 DB 节流与进度缓存
@@ -376,7 +376,7 @@ impl DownloadManager {
                                         {
                                             self.bili_api.bad_cdns().record_failure(&host).await;
                                         }
-                                        // 手动下载任务不携带 uid，避免混入博主自动监测日志
+                                        // 手动下载任务不携带 UID，避免混入博主自动监测日志。
                                         let uid = if task.source.as_deref() == Some("manual") {
                                             None
                                         } else {

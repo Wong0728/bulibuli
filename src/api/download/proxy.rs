@@ -50,7 +50,7 @@ pub(super) async fn download_proxy(
     use axum::body::Body;
     use axum::http::{header, StatusCode};
 
-    // SSRF 防护：仅允许 B 站相关域名
+    // SSRF 防护：仅允许 B 站相关域名。
     if crate::services::bili_url_policy::validate(&q.url)
         .await
         .is_err()

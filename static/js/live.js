@@ -32,7 +32,7 @@ const liveState = {
     liveTabActive: false,
 };
 
-// ==================== 文案映射：内部英文值一律转中文展示 ====================
+// --- 文案映射：内部英文值统一转换为中文展示 ---
 
 function videoStatusText(status) {
     const map = {
@@ -151,7 +151,7 @@ function scheduleSummary(source) {
     return parts.length ? `按周排期：${parts.join('；')}` : '排期为空（永不自动开始）';
 }
 
-// ==================== 数据拉取 ====================
+// --- 数据拉取 ---
 
 export async function refreshDashboard(silent = false) {
     if (liveState.dashboardInFlight || document.visibilityState === 'hidden') return;
@@ -235,7 +235,7 @@ function setSyncStates() {
     }
 }
 
-// ==================== 渲染 ====================
+// --- 渲染 ---
 
 function renderAll() {
     renderSidebar();
@@ -459,7 +459,7 @@ function interactionMarkup(session) {
     `;
 }
 
-// ==================== 录制任务看板（子 tab） ====================
+// --- 录制任务看板（子 tab） ---
 
 function renderBoard() {
     const sessions = liveState.dashboard?.sessions || [];
@@ -588,7 +588,7 @@ function renderAttentionBoard(jobs, recovery) {
     node.innerHTML = [...jobRows, ...recoveryRows].join('');
 }
 
-// ==================== 实时互动轮询 ====================
+// --- 实时互动轮询 ---
 
 async function pollEvents() {
     const session = selectedSession();
@@ -753,7 +753,7 @@ function selectRoom(roomId, options = {}) {
     if (!options.silent) pollEvents();
 }
 
-// ==================== 操作 ====================
+// --- 操作 ---
 
 async function startRecording(roomId) {
     if (liveState.pendingRooms.has(roomId)) return;
@@ -813,7 +813,7 @@ async function deleteSource(roomId) {
     }
 }
 
-// ==================== 添加直播源弹窗 ====================
+// --- 添加直播源弹窗 ---
 
 function openAddModal() {
     document.getElementById('live-add-input').value = '';
@@ -912,7 +912,7 @@ function trackBurnTask(taskId) {
     }, 3000);
 }
 
-// ==================== 直播源设置弹窗 ====================
+// --- 直播源设置弹窗 ---
 
 function scheduleRows(key) {
     return [0, 1].map(index => ({
@@ -1091,7 +1091,7 @@ async function saveSource() {
     }
 }
 
-// ==================== 初始化 ====================
+// --- 初始化 ---
 
 function tickUi() {
     document.querySelectorAll('.live-duration[data-started-at]').forEach(node => {

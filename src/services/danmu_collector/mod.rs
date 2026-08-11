@@ -251,8 +251,8 @@ impl DanmuCollector {
         dropped: &Arc<AtomicU64>,
         seen: &mut HashSet<String>,
     ) -> Result<()> {
-        // Build from the URL first so tungstenite supplies the mandatory
-        // WebSocket handshake headers (especially Sec-WebSocket-Key).
+        // 先从 URL 构造请求，让 tungstenite 补齐 WebSocket 握手所需的请求头，
+        // 尤其是 Sec-WebSocket-Key。
         let mut request = ws_url
             .into_client_request()
             .context("build WebSocket request failed")?;

@@ -24,13 +24,13 @@
     --info: #165dff;
     --info-text: #175cd3;
 
-    /* 语义状态的浅色背景 */
+    /* 语义状态的浅色背景。 */
     --success-soft: #e8ffea;
     --warning-soft: #fff7e6;
     --error-soft: #ffece8;
     --info-soft: #e6f4ff;
 
-    /* 组件使用的语义别名 */
+    /* 组件使用的语义别名。 */
     --text-tertiary: #86909c;
     --bg-card: #ffffff;
     --card-bg: #ffffff;
@@ -51,7 +51,7 @@
     --transition-fast: 150ms ease;
     --transition-normal: 250ms ease;
 
-    /* Generated design tokens: raw values remain centralized in :root. */
+    /* 设计令牌：原始值集中定义在 :root。 */
     --color-token-1: #00a1d6;
     --color-token-2: #1a1d24;
     --color-token-3: #22c55e;
@@ -210,7 +210,7 @@
     box-sizing: border-box;
 }
 
-/* 整页滚动条样式：让用户清楚知道页面是可滚动的 */
+/* 整页滚动条样式：让用户清楚知道页面是可滚动的。 */
 ::-webkit-scrollbar {
     width: var(--size-10);
     height: var(--size-10);
@@ -254,7 +254,7 @@ body {
     min-height: 100dvh;
 }
 
-/* Header */
+/* 页面头部。 */
 .header {
     background: var(--surface);
     border-bottom: var(--size-1) solid var(--border);
@@ -295,12 +295,12 @@ body {
 .header p {
     font-size: var(--size-13);
     color: var(--text-muted);
-    /* var(--size-12) padding + var(--size-4) border-left = var(--size-16)，与 h1 文本起始位置对齐 */
+    /* var(--size-12) padding + var(--size-4) border-left = var(--size-16)，与 h1 文本起始位置对齐。 */
     padding-left: var(--size-16);
     margin-left: 0;
 }
 
-/* Navigation tabs - 4 equal-width controls */
+/* 导航标签：4 个等宽控件。 */
 .nav-tabs {
     display: flex;
     gap: 0;
@@ -310,10 +310,10 @@ body {
     margin-bottom: var(--size-20);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     position: sticky;
-    /* header 高度约 var(--size-70) + var(--size-16) margin-bottom，nav 紧跟其下 */
+    /* header 高度约为 var(--size-70) + var(--size-16) margin-bottom，nav 紧跟其下。 */
     top: 0;
     z-index: 40;
-    /* 取消与 header 的 margin 塌陷，确保 nav 不覆盖 header */
+    /* 取消与 header 的 margin 塌陷，确保 nav 不覆盖 header。 */
     margin-top: var(--size-neg-1);
 }
 
@@ -375,7 +375,7 @@ body {
     vertical-align: middle;
 }
 
-/* card-title 中的 aria2-dot 使用静态定位，作为 flex item */
+/* card-title 中的 aria2-dot 使用静态定位，作为 flex item。 */
 .card-title .aria2-dot {
     position: static;
     margin-left: var(--size-8);
@@ -410,7 +410,7 @@ body {
     font-size: var(--size-12);
 }
 
-/* Server connection status indicator */
+/* 服务连接状态指示器。 */
 .server-status {
     display: inline-flex;
     align-items: center;
@@ -472,8 +472,8 @@ body {
     50% { opacity: 0.3; }
 }
 
-/* ==================== 登录用户卡片（顶栏永久显示 + 设置页状态） ==================== */
-/* 顶栏永久登录卡片：头像 + 昵称 + 等级/大会员 + 切换账号 */
+/* --- 登录用户卡片（顶栏永久显示 + 设置页状态） --- */
+/* 顶栏永久登录卡片：头像 + 昵称 + 等级/大会员 + 切换账号。 */
 .login-user-card {
     display: flex;
     align-items: center;
@@ -568,7 +568,7 @@ body {
     color: var(--brand);
 }
 
-/* 未登录提示按钮（顶栏） */
+/* 未登录提示按钮（顶栏）。 */
 .login-prompt-btn {
     display: inline-flex;
     align-items: center;
@@ -590,7 +590,7 @@ body {
     color: var(--color-token-26);
 }
 
-/* 设置页登录状态框 */
+/* 设置页登录状态框。 */
 .login-status-box {
     display: flex;
     align-items: center;
@@ -616,7 +616,7 @@ body {
     font-size: var(--size-12);
 }
 
-/* 扫码成功后短暂显示的 Cookie 预览（几秒后替换为“已保存”） */
+/* 扫码成功后短暂显示的 Cookie 预览（几秒后替换为“已保存”）。 */
 .qr-cookie-preview {
     font-size: var(--size-11);
     line-height: 1.5;
@@ -636,13 +636,13 @@ body {
     font-size: var(--size-10);
 }
 
-/* 窄屏下顶栏登录卡片精简显示 */
+/* 窄屏下顶栏登录卡片精简显示。 */
 @media (max-width: 768px) {
     .login-user-name { max-width: var(--size-90); }
     .login-user-card { padding: var(--size-4) var(--size-8) var(--size-4) var(--size-5); }
 }
 
-/* Tab panels - 内容由其自身高度决定，整页可滚动 */
+/* 标签页面板：高度由内容决定，整页可滚动。 */
 .tab-panel {
     display: none;
     animation: fadeIn 0.2s ease;
@@ -653,7 +653,7 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* Cookie Warning Banner */
+/* Cookie 未配置警告横幅。 */
 .cookie-warning-banner {
     display: flex;
     align-items: center;
@@ -703,7 +703,7 @@ body {
     opacity: 1;
 }
 
-/* Network Error Banner */
+/* 网络错误横幅。 */
 .network-error-banner {
     display: none;
     align-items: center;
@@ -728,7 +728,7 @@ body {
     font-size: var(--size-14);
 }
 
-/* Quality VIP required */
+/* 需要大会员的画质提示。 */
 .quality-vip-required {
     color: var(--text-muted) !important;
     font-style: italic;
@@ -739,7 +739,7 @@ select option.quality-vip-required {
     font-style: italic;
 }
 
-/* Copy path button */
+/* 复制路径按钮。 */
 .copy-path-btn {
     display: inline-flex;
     align-items: center;
@@ -767,7 +767,7 @@ select option.quality-vip-required {
     flex-direction: column;
 }
 
-/* Cards */
+/* 卡片。 */
 .card {
     background: var(--surface);
     border: var(--size-1) solid var(--border);
@@ -783,7 +783,7 @@ select option.quality-vip-required {
     box-shadow: var(--shadow-md);
 }
 
-/* Download management card should fill available space */
+/* 下载管理卡片填满可用空间。 */
 #tab-history .card {
     flex: 1;
     min-height: 0;
@@ -842,7 +842,7 @@ select option.quality-vip-required {
     font-size: var(--size-14);
 }
 
-/* Forms */
+/* 表单。 */
 .form-section {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(var(--size-280), 1fr));
@@ -912,8 +912,8 @@ select.form-control {
     padding-right: var(--size-28);
 }
 
-/* ==================== 博主选择下拉框 (appearance: base-select) ==================== */
-/* Chrome 134+ 可定制原生 select；不支持的浏览器自动回退原生样式 */
+/* --- 博主选择下拉框（appearance: base-select） --- */
+/* Chrome 134+ 可定制原生 select；不支持的浏览器自动回退原生样式。 */
 select.blogger-select,
 select.blogger-select::picker(select) {
     appearance: base-select;
@@ -943,7 +943,7 @@ select.blogger-select:focus {
     box-shadow: 0 0 0 var(--size-3) var(--brand-soft);
 }
 
-/* 自定义箭头图标 */
+/* 自定义箭头图标。 */
 select.blogger-select::picker-icon {
     content: '';
     width: var(--size-7);
@@ -959,7 +959,7 @@ select.blogger-select:open::picker-icon {
     transform: rotate(-135deg) translateY(var(--size-neg-2));
 }
 
-/* 下拉弹出层 */
+/* 下拉弹出层。 */
 select.blogger-select::picker(select) {
     border: var(--size-1) solid var(--border);
     border-radius: var(--radius-lg);
@@ -970,7 +970,7 @@ select.blogger-select::picker(select) {
     overflow-y: auto;
 }
 
-/* 选项基础样式 */
+/* 选项基础样式。 */
 select.blogger-select option {
     padding: var(--size-8) var(--size-10);
     border-radius: var(--radius-md);
@@ -992,7 +992,7 @@ select.blogger-select option:checked {
     font-weight: 600;
 }
 
-/* 自定义勾选标记 */
+/* 自定义勾选标记。 */
 select.blogger-select option::checkmark {
     content: '';
     width: var(--size-5);
@@ -1003,7 +1003,7 @@ select.blogger-select option::checkmark {
     margin-left: auto;
 }
 
-/* 选项内的头像 */
+/* 选项内的头像。 */
 select.blogger-select option .opt-avatar {
     width: var(--size-28);
     height: var(--size-28);
@@ -1014,7 +1014,7 @@ select.blogger-select option .opt-avatar {
     border: var(--size-1) solid var(--border);
 }
 
-/* 选项内的信息区 */
+/* 选项内的信息区。 */
 select.blogger-select option .opt-info {
     display: flex;
     flex-direction: column;
@@ -1037,7 +1037,7 @@ select.blogger-select option .opt-meta {
     white-space: nowrap;
 }
 
-/* 占位选项（"-- 请选择 --"） */
+/* 占位选项（"-- 请选择 --"）。 */
 select.blogger-select option[value=""] {
     color: var(--text-muted);
     font-weight: 400;
@@ -1054,7 +1054,7 @@ select.blogger-select option[value=""] {
     line-height: 1.4;
 }
 
-/* 活跃检查时段编辑行（编辑博主模态框） */
+/* 活跃检查时段编辑行（编辑博主模态框）。 */
 .active-window-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto auto;
@@ -1214,7 +1214,7 @@ select.blogger-select option[value=""] {
     font-size: var(--size-14);
 }
 
-/* Input groups */
+/* 输入组。 */
 .uid-input-group {
     display: flex;
     gap: var(--size-12);
@@ -1226,7 +1226,7 @@ select.blogger-select option[value=""] {
     margin-bottom: 0;
 }
 
-/* Buttons */
+/* 按钮。 */
 .btn {
     display: inline-flex;
     align-items: center;
@@ -1299,7 +1299,7 @@ select.blogger-select option[value=""] {
     flex-wrap: wrap;
 }
 
-/* 下载面板：结构化网格布局 */
+/* 下载面板：结构化网格布局。 */
 .download-panel {
     display: flex;
     flex-direction: column;
@@ -1392,7 +1392,7 @@ select.blogger-select option[value=""] {
     font-size: var(--size-13);
 }
 
-/* Toggle switch */
+/* 切换开关。 */
 .switch-group {
     display: flex;
     align-items: center;
@@ -1402,7 +1402,7 @@ select.blogger-select option[value=""] {
     border-radius: var(--radius-md);
 }
 
-/* 统一 switch-group 后紧跟的 form-note 间距 */
+/* 统一 switch-group 后紧跟的 form-note 间距。 */
 .switch-group + .form-note {
     margin-top: var(--size-6);
 }
@@ -1458,7 +1458,7 @@ input:checked + .slider:before {
     transform: translateX(var(--size-18));
 }
 
-/* Status bar */
+/* 状态栏。 */
 .status-bar {
     display: flex;
     align-items: center;
@@ -1500,7 +1500,7 @@ input:checked + .slider:before {
     font-size: var(--size-13);
 }
 
-/* Log containers */
+/* 日志容器。 */
 .log-container,
 .blogger-logs-panel {
     background: var(--color-token-2);
@@ -1543,11 +1543,11 @@ input:checked + .slider:before {
 .log-level-wait { color: var(--color-token-13); }
 .log-level-skip { color: var(--text-muted); }
 
-/* 手动下载结果网格布局 */
+/* 手动下载结果网格布局。 */
 #manual-result {
 }
 
-/* Video cards */
+/* 视频卡片。 */
 .video-card {
     display: flex;
     flex-direction: column;
@@ -1563,13 +1563,13 @@ input:checked + .slider:before {
     box-shadow: var(--shadow-md);
 }
 
-/* 视频卡片顶部：缩略图 + 基础信息横向布局 */
+/* 视频卡片顶部：缩略图 + 基础信息横向布局。 */
 .video-card-top {
     display: flex;
     gap: 0;
 }
 
-/* 缩略图样式 */
+/* 缩略图样式。 */
 .video-card .video-thumb {
     width: var(--size-160);
     min-width: var(--size-160);
@@ -1613,7 +1613,7 @@ input:checked + .slider:before {
     margin-top: auto;
 }
 
-/* 视频卡片操作区 */
+/* 视频卡片操作区。 */
 .video-card-actions {
     padding: var(--size-10) var(--size-16);
     border-top: var(--size-1) solid var(--border);
@@ -1624,12 +1624,12 @@ input:checked + .slider:before {
     width: 100%;
 }
 
-/* 下载面板展开时的状态 */
+/* 下载面板展开时的状态。 */
 .video-card .download-panel {
     border-top: var(--size-1) solid var(--border);
 }
 
-/* Tables */
+/* 表格。 */
 .table-container {
     overflow-x: auto;
     border: var(--size-1) solid var(--border);
@@ -1677,7 +1677,7 @@ tr:hover {
     background: var(--surface-hover);
 }
 
-/* Tags */
+/* 标签。 */
 .tag {
     padding: var(--size-2) var(--size-8);
     border-radius: var(--radius-full);
@@ -1687,7 +1687,7 @@ tr:hover {
     font-weight: 600;
 }
 
-/* Toast messages */
+/* Toast 消息。 */
 #msg-box {
     position: fixed;
     top: var(--size-16);
@@ -1745,7 +1745,7 @@ tr:hover {
     to { transform: translateX(120%); opacity: 0; }
 }
 
-/* Loading spinner */
+/* 加载指示器。 */
 .loading {
     display: inline-block;
     width: var(--size-14);
@@ -1781,7 +1781,7 @@ tr:hover {
     font-size: var(--size-13);
 }
 
-/* Settings */
+/* 设置。 */
 .settings-section {
     margin-bottom: var(--size-20);
 }
@@ -1824,7 +1824,7 @@ tr:hover {
     margin-top: var(--size-16);
 }
 
-/* Settings sections (always expanded) */
+/* 设置分区（始终展开）。 */
 .section-collapsible {
     border: var(--size-1) solid var(--border);
     border-radius: var(--radius-lg);
@@ -1861,7 +1861,7 @@ tr:hover {
     border-top: var(--size-1) solid var(--divider);
 }
 
-/* 分区可折叠：点击标题栏收起 / 展开 */
+/* 分区可折叠：点击标题栏收起或展开。 */
 .section-collapsible .section-header {
     cursor: pointer;
     user-select: none;
@@ -1900,7 +1900,7 @@ tr:hover {
     border-top: var(--size-1) solid var(--divider);
 }
 
-/* Status items */
+/* 状态项。 */
 .status-item {
     text-align: center;
     padding: var(--size-6) var(--size-12);
@@ -1920,7 +1920,7 @@ tr:hover {
     margin-top: var(--size-2);
 }
 
-/* Download board */
+/* 下载看板。 */
 .download-board {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -2012,7 +2012,7 @@ tr:hover {
     background: var(--brand);
 }
 
-/* Download items */
+/* 下载项。 */
 .download-list {
     display: flex;
     flex-direction: column;
@@ -2117,7 +2117,7 @@ tr:hover {
     flex-shrink: 0;
 }
 
-/* Action buttons */
+/* 操作按钮。 */
 .action-btn {
     padding: var(--size-4) var(--size-8);
     font-size: var(--size-11);
@@ -2174,7 +2174,7 @@ tr:hover {
     cursor: not-allowed;
 }
 
-/* Status tags */
+/* 状态标签。 */
 .status-tag {
     display: inline-flex;
     align-items: center;
@@ -2213,7 +2213,7 @@ tr:hover {
     animation: spin 1s linear infinite;
 }
 
-/* Blogger dashboard */
+/* 博主看板。 */
 .blogger-dashboard {
     display: grid;
     grid-template-columns: var(--size-240) 1fr;
@@ -2489,7 +2489,7 @@ tr:hover {
     opacity: 0.7;
 }
 
-/* Modals */
+/* 模态框。 */
 .modal-overlay {
     position: fixed;
     top: 0;
@@ -2646,7 +2646,7 @@ tr:hover {
     border-top: var(--size-1) solid var(--divider);
 }
 
-/* Context menu */
+/* 右键菜单。 */
 .context-menu {
     position: fixed;
     z-index: 10000;
@@ -2691,7 +2691,7 @@ tr:hover {
     color: var(--text-muted);
 }
 
-/* Empty states */
+/* 空状态。 */
 .empty-state {
     text-align: center;
     padding: var(--size-40) var(--size-20);
@@ -2722,7 +2722,7 @@ tr:hover {
     margin-top: var(--size-6);
 }
 
-/* Mobile sidebar */
+/* 移动端侧边栏。 */
 .sidebar-toggle-btn {
     display: none;
 }
@@ -2745,7 +2745,7 @@ tr:hover {
     visibility: visible;
 }
 
-/* Responsive */
+/* 响应式布局。 */
 @media (max-width: 1200px) {
     .download-board {
         grid-template-columns: 1fr;
@@ -2950,7 +2950,7 @@ tr:hover {
     }
 }
 
-/* ==================== 博主搜索 ==================== */
+/* --- 博主搜索 --- */
 .blogger-search-bar {
     display: flex;
     gap: var(--size-8);
@@ -3020,12 +3020,12 @@ tr:hover {
 }
 
 @media (max-width: 640px) {
-    /* 手动下载界面：单列布局 */
+    /* 手动下载界面：单列布局。 */
     #manual-result {
         grid-template-columns: 1fr;
     }
 
-    /* 视频卡片：纵向布局 */
+    /* 视频卡片：纵向布局。 */
     .video-card-top {
         flex-direction: column;
     }
@@ -3057,7 +3057,7 @@ tr:hover {
     }
 }
 
-/* 中等屏幕：保持双列但调整间距 */
+/* 中等屏幕：保持双列但调整间距。 */
 @media (min-width: 641px) and (max-width: 1200px) {
     #manual-result {
         gap: var(--size-12);
@@ -3068,7 +3068,7 @@ tr:hover {
     }
 }
 
-/* UID 精确匹配卡片 */
+/* UID 精确匹配卡片。 */
 .blogger-search-card.uid-exact-match {
     border-color: var(--brand);
     background: var(--brand-soft);
@@ -3101,9 +3101,9 @@ tr:hover {
     font-size: var(--size-20);
 }
 
-/* ==================== 下载管理 - 卡片式布局 ==================== */
+/* --- 下载管理：卡片式布局 --- */
 
-/* 下载统计迷你栏 */
+/* 下载统计迷你栏。 */
 .download-stats-mini {
     display: flex;
     gap: var(--size-12);
@@ -3132,7 +3132,7 @@ tr:hover {
     color: var(--error);
 }
 
-/* 视频卡片网格 */
+/* 视频卡片网格。 */
 .video-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(var(--size-280), 1fr));
@@ -3162,7 +3162,7 @@ tr:hover {
     opacity: 0.7;
 }
 
-/* 视频卡片 */
+/* 视频卡片。 */
 .video-card-grid {
     background: var(--surface);
     border: var(--size-1) solid var(--border);
@@ -3193,7 +3193,7 @@ tr:hover {
     border-color: var(--border);
 }
 
-/* 卡片封面 */
+/* 卡片封面。 */
 .video-card-thumb {
     position: relative;
     width: 100%;
@@ -3212,7 +3212,7 @@ tr:hover {
     transition: transform 0.3s ease;
 }
 
-/* 图片加载失败时的默认样式 */
+/* 图片加载失败时的默认样式。 */
 .video-card-thumb img[src=""],
 .video-card-thumb img:not([src]),
 .video-card-thumb img[src="data:,"] {
@@ -3233,9 +3233,9 @@ tr:hover {
     transform: scale(1.03);
 }
 
-/* ==================== 抽屉状态与文件信息 ==================== */
+/* --- 抽屉状态与文件信息 --- */
 
-/* 状态徽章（封面右上角） */
+/* 状态徽章（封面右上角）。 */
 .drawer-state-badge {
     position: absolute;
     top: var(--size-8);
@@ -3255,7 +3255,7 @@ tr:hover {
 .drawer-state-badge.state-pay_blocked { background: var(--error); }
 .drawer-state-badge.state-stale { background: var(--text-muted); }
 
-/* 重投提示 */
+/* 重投提示。 */
 .drawer-reupload-hint {
     margin: var(--size-8) 0;
     padding: var(--size-8) var(--size-12);
@@ -3274,7 +3274,7 @@ tr:hover {
     font-weight: 600;
 }
 
-/* 文件路径行 */
+/* 文件路径行。 */
 .drawer-file-path {
     display: flex;
     align-items: center;
@@ -3295,7 +3295,7 @@ tr:hover {
     white-space: nowrap;
 }
 
-/* 充电提示 */
+/* 充电提示。 */
 .drawer-pay-note {
     padding: var(--size-8) var(--size-12);
     margin: var(--size-8) 0;
@@ -3313,7 +3313,7 @@ tr:hover {
     opacity: 0.8;
 }
 
-/* 博主信息块 */
+/* 博主信息块。 */
 .drawer-blogger {
     display: flex;
     align-items: center;
@@ -3350,7 +3350,7 @@ tr:hover {
     color: var(--text-secondary);
 }
 
-/* MD5 显示 */
+/* MD5 显示。 */
 .drawer-md5 {
     font-family: var(--font-custom-12);
     font-size: var(--size-12);
@@ -3362,7 +3362,7 @@ tr:hover {
     margin-top: var(--size-2);
 }
 
-/* 进度条 */
+/* 进度条。 */
 .drawer-progress {
     width: 100%;
     height: var(--size-6);
@@ -3384,7 +3384,7 @@ tr:hover {
     margin-bottom: var(--size-8);
 }
 
-/* 侧车文件状态（抽屉） */
+/* 侧车文件状态（抽屉）。 */
 .drawer-sidecar {
     display: flex;
     gap: var(--size-12);
@@ -3407,7 +3407,7 @@ tr:hover {
     opacity: 0.7;
 }
 
-/* 已下载文件列表 */
+/* 已下载文件列表。 */
 .drawer-file-list {
     display: flex;
     flex-direction: column;
@@ -3531,7 +3531,7 @@ tr:hover {
     font-size: var(--size-12);
     border-radius: var(--radius-sm);
 }
-/* 烧录按钮：与抽屉整体风格一致（图标 + 文字，不拥挤） */
+/* 烧录按钮：与抽屉整体风格一致（图标 + 文字，不拥挤）。 */
 .drawer-file-actions .btn i {
     margin-right: var(--size-4);
 }
@@ -3559,7 +3559,7 @@ tr:hover {
     margin-bottom: var(--size-8);
 }
 
-/* 评论区（读取本地评论文本） */
+/* 评论区（读取本地评论文本）。 */
 .drawer-comments {
     min-height: var(--size-40);
 }
@@ -3691,7 +3691,7 @@ tr:hover {
     word-break: break-word;
 }
 
-/* 抽屉评论卡片（结构化渲染） */
+/* 抽屉评论卡片（结构化渲染）。 */
 .drawer-comments-list {
     max-height: var(--size-300);
     overflow-y: auto;
@@ -3771,7 +3771,7 @@ tr:hover {
     color: var(--text-secondary);
 }
 
-/* 实时数据区 */
+/* 实时数据区。 */
 .drawer-live-stats {
     min-height: var(--size-40);
 }
@@ -3815,7 +3815,7 @@ tr:hover {
     gap: var(--size-12);
 }
 
-/* 操作按钮 */
+/* 操作按钮。 */
 .drawer-btn-danger {
     background: var(--error);
     color: var(--color-token-26);
@@ -3825,7 +3825,7 @@ tr:hover {
     background: var(--error-dark);
 }
 
-/* 日志区 */
+/* 日志区。 */
 .drawer-logs {
     max-height: var(--size-240);
     overflow-y: auto;
@@ -3872,7 +3872,7 @@ tr:hover {
     white-space: pre-wrap;
 }
 
-/* 抽屉 section 标题（带右侧按钮） */
+/* 抽屉 section 标题（带右侧按钮）。 */
 .drawer-section-title {
     display: flex;
     align-items: center;
@@ -3880,7 +3880,7 @@ tr:hover {
     margin-bottom: var(--size-8);
 }
 
-/* ==================== 博主资料变更通知 ==================== */
+/* --- 博主资料变更通知 --- */
 .notice-dot-btn {
     position: relative;
     margin-left: var(--size-8);
@@ -3997,7 +3997,7 @@ tr:hover {
     font-size: var(--size-18);
 }
 
-/* 博主侧边栏头像 */
+/* 博主侧边栏头像。 */
 .blogger-avatar img {
     width: 100%;
     height: 100%;
@@ -4005,10 +4005,10 @@ tr:hover {
     object-fit: cover;
 }
 .blogger-avatar.avatar-fallback {
-    /* 兜底：保留原 slice(0,2) 字符样式 */
+    /* 兜底：保留原 slice(0,2) 字符样式。 */
 }
 
-/* 看板博主分组头像 */
+/* 看板博主分组头像。 */
 .blogger-section-avatar {
     width: var(--size-32);
     height: var(--size-32);
@@ -4038,7 +4038,7 @@ tr:hover {
     font-variant-numeric: tabular-nums;
 }
 
-/* 状态徽章 */
+/* 状态徽章。 */
 .video-card-badge {
     position: absolute;
     top: var(--size-8);
@@ -4086,7 +4086,7 @@ tr:hover {
     padding: var(--size-8);
 }
 
-/* 卡片内容 */
+/* 卡片内容。 */
 .video-card-body {
     padding: var(--size-14);
 }
@@ -4125,7 +4125,7 @@ tr:hover {
     gap: var(--size-4);
 }
 
-/* 下载进度条 */
+/* 下载进度条。 */
 .video-card-progress {
     margin-top: var(--size-10);
     height: var(--size-4);
@@ -4148,9 +4148,9 @@ tr:hover {
     background: var(--error);
 }
 
-/* ==================== 侧滑抽屉 ==================== */
+/* --- 侧滑抽屉 --- */
 
-/* 遮罩层 */
+/* 遮罩层。 */
 .drawer-overlay {
     position: fixed;
     inset: 0;
@@ -4167,7 +4167,7 @@ tr:hover {
     visibility: visible;
 }
 
-/* 抽屉容器 */
+/* 抽屉容器。 */
 .video-drawer {
     position: fixed;
     top: 0;
@@ -4188,7 +4188,7 @@ tr:hover {
     transform: translateX(0);
 }
 
-/* 抽屉头部 */
+/* 抽屉头部。 */
 .drawer-header {
     padding: var(--size-20) var(--size-24);
     border-bottom: var(--size-1) solid var(--border);
@@ -4228,14 +4228,14 @@ tr:hover {
     color: var(--text);
 }
 
-/* 抽屉内容 */
+/* 抽屉内容。 */
 .drawer-body {
     flex: 1;
     overflow-y: auto;
     padding: var(--size-24);
 }
 
-/* 滚动条美化 */
+/* 滚动条美化。 */
 .drawer-body::-webkit-scrollbar {
     width: var(--size-6);
 }
@@ -4249,7 +4249,7 @@ tr:hover {
     border-radius: var(--size-3);
 }
 
-/* 预览区 */
+/* 预览区。 */
 .drawer-preview {
     width: 100%;
     aspect-ratio: 16/9;
@@ -4277,7 +4277,7 @@ tr:hover {
     border-radius: var(--size-6);
 }
 
-/* 信息行 */
+/* 信息行。 */
 .drawer-info-row {
     display: flex;
     gap: var(--size-20);
@@ -4307,7 +4307,7 @@ tr:hover {
     color: var(--text);
 }
 
-/* 区块标题 */
+/* 区块标题。 */
 .drawer-section {
     margin-bottom: var(--size-24);
 }
@@ -4334,7 +4334,7 @@ tr:hover {
     border-radius: var(--size-2);
 }
 
-/* 画质选择 - Pill 样式 */
+/* 画质选择：Pill 样式。 */
 .quality-pills {
     display: flex;
     flex-wrap: wrap;
@@ -4390,7 +4390,7 @@ tr:hover {
     color: var(--text-secondary);
 }
 
-/* 下载按钮 */
+/* 下载按钮。 */
 .drawer-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -4434,14 +4434,14 @@ tr:hover {
     background: var(--border);
 }
 
-/* 断网禁用态 */
+/* 断网禁用态。 */
 .network-disabled {
     opacity: 0.55 !important;
     cursor: not-allowed !important;
     filter: grayscale(0.5);
 }
 
-/* 手动查询模式切换 */
+/* 手动查询模式切换。 */
 .manual-mode-switch {
     display: inline-flex;
     background: var(--surface-hover);
@@ -4469,7 +4469,7 @@ tr:hover {
     font-weight: 500;
 }
 
-/* 手动查询加载更多 */
+/* 手动查询加载更多。 */
 .manual-load-more {
     display: flex;
     justify-content: center;
@@ -4479,7 +4479,7 @@ tr:hover {
     min-width: var(--size-160);
 }
 
-/* 附加选项 */
+/* 附加选项。 */
 .drawer-extras {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -4508,7 +4508,7 @@ tr:hover {
     border-color: var(--border-strong);
 }
 
-/* 智能下载：分时时间点标签 */
+/* 智能下载：分时时间点标签。 */
 .time-point-chips {
     display: flex;
     flex-wrap: wrap;
@@ -4563,7 +4563,7 @@ tr:hover {
     flex-shrink: 0;
 }
 
-/* 响应式 */
+/* 响应式布局。 */
 @media (max-width: 768px) {
     .active-window-row {
         grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -4621,9 +4621,9 @@ tr:hover {
     }
 }
 
-/* ==================== 下载管理看板 ==================== */
+/* --- 下载管理看板 --- */
 
-/* 顶部栏：标题 + 上次拉取时间 + 刷新 */
+/* 顶部栏：标题 + 上次拉取时间 + 刷新。 */
 .board-top-bar {
     display: flex;
     align-items: center;
@@ -4657,7 +4657,7 @@ tr:hover {
     white-space: nowrap;
 }
 
-/* 子 tab：下载中 / 已下载 / 下载失败 */
+/* 子 tab：下载中 / 已下载 / 下载失败。 */
 .board-sub-tabs {
     display: flex;
     gap: var(--size-4);
@@ -4706,14 +4706,14 @@ tr:hover {
     color: var(--brand);
 }
 
-/* 看板主体：按博主分组，纵向堆叠 */
+/* 看板主体：按博主分组，纵向堆叠。 */
 .history-board {
     display: flex;
     flex-direction: column;
     gap: var(--size-16);
 }
 
-/* 单个博主分组 */
+/* 单个博主分组。 */
 .blogger-section {
     border: var(--size-1) solid var(--border);
     border-radius: var(--radius-lg);
@@ -4759,7 +4759,7 @@ tr:hover {
     padding: var(--size-14);
 }
 
-/* 单个视频卡片 */
+/* 单个视频卡片。 */
 .board-video-card {
     position: relative;
     display: flex;
@@ -4777,7 +4777,7 @@ tr:hover {
     transform: translateY(var(--size-neg-2));
 }
 
-/* 左上角状态点 */
+/* 左上角状态点。 */
 .board-card-state-dot {
     position: absolute;
     top: var(--size-8);
@@ -4796,7 +4796,7 @@ tr:hover {
 .board-video-card.state-pay_blocked .board-card-state-dot { background: var(--warning); }
 .board-video-card.state-stale .board-card-state-dot { background: var(--text-muted); }
 
-/* 封面：固定 16:9，object-fit 裁切，永不超出卡片宽度 */
+/* 封面：固定 16:9，使用 object-fit 裁切，永不超出卡片宽度。 */
 .board-card-thumb {
     position: relative;
     width: 100%;
@@ -4848,7 +4848,7 @@ tr:hover {
     z-index: 2;
 }
 
-/* 卡片正文 */
+/* 卡片正文。 */
 .board-card-body {
     position: relative;
     display: flex;
@@ -4877,7 +4877,7 @@ tr:hover {
     margin-right: var(--size-3);
 }
 
-/* 进度条 */
+/* 进度条。 */
 .board-card-progress {
     height: var(--size-5);
     background: var(--divider);
@@ -4901,7 +4901,7 @@ tr:hover {
 .board-card-speed { color: var(--brand); }
 .board-card-size { color: var(--text-muted); }
 
-/* 暂停 / 恢复按钮：浮于卡片右下角，避免遮挡进度与文案 */
+/* 暂停 / 恢复按钮：浮于卡片右下角，避免遮挡进度与文案。 */
 .board-card-action-btn {
     position: absolute;
     right: var(--size-8);
@@ -4925,7 +4925,7 @@ tr:hover {
     border-color: var(--brand);
 }
 
-/* sidecar 文件状态图标（视频 / 弹幕 / 字幕） */
+/* sidecar 文件状态图标（视频 / 弹幕 / 字幕）。 */
 .board-card-sidecar {
     display: flex;
     flex-wrap: wrap;
@@ -4950,7 +4950,7 @@ tr:hover {
     opacity: 0.7;
 }
 
-/* 文件路径行（仅设置开启时显示） */
+/* 文件路径行（仅设置开启时显示）。 */
 .board-card-path {
     display: flex;
     align-items: center;
@@ -4963,7 +4963,7 @@ tr:hover {
     text-overflow: ellipsis;
 }
 
-/* 空状态链接 */
+/* 空状态链接。 */
 .empty-state-grid a,
 .empty-state a,
 .empty-hint a {
@@ -4979,9 +4979,7 @@ tr:hover {
     text-decoration: underline;
 }
 
-/* ==================================================================
-   设置页「各博主保留数」列表
-   ================================================================== */
+/* --- 设置页「各博主保留数」列表 --- */
 .retain-blogger-list {
     display: flex;
     flex-direction: column;
@@ -5070,10 +5068,10 @@ tr:hover {
         --card-bg: #1b1e25;
     }
 }
-/* 全局兼容：JS 统一用 el.hidden 控制显隐，确保 hidden 属性不被任何 class 的 display 规则覆盖 */
+/* 全局兼容：JS 统一用 el.hidden 控制显隐，确保 hidden 属性不被任何 class 的 display 规则覆盖。 */
 [hidden] { display: none !important; }
 
-/* Classes generated from former HTML style attributes. */
+/* 由原 HTML style 属性生成的类。 */
 .html-style-3 { margin-right: var(--radius-md); }
 .html-style-4 { padding: var(--size-30) var(--size-20); }
 .html-style-5 { margin-top: var(--size-16); }
@@ -5088,7 +5086,7 @@ tr:hover {
 .html-style-14 { padding: var(--radius-sm) 0 var(--radius-lg); font-size: var(--size-14); line-height: 1.6; color: var(--text-secondary); }
 
 
-/* JS generated-template style tokens */
+/* JS 生成模板使用的样式令牌。 */
 [data-js-style="1"] { color:var(--error); }
 [data-js-style="2"] { color: var(--color-token-11); }
 [data-js-style="3"] { color: var(--color-token-11); margin-left: var(--size-10); }
@@ -5118,7 +5116,7 @@ tr:hover {
 .clipboard-helper { position: fixed; opacity: 0; pointer-events: none; }
 .msg-toast-leaving { animation: slideOutRight 0.3s ease forwards; }
 .history-load-more { display: flex; margin: var(--size-20) auto; }
-/* 设置表单内的分区分隔线（带居中标题） */
+/* 设置表单内的分区分隔线（带居中标题）。 */
 .form-divider {
     grid-column: 1 / -1;
     display: flex;
@@ -5261,7 +5259,7 @@ progress.download-item-progress-fill {
     flex-direction: column;
 }
 
-/* ==================== 直播录制 Tab（对齐博主看板 / 下载管理看板） ==================== */
+/* --- 直播录制 Tab（对齐博主看板和下载管理看板） --- */
 
 .nav-tab {
     border: 0;
@@ -5277,7 +5275,7 @@ progress.download-item-progress-fill {
     outline-offset: 2px;
 }
 
-/* 顶栏三态同步提示：页面连接 / 监控 worker / B 站新鲜度，各自独立降级 */
+/* 顶栏三态同步提示：页面连接 / 监控 worker / B 站新鲜度，各自独立降级。 */
 .live-sync-group {
     display: flex;
     align-items: center;
@@ -5307,9 +5305,8 @@ progress.download-item-progress-fill {
     color: var(--warning-text);
 }
 
-/* 看板：侧边栏 + 详情（复刻 blogger-dashboard）；
-   详情区不设高度上限，内容随页面整体滚动，避免宽屏/低分辨率下
-   互动区被裁剪且无法滚动的问题 */
+/* 看板：侧边栏 + 详情；详情区不设高度上限，内容随页面整体滚动，
+   避免宽屏或低分辨率下互动区被裁剪且无法滚动。 */
 .live-dashboard {
     display: grid;
     grid-template-columns: var(--size-240) 1fr;
@@ -5551,7 +5548,7 @@ progress.download-item-progress-fill {
     align-items: center;
 }
 
-/* 状态徽章：视频/互动分开，图标+文字，不只靠颜色 */
+/* 状态徽章：视频和互动分开，使用图标与文字，不只依赖颜色。 */
 .live-badge {
     display: inline-flex;
     align-items: center;
@@ -5615,7 +5612,7 @@ progress.download-item-progress-fill {
     border-color: transparent;
 }
 
-/* 提示条（风控/降级/启动中说明） */
+/* 提示条（风控 / 降级 / 启动中说明）。 */
 .live-alert {
     display: flex;
     gap: var(--size-8);
@@ -5641,7 +5638,7 @@ progress.download-item-progress-fill {
     flex-shrink: 0;
 }
 
-/* 排期策略摘要：把“什么时候自动录”直接摆在详情里 */
+/* 排期策略摘要：把“什么时候自动录”直接摆在详情里。 */
 .live-strategy-summary {
     margin-top: var(--size-10);
     padding-top: var(--size-10);
@@ -5659,7 +5656,7 @@ progress.download-item-progress-fill {
     color: var(--text-muted);
 }
 
-/* 互动区 */
+/* 互动区。 */
 .live-section-title {
     font-size: var(--size-13);
     font-weight: 600;
@@ -5915,7 +5912,7 @@ progress.download-item-progress-fill {
     border-left: 3px solid var(--brand);
 }
 
-/* 录制任务看板行 */
+/* 录制任务看板行。 */
 .live-recording-row {
     display: flex;
     align-items: flex-start;
@@ -5982,7 +5979,7 @@ progress.download-item-progress-fill {
     font-size: var(--size-12);
 }
 
-/* 直播源设置弹窗：周排期编辑器 */
+/* 直播源设置弹窗：周排期编辑器。 */
 .live-settings-form {
     display: grid;
     gap: var(--size-14);

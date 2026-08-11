@@ -1,4 +1,4 @@
-//! 弹幕文件加载：xml（B站原始格式）与 json（本项目导出格式）解析。
+//! 弹幕文件加载：xml（B 站原始格式）与 json（本项目导出格式）解析。
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;

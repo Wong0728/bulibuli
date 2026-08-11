@@ -59,7 +59,7 @@ pub(super) async fn download_danmaku(
         &settings.danmaku_comment.sidecar_archive_mode,
         settings.danmaku_comment.sidecar_archive_limit as i64,
     );
-    // 解析保存目录：优先使用视频所在目录（确保弹幕和视频在同一位置）
+    // 解析保存目录：优先使用视频所在目录，确保弹幕和视频位于同一位置。
     let save_dir = resolve_sidecar_dir(
         &state.media,
         &state.business,
@@ -283,7 +283,7 @@ pub(super) async fn get_comments(
         return Err(AppError::BadRequest("请提供视频BV号".to_string()));
     }
 
-    // 定位 uid：优先用传入的，否则查 history
+    // 定位 UID：优先使用传入值，否则查询 history。
     let uid = match q.uid.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         Some(u) => {
             validate_uid(u)?;

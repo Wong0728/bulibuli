@@ -240,9 +240,8 @@ impl RuntimeSettings {
     }
 }
 
-/// Declare a serde-default settings group while keeping its defaults beside
-/// the field definitions. This is intentionally local to runtime settings;
-/// it avoids repeating identical `Default` implementations for these DTOs.
+/// 声明带 serde 默认值的设置组，并将默认值放在字段定义旁边。
+/// 宏只用于运行时设置，避免为这些 DTO 重复编写相同的 `Default` 实现。
 macro_rules! default_struct {
     ($name:ident { $($field:ident : $ty:ty = $value:expr),+ $(,)? }) => {
         #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]

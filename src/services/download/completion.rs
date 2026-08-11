@@ -15,7 +15,7 @@ pub(super) enum CompleteOutcome {
     /// 跳过本任务（已完成 / generation 变化 / 闸门失败）。
     /// `clear_throttle` 为 true 时需清理 DB 写入节流缓存。
     Skip { clear_throttle: bool },
-    /// 完成副作用已执行；uid 供 on_task_completed 触发音视频合并。
+    /// 完成副作用已执行；UID 供 on_task_completed 触发音视频合并。
     Finished { uid: Option<String> },
 }
 
@@ -57,7 +57,7 @@ impl DownloadManager {
             "下载完成"
         );
 
-        // 获取下载目录与 UP 主 uid（用于 MD5 去重与历史记录）
+        // 获取下载目录与 UP 主 UID（用于 MD5 去重与历史记录）。
         let uid = self.get_blogger_uid_from_history(&task.bvid).await;
         let dir = self.task_download_dir(task).await;
         // 文件名词根：单P为 bvid，多P为 `{bvid}_p{page}`，用于去重扫描与临时文件命名。
@@ -130,7 +130,7 @@ impl DownloadManager {
         }
 
         // 写一条带 bvid 的库日志（仅首次进入终态时），供抽屉“日志”区展示。
-        // 手动下载任务不携带 uid，避免混入博主自动监测日志。
+        // 手动下载任务不携带 UID，避免混入博主自动监测日志。
         let log_uid = if task.source.as_deref() == Some("manual") {
             None
         } else {

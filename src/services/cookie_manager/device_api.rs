@@ -1,4 +1,4 @@
-//! B站设备指纹在线接口：buvid 获取、bili_ticket 签发、ExClimbWuzhi 激活。
+//! B 站设备指纹在线接口：buvid 获取、bili_ticket 签发、ExClimbWuzhi 激活。
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Local;
@@ -12,7 +12,7 @@ use super::{CookieManager, DeviceCookies};
 type HmacSha256 = Hmac<Sha256>;
 
 impl CookieManager {
-    /// 安全解析 B站 API JSON 响应，与 BiliApi::parse_json_response 逻辑一致。
+    /// 安全解析 B 站 API JSON 响应，与 BiliApi::parse_json_response 逻辑一致。
     async fn parse_json_response(&self, resp: reqwest::Response, api_name: &str) -> Result<Value> {
         let status = resp.status();
         if !status.is_success() {
@@ -144,7 +144,7 @@ impl CookieManager {
     }
 
     /// POST /x/internal/gaia-gateway/ExClimbWuzhi 激活 buvid3。
-    /// payload 是固定设备指纹模板，仅注入 UA 和 uuid。
+    /// Payload 是固定设备指纹模板，仅注入 UA 和 uuid。
     pub(super) async fn exclimbwuzhi(&self, device: &DeviceCookies) -> Result<()> {
         let payload = Self::build_exclimbwuzhi_payload(&self.user_agent, &device.uuid);
         let url = "https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi";
@@ -169,7 +169,7 @@ impl CookieManager {
             .map_err(|e| anyhow!("exclimbwuzhi 解析响应失败 status={status} url={url}: {e}"))?;
         let code = data["code"].as_i64().unwrap_or(-1);
         if code != 0 {
-            // 不返回 Err，仅记录：ExClimbWuzhi 失败不应阻塞 enrich
+            // 不返回 Err，仅记录：ExClimbWuzhi 失败不应阻塞 enrich。
             warn!(
                 "CookieManager: ExClimbWuzhi 返回非0 url={url} code={} message={}",
                 code,

@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-/// Serializable status returned by the subtitle/danmaku burn endpoints.
+/// 字幕或弹幕烧录接口返回的可序列化状态。
 #[derive(Clone, Serialize)]
 pub struct BurnTask {
     pub bvid: String,
