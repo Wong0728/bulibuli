@@ -133,7 +133,7 @@ impl LiveMonitor {
                     schedule_overrun: false,
                     next_retry_at: None,
                     next_schedule_at: None,
-                    stale: true,
+                    stale: false,
                 },
                 next_due: Instant::now(),
             });
@@ -238,7 +238,7 @@ impl LiveMonitor {
                             schedule_overrun: false,
                             next_retry_at: None,
                             next_schedule_at: None,
-                            stale: true,
+                            stale: false,
                         },
                         next_due: now + Duration::from_secs(source.room_id.unsigned_abs() % 30),
                     });
@@ -311,7 +311,7 @@ impl LiveMonitor {
         {
             let mut runtime = self.inner.runtime.lock().await;
             if let Some(entry) = runtime.get_mut(&source.room_id) {
-                let jitter = (source.room_id.unsigned_abs() % 11) + 25;
+                let jitter = source.room_id.unsigned_abs().wrapping_mul(2_654_435_761) % 11 + 25;
                 entry.next_due = Instant::now() + Duration::from_secs(jitter);
                 entry.public.live_status = Some(live_status);
                 entry.public.last_checked_at = Some(chrono::Utc::now().to_rfc3339());
@@ -396,13 +396,13 @@ impl LiveMonitor {
         warn!(delay, "B站直播状态检查受限，启用全局退避");
     }
 
-    /// 退避衰减：连续 3 批成功检查后降低一级退避等级；等级归零后彻底清除退避。
+    /// 退避衰减：连续 2 批成功检查后降低一级退避等级；等级归零后彻底清除退避。
     /// 注意衰减过程不能反过来设置新的退避窗口，否则成功检查之后会把所有
     /// 直播源误标为“风控退避中”。
     async fn note_successful_batch(&self) {
         let mut risk = self.inner.risk_backoff.lock().await;
         risk.successful_batches = risk.successful_batches.saturating_add(1);
-        if risk.level == 0 || risk.successful_batches < 3 {
+        if risk.level == 0 || risk.successful_batches < 2 {
             return;
         }
         risk.successful_batches = 0;

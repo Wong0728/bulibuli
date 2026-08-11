@@ -1,4 +1,5 @@
 use crate::error::{ApiResponse, AppError};
+use crate::services::aria2::rpc_endpoint;
 use crate::services::file_safety::render_path_template;
 use crate::services::settings::{RuntimeSettings, SECRET_MASK};
 use crate::state::SharedState;
@@ -23,16 +24,20 @@ async fn reload_aria2_if_needed(
     state: &SharedState,
     before: &RuntimeSettings,
     after: &RuntimeSettings,
-) {
+) -> Option<String> {
     if !aria2_runtime_changed(before, after) {
-        return;
+        return None;
     }
+    let mut errors = Vec::new();
     if let Err(error) = state.media.aria2.stop().await {
         warn!("应用新设置前停止 Aria2 失败: {error}");
+        errors.push(format!("停止 Aria2 失败: {error}"));
     }
     if let Err(error) = state.media.aria2.init(after).await {
         warn!("应用新设置后重新初始化 Aria2 失败: {error}");
+        errors.push(format!("重新初始化 Aria2 失败: {error}"));
     }
+    (!errors.is_empty()).then(|| errors.join("；"))
 }
 
 pub fn router() -> Router<SharedState> {
@@ -127,9 +132,20 @@ async fn path_preview(
         ("date", date),
     ]);
     let path = render_path_template(&state.infra.paths.download_dir, template, &variables)?;
-    Ok(Json(ApiResponse::success(
-        json!({ "path": path.to_string_lossy() }),
-    )))
+    let relative = path
+        .strip_prefix(&state.infra.paths.download_dir)
+        .map_err(|_| AppError::Internal("生成的路径不在下载目录内".to_string()))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(Json(ApiResponse::success(json!({ "path": relative }))))
+}
+
+#[derive(Deserialize)]
+struct SettingsUpdateRequest {
+    #[serde(flatten)]
+    settings: RuntimeSettings,
+    #[serde(default)]
+    expected_revision: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -138,7 +154,6 @@ struct SettingsPayload {
     defaults: RuntimeSettings,
     constraints: serde_json::Value,
     secret_configured: bool,
-    aria2_secret_configured: bool,
 }
 
 fn settings_for_response(settings: &RuntimeSettings) -> RuntimeSettings {
@@ -154,8 +169,9 @@ fn settings_for_response(settings: &RuntimeSettings) -> RuntimeSettings {
 async fn get_settings(
     State(state): State<SharedState>,
 ) -> Result<Json<ApiResponse<SettingsPayload>>, AppError> {
+    let current = state.infra.settings_service.current();
     Ok(Json(ApiResponse::success(SettingsPayload {
-        current: settings_for_response(state.infra.settings_service.current().as_ref()),
+        current: settings_for_response(current.as_ref()),
         defaults: RuntimeSettings::default(),
         constraints: json!({
             "parallel_download.max_parallel": { "min": 1, "max": 32 },
@@ -163,28 +179,23 @@ async fn get_settings(
             "query.manual_query_limit": { "min": 1, "max": 100 },
             "query.auto_query_limit": { "min": 1, "max": 100 },
         }),
-        secret_configured: !state
-            .infra
-            .settings_service
-            .current()
-            .aria2_rpc
-            .secret
-            .is_empty(),
-        aria2_secret_configured: !state
-            .infra
-            .settings_service
-            .current()
-            .aria2_rpc
-            .secret
-            .is_empty(),
+        secret_configured: !current.aria2_rpc.secret.is_empty(),
     })))
 }
 
 async fn save_settings(
     State(state): State<SharedState>,
-    Json(settings): Json<RuntimeSettings>,
+    Json(request): Json<SettingsUpdateRequest>,
 ) -> Result<Json<ApiResponse<RuntimeSettings>>, AppError> {
     let before = state.infra.settings_service.current();
+    let mut settings = request.settings;
+    if let Some(expected_revision) = request.expected_revision {
+        settings.revision = expected_revision;
+    } else if settings.revision == 0 {
+        // Keep clients from before revisioning usable; new clients send the
+        // explicit expected_revision field and receive conflict detection.
+        settings.revision = before.revision;
+    }
     validate_sensitive_settings(&state, before.as_ref(), &settings)?;
     let saved = state.infra.settings_service.save(settings).await?;
     // DownloadManager 直接读取 SettingsService 快照（无独立缓存），无需失效通知；
@@ -194,10 +205,13 @@ async fn save_settings(
         .monitor_service
         .invalidate_settings_cache()
         .await;
-    reload_aria2_if_needed(&state, before.as_ref(), saved.as_ref()).await;
+    let reload_warning = reload_aria2_if_needed(&state, before.as_ref(), saved.as_ref()).await;
+    let message = reload_warning
+        .map(|warning| format!("设置已保存，但 Aria2 未能完全重载：{warning}"))
+        .unwrap_or_else(|| "设置已保存".to_string());
     Ok(Json(ApiResponse::with_message(
         settings_for_response(saved.as_ref()),
-        "设置已保存",
+        message,
     )))
 }
 
@@ -210,7 +224,8 @@ fn validate_sensitive_settings(
         let host = requested.aria2_rpc.host.trim();
         let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]");
         if !loopback {
-            let endpoint = format!("http://{host}:{}/jsonrpc", requested.aria2_rpc.port);
+            let endpoint = rpc_endpoint(host, requested.aria2_rpc.port)
+                .map_err(|_| AppError::BadRequest("Aria2 主机或端口格式无效".to_string()))?;
             if state
                 .bili
                 .security
@@ -260,10 +275,13 @@ async fn reset_settings(
         .monitor_service
         .invalidate_settings_cache()
         .await;
-    reload_aria2_if_needed(&state, before.as_ref(), settings.as_ref()).await;
+    let reload_warning = reload_aria2_if_needed(&state, before.as_ref(), settings.as_ref()).await;
+    let message = reload_warning
+        .map(|warning| format!("已恢复默认设置，但 Aria2 未能完全重载：{warning}"))
+        .unwrap_or_else(|| "已恢复默认设置".to_string());
     Ok(Json(ApiResponse::with_message(
         settings_for_response(settings.as_ref()),
-        "已恢复默认设置",
+        message,
     )))
 }
 

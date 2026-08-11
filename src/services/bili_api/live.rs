@@ -148,9 +148,12 @@ impl BiliApi {
                     room_id,
                     "新版 getRoomPlayInfo 未返回流地址，回退旧版 playUrl"
                 );
-                None
+                Some(schema_error("新版 getRoomPlayInfo 未返回可用流地址"))
             }
             Err(error) => {
+                if !should_fallback_live_playurl(&error) {
+                    return Err(error);
+                }
                 warn!(room_id, %error, "新版 getRoomPlayInfo 失败，回退旧版 playUrl");
                 Some(error)
             }
@@ -198,15 +201,23 @@ impl BiliApi {
             .build_get_request(url, &params, "https://live.bilibili.com/", &enriched)
             .await;
         let response = self.send_with_retry(request).await?;
-        let data = self
+        let data = match self
             .parse_data_silent::<LiveRoomPlayInfo>(response, "live_get_room_play_info")
-            .await?;
+            .await
+        {
+            Ok(data) => data,
+            Err(error) if is_live_playurl_schema_error(&error) => {
+                return Err(schema_error(error.to_string()));
+            }
+            Err(error) => return Err(error),
+        };
+        validate_live_play_info(room_id, &data)?;
         if data.live_status != 1 {
             return Err(anyhow!("直播间 {room_id} 当前未开播"));
         }
         let durl = flatten_play_info(&data);
         if durl.is_empty() {
-            return Err(anyhow!("新版 getRoomPlayInfo 返回空流地址"));
+            return Err(schema_error("新版 getRoomPlayInfo 未返回可用流地址"));
         }
         let current_quality = durl
             .iter()
@@ -304,8 +315,103 @@ impl BiliApi {
             .build_get_request(url, &params, "https://live.bilibili.com/", &enriched)
             .await;
         let response = self.send_with_retry(request).await?;
-        self.parse_data_silent::<LiveDanmuConf>(response, "live_get_danmu_info")
-            .await
+        let conf = self
+            .parse_data_silent::<LiveDanmuConf>(response, "live_get_danmu_info")
+            .await?;
+        validate_live_danmu_conf(&conf)?;
+        Ok(conf)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("直播接口契约不兼容: {0}")]
+struct LiveSchemaError(String);
+
+fn schema_error(message: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(LiveSchemaError(message.into()))
+}
+
+fn should_fallback_live_playurl(error: &anyhow::Error) -> bool {
+    if error.downcast_ref::<LiveSchemaError>().is_some() {
+        return true;
+    }
+    if let Some(api_error) = error.downcast_ref::<crate::error::BiliApiError>() {
+        return matches!(
+            api_error.kind,
+            crate::error::BiliErrorKind::NotFound | crate::error::BiliErrorKind::InvalidResponse
+        );
+    }
+    error.to_string().contains("HTTP 404")
+}
+
+fn is_live_playurl_schema_error(error: &anyhow::Error) -> bool {
+    let detail = error.to_string();
+    detail.contains("反序列化 B站 API live_get_room_play_info")
+        || detail.contains("解析 B站 API live_get_room_play_info JSON")
+}
+
+fn validate_live_play_info(room_id: i64, data: &LiveRoomPlayInfo) -> Result<()> {
+    if data.room_id <= 0 || data.room_id != room_id {
+        return Err(schema_error("直播播放信息缺少匹配的 room_id"));
+    }
+    if data.live_status != 1 {
+        return Err(anyhow!("直播间 {room_id} 当前未开播"));
+    }
+    if data.playurl_info.is_none() {
+        return Err(schema_error("直播播放信息缺少 playurl_info"));
+    }
+    Ok(())
+}
+
+fn validate_live_danmu_conf(conf: &LiveDanmuConf) -> Result<()> {
+    if conf.token.trim().is_empty() || conf.host_server_list.is_empty() {
+        return Err(schema_error("弹幕配置缺少 token 或 host_server_list"));
+    }
+    for host in &conf.host_server_list {
+        let value = host.host.trim();
+        if value.is_empty()
+            || value.contains('/')
+            || value.contains(':')
+            || value.chars().any(char::is_control)
+            || !(1..=u16::MAX as i32).contains(&host.wss_port)
+        {
+            return Err(schema_error("弹幕配置包含无效 host 或 wss_port"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use crate::services::bili_api::models::live::LiveDanmuHost;
+
+    #[test]
+    fn fallback_only_accepts_endpoint_or_schema_failures() {
+        assert!(should_fallback_live_playurl(&schema_error("schema")));
+        assert!(should_fallback_live_playurl(&anyhow::Error::new(
+            crate::error::BiliApiError::classify(-404, "missing")
+        )));
+        assert!(!should_fallback_live_playurl(&anyhow::anyhow!("HTTP 401")));
+    }
+
+    #[test]
+    fn live_contract_rejects_missing_stream_fields() {
+        let data = LiveRoomPlayInfo {
+            room_id: 100,
+            live_status: 1,
+            playurl_info: None,
+        };
+        assert!(validate_live_play_info(100, &data).is_err());
+        let conf = LiveDanmuConf {
+            token: "token".to_string(),
+            host_server_list: vec![LiveDanmuHost {
+                host: "chat.example.com".to_string(),
+                wss_port: 443,
+                ..Default::default()
+            }],
+        };
+        assert!(validate_live_danmu_conf(&conf).is_ok());
     }
 }
 
@@ -381,12 +487,10 @@ fn resolve_live_url(raw: &str, url_info: &[LiveUrlInfo]) -> String {
 }
 
 fn is_usable_live_url(raw: &str) -> bool {
-    let Ok(url) = url::Url::parse(raw.trim()) else {
+    let Ok(url) = crate::services::bili_url_policy::validate_live_endpoint_syntax(raw, false)
+    else {
         return false;
     };
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return false;
-    }
     !url.query_pairs()
         .any(|(key, value)| key.eq_ignore_ascii_case("sche") && value == "ban")
 }
@@ -398,18 +502,18 @@ mod tests {
     #[test]
     fn resolves_relative_stream_paths_with_cdn_metadata() {
         let info = LiveUrlInfo {
-            host: "https://cdn.example.test/".to_string(),
+            host: "https://cdn.bilivideo.com/".to_string(),
             extra: "?token=abc".to_string(),
             ..Default::default()
         };
         let infos = [info];
         assert_eq!(
             resolve_live_url("/live/stream.flv", &infos),
-            "https://cdn.example.test/live/stream.flv?token=abc"
+            "https://cdn.bilivideo.com/live/stream.flv?token=abc"
         );
         assert_eq!(
             resolve_live_url("/live-bvc/stream.flv", &infos),
-            "https://cdn.example.test/live-bvc/stream.flv?token=abc"
+            "https://cdn.bilivideo.com/live-bvc/stream.flv?token=abc"
         );
     }
 
@@ -426,7 +530,7 @@ mod tests {
                     "current_qn": 250,
                     "accept_qn": [10000, 400, 250],
                     "base_url": "/live-bvc/stream/index.m3u8",
-                    "url_info": [{"host": "https://cdn.example.test", "extra": "?token=abc"}],
+                    "url_info": [{"host": "https://cdn.bilivideo.com", "extra": "?token=abc"}],
                     "durl": []
                 }]}]
             }]}}
@@ -437,7 +541,7 @@ mod tests {
         assert_eq!(urls.len(), 1);
         assert_eq!(
             urls[0].url,
-            "https://cdn.example.test/live-bvc/stream/index.m3u8?token=abc"
+            "https://cdn.bilivideo.com/live-bvc/stream/index.m3u8?token=abc"
         );
         assert_eq!(urls[0].current_qn, 250);
         assert_eq!(urls[0].format_name, "fmp4");
@@ -446,27 +550,27 @@ mod tests {
     #[test]
     fn keeps_absolute_and_protocol_relative_stream_urls() {
         let info = [LiveUrlInfo {
-            host: "https://unused.example.test".to_string(),
+            host: "https://unused.bilivideo.com".to_string(),
             ..Default::default()
         }];
         assert_eq!(
-            resolve_live_url("https://cdn.example.test/live", &info),
-            "https://cdn.example.test/live"
+            resolve_live_url("https://cdn.bilivideo.com/live", &info),
+            "https://cdn.bilivideo.com/live"
         );
         assert_eq!(
-            resolve_live_url("//cdn.example.test/live", &info),
-            "https://cdn.example.test/live"
+            resolve_live_url("//cdn.bilivideo.com/live", &info),
+            "https://cdn.bilivideo.com/live"
         );
     }
 
     #[test]
     fn rejects_legacy_ban_and_malformed_stream_urls() {
         assert!(!is_usable_live_url(
-            "https://cdn.example.test/live.flv?sche=ban&len=0"
+            "https://cdn.bilivideo.com/live.flv?sche=ban&len=0"
         ));
         assert!(!is_usable_live_url("not-a-url"));
         assert!(is_usable_live_url(
-            "https://cdn.example.test/live.flv?deadline=123"
+            "https://cdn.bilivideo.com/live.flv?deadline=123"
         ));
     }
 }

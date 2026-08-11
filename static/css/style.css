@@ -595,11 +595,11 @@ body {
     display: flex;
     align-items: center;
     gap: var(--size-12);
-    padding: var(--size-12) var(--size-16);
+    padding: var(--size-10) var(--size-14);
     border: var(--size-1) solid var(--border);
     border-radius: var(--radius-lg);
     background: var(--surface-hover);
-    min-height: var(--size-60);
+    min-height: var(--size-56);
 }
 
 .login-status-box .login-user-face {
@@ -2605,6 +2605,13 @@ tr:hover {
     font-weight: 600;
 }
 
+/* 二维码状态框不是按钮，成功状态使用浅底深字避免白字融入背景。 */
+.modal-container.qrcode .qrcode-status.tone-success {
+    color: var(--success-text);
+    background: var(--success-soft);
+    border: var(--size-1) solid color-mix(in srgb, var(--success) 35%, transparent);
+}
+
 .modal-container.qrcode .qrcode-hint {
     font-size: var(--size-14);
     color: var(--text-secondary);
@@ -3714,6 +3721,16 @@ tr:hover {
     border-radius: var(--size-4);
     padding: 0 var(--size-4);
 }
+.cmt-vip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--size-6);
+    border-radius: var(--radius-full);
+    color: var(--surface);
+    background: var(--color-token-24);
+    font-size: var(--size-10);
+    font-weight: 600;
+}
 .cmt-meta {
     font-size: var(--size-11);
     color: var(--text-muted);
@@ -4484,7 +4501,7 @@ tr:hover {
     display: flex;
     flex-wrap: wrap;
     gap: var(--size-8);
-    margin-bottom: var(--size-10);
+    margin-bottom: var(--size-12);
     min-height: var(--size-32);
     align-items: center;
 }
@@ -4522,11 +4539,12 @@ tr:hover {
 }
 .time-point-add {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--size-8);
     align-items: center;
 }
 .time-point-add .form-control {
-    max-width: var(--size-140);
+    max-width: var(--size-100);
 }
 .time-point-add .btn {
     white-space: nowrap;
@@ -5493,6 +5511,14 @@ progress.download-item-progress-fill {
     align-items: center;
     gap: var(--size-8);
     flex-wrap: wrap;
+}
+.drawer-file-display-path {
+    color: var(--text-muted);
+    font-family: var(--font-custom-11);
+    font-size: var(--size-11);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .live-detail-title {

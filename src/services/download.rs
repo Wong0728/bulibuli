@@ -146,9 +146,14 @@ impl DownloadManager {
     /// 获取 merge_in_progress 的锁，自动处理 poison。
     /// 即使另一线程 panic 污染了锁，也能继续提供服务而非 propagate panic。
     fn lock_merge_set(&self) -> std::sync::MutexGuard<'_, std::collections::HashSet<String>> {
-        self.merge_in_progress
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        match self.merge_in_progress.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                let mut guard = error.into_inner();
+                guard.clear();
+                guard
+            }
+        }
     }
 }
 
@@ -169,6 +174,10 @@ fn task_cache_key(bvid: &str, cid: Option<i64>) -> String {
         Some(c) => format!("{bvid}#{c}"),
         None => bvid.to_string(),
     }
+}
+
+pub(super) fn backoff_key(bvid: &str, cid: Option<i64>, task_type: &str) -> String {
+    format!("{}_{}", task_cache_key(bvid, cid), task_type)
 }
 
 /// 文件名词根：单P（page=None）返回 bvid（保持存量 `{bvid}.ext` 命名）；

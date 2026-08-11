@@ -382,9 +382,10 @@ pub(crate) async fn execute_from(
     let Some(command) = args.first().map(String::as_str) else {
         return Ok(help());
     };
-    // AI Skill 模式门控：未启用时仅放行 status / help / quit / ai（用于重新启用）。
-    // 这样保证未启用模式下的安全：AI 脚本无法绕过门控执行下载/凭证等敏感操作。
-    if !state.infra.ai_skill_enabled.load(Ordering::Relaxed)
+    // AI Skill 模式门控：仅在 AI IPC 来源时生效，人工终端（TUI/stdin）无条件放行。
+    // 未启用时仅放行 status / help / quit / ai（用于重新启用）。
+    if matches!(origin, CommandOrigin::AiCtl)
+        && !state.infra.ai_skill_enabled.load(Ordering::Relaxed)
         && !matches!(command, "status" | "help" | "quit" | "ai")
     {
         return Err(AppError::AiSkillDisabled(format!(
@@ -1443,7 +1444,16 @@ async fn cred_command(state: &SharedState, args: &[String]) -> AppResult<Value> 
                 if poll.code == 0 {
                     if let Some(cookies) = poll.cookies.as_deref().filter(|c| !c.trim().is_empty())
                     {
+                        let nav = bili_api.get_nav_info(cookies).await.map_err(|e| {
+                            AppError::Unauthorized(format!("扫码凭证校验失败: {e}"))
+                        })?;
+                        if !nav.is_login {
+                            return Err(AppError::Unauthorized(
+                                "扫码凭证未通过 B 站登录校验".to_string(),
+                            ));
+                        }
                         settings.save_cookie_header(cookies).await?;
+                        bili_api.invalidate_session_caches().await;
                     }
                 }
                 Ok(json!({

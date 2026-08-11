@@ -6,7 +6,7 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
-use super::{task_cache_key, DownloadManager, RetryBackoff};
+use super::{backoff_key, task_cache_key, DownloadManager, RetryBackoff};
 
 impl DownloadManager {
     /// 持久化任务的错误分类，并清除待重试时间（用于不可重试错误终止自动重试）。
@@ -30,10 +30,11 @@ impl DownloadManager {
     pub(super) async fn persist_retry_schedule(
         &self,
         bvid: &str,
+        cid: Option<i64>,
         task_type: &str,
         error_kind: &str,
     ) {
-        let key = format!("{bvid}_{task_type}");
+        let key = backoff_key(bvid, cid, task_type);
         let Some(backoff) = self.retry_backoff.lock().await.get(&key).cloned() else {
             return;
         };
@@ -44,6 +45,10 @@ impl DownloadManager {
         let next = Local::now() + chrono::Duration::seconds(seconds);
         if let Ok(Some(task)) = download_task::Entity::find()
             .filter(download_task::Column::Bvid.eq(bvid))
+            .filter(match cid {
+                Some(cid) => download_task::Column::Cid.eq(cid),
+                None => download_task::Column::Cid.is_null(),
+            })
             .filter(download_task::Column::TaskType.eq(task_type))
             .one(&self.db)
             .await

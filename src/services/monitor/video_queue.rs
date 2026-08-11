@@ -414,6 +414,25 @@ impl MonitorService {
             .download_manager
             .artifact_dir_for_bvid(bvid, "auto")
             .await;
+
+        // 保存视频元数据 info.json（与视频同目录）
+        if let Some(ref dir) = save_dir {
+            match self.bili_api.get_video_info(bvid, cookies).await {
+                Ok(info) => {
+                    let info_json = serde_json::to_string_pretty(&info).unwrap_or_default();
+                    let info_path = dir.join(format!("{bvid}_info.json"));
+                    if let Err(e) = tokio::fs::write(&info_path, info_json).await {
+                        warn!("[元数据] 写入 info.json 失败 {bvid}: {e}");
+                    } else {
+                        tracing::info!("[元数据] 已保存: {}", info_path.display());
+                    }
+                }
+                Err(e) => {
+                    warn!("[元数据] 获取视频信息失败 {bvid}: {e}");
+                }
+            }
+        }
+
         if dc["auto_download_danmaku"].as_bool().unwrap_or(true) {
             self.add_log(
                 Some(uid),
@@ -426,6 +445,7 @@ impl MonitorService {
                 .danmaku_service
                 .download_danmaku_to(
                     bvid,
+                    None,
                     Some(cookies),
                     Some(uid),
                     archive_policy,

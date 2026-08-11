@@ -74,7 +74,7 @@ async fn get_cover(
         Ok(None) => Ok(missing_response("封面不存在且无法下载")),
         Err(e) => {
             warn!("[cover] {bvid} 下载封面失败: {e}");
-            Ok(missing_response(&format!("下载失败: {e}")))
+            Ok(missing_response("封面下载失败"))
         }
     }
 }
@@ -108,7 +108,7 @@ async fn serve_image(path: &std::path::Path) -> Response {
         }
         Err(e) => {
             warn!("[cover] 读取本地封面失败 {}: {e}", path.display());
-            missing_response(&format!("读取文件失败: {e}"))
+            missing_response("读取封面文件失败")
         }
     }
 }

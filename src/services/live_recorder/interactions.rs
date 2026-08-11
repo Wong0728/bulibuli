@@ -8,8 +8,9 @@ use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, Mutex};
+use tracing::info;
 
 const MAX_HEAT_BUCKETS: usize = 1_440;
 const MAX_PAID_MARKERS: usize = 4_096;
@@ -39,6 +40,8 @@ pub struct InteractionPaths {
     pub legacy: PathBuf,
     pub events: PathBuf,
     pub xml: PathBuf,
+    /// 标准 B 站弹幕 XML（PotPlayer 可识别），命名 `{prefix}_danmaku_bilibili.xml`
+    pub standard_xml: PathBuf,
     pub summary: PathBuf,
 }
 
@@ -92,7 +95,7 @@ pub async fn run(
     }
 
     jsonl.flush().await?;
-    archive_legacy_and_xml(&args.paths, args.room_id, &args.title).await?;
+    let archive_truncated = archive_legacy_and_xml(&args.paths, args.room_id, &args.title).await?;
     let snapshot = args.snapshot.lock().await.clone();
     let summary = json!({
         "schema_version": 1, "room_id": args.room_id, "title": args.title,
@@ -102,6 +105,7 @@ pub async fn run(
         "sc_count": snapshot.sc_count, "guard_count": snapshot.guard_count,
         "peak_watched": snapshot.peak_watched, "estimated_paid_value": snapshot.estimated_paid_value,
         "dropped_event_count": snapshot.dropped_event_count, "capture_gaps": capture_gaps,
+        "archive_truncated": archive_truncated,
         "danmaku_density_30s": heat, "paid_markers": paid_markers, "link_mic_pk_markers": link_markers,
     });
     tokio::fs::write(&args.paths.summary, serde_json::to_vec_pretty(&summary)?).await?;
@@ -287,49 +291,184 @@ fn push_bounded(values: &mut Vec<Value>, value: Value, limit: usize) {
     }
 }
 
-async fn archive_legacy_and_xml(paths: &InteractionPaths, room_id: i64, title: &str) -> Result<()> {
-    let raw = tokio::fs::read_to_string(&paths.events).await?;
-    let mut events = Vec::<ArchivedLiveEvent>::new();
-    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        if let Ok(event) = serde_json::from_str::<ArchivedLiveEvent>(line) {
-            events.push(event);
+async fn archive_legacy_and_xml(
+    paths: &InteractionPaths,
+    room_id: i64,
+    title: &str,
+) -> Result<bool> {
+    const MAX_ARCHIVE_EVENTS: usize = 500_000;
+    const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+    // ponytail: bounded archive output prevents one corrupt JSONL from exhausting memory;
+    // move archival to an external stream processor if larger captures become a requirement.
+    let mut input = BufReader::new(tokio::fs::File::open(&paths.events).await?).lines();
+    let mut legacy = tokio::fs::File::create(&paths.legacy).await?;
+    let title_json = serde_json::to_string(title)?;
+    legacy
+        .write_all(
+            format!(
+                "{{\"schema_version\":2,\"room_id\":{},\"title\":{},\"events\":[",
+                room_id, title_json
+            )
+            .as_bytes(),
+        )
+        .await?;
+
+    let mut xml = tokio::fs::File::create(&paths.xml).await?;
+    xml.write_all(
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<live_archive schema_version=\"2\" room_id=\"{}\" title=\"{}\">\n<metadata><source>jsonl-archive</source><uid_policy>redacted</uid_policy></metadata>\n",
+            room_id,
+            escape_xml(title)
+        )
+        .as_bytes(),
+    )
+    .await?;
+
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    let mut truncated = false;
+    let mut first = true;
+    while let Some(line) = input.next_line().await? {
+        bytes = bytes.saturating_add(line.len() as u64);
+        if bytes > MAX_ARCHIVE_BYTES || count >= MAX_ARCHIVE_EVENTS {
+            truncated = true;
+            break;
+        }
+        let Ok(event) = serde_json::from_str::<ArchivedLiveEvent>(&line) else {
+            continue;
+        };
+        if !first {
+            legacy.write_all(b",").await?;
+        }
+        first = false;
+        legacy.write_all(&serde_json::to_vec(&event)?).await?;
+        let data = redact_uid_fields(event.data.clone());
+        xml.write_all(
+            format!(
+                "<event seq=\"{}\" ts=\"{}\" type=\"{}\" segment=\"{}\"><data>{}</data></event>\n",
+                event.seq,
+                event.media_time_ms,
+                escape_xml(&event.event_type),
+                event.segment_index,
+                escape_xml(&data.to_string()),
+            )
+            .as_bytes(),
+        )
+        .await?;
+        count += 1;
+    }
+    legacy
+        .write_all(format!("],\"event_count\":{},\"truncated\":{}}}", count, truncated).as_bytes())
+        .await?;
+    xml.write_all(
+        format!("<metadata><event_count>{count}</event_count><truncated>{truncated}</truncated></metadata>\n</live_archive>\n").as_bytes(),
+    )
+    .await?;
+    // 同时生成标准 B 站弹幕 XML（PotPlayer 可识别）
+    write_standard_bilibili_xml(&paths).await?;
+    Ok(truncated)
+}
+
+/// 将 events.jsonl 中的弹幕/SC 事件转换为标准 B 站弹幕 XML 格式，供 PotPlayer 挂载。
+async fn write_standard_bilibili_xml(paths: &InteractionPaths) -> Result<()> {
+    // 重新从头读取 events.jsonl
+    let file = tokio::fs::File::open(&paths.events).await?;
+    let mut reader = BufReader::new(file).lines();
+
+    let mut xml = tokio::fs::File::create(&paths.standard_xml).await?;
+    xml.write_all(
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<i>\n\
+          <chatserver>chat.bilibili.com</chatserver>\n\
+          <mission>0</mission>\n\
+          <maxlimit>8000</maxlimit>\n",
+    )
+    .await?;
+
+    let mut count = 0u64;
+    while let Some(line) = reader.next_line().await? {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<ArchivedLiveEvent>(&line) else {
+            continue;
+        };
+        match event.event_type.as_str() {
+            "danmaku" => {
+                let text = event
+                    .data
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                if text.is_empty() {
+                    continue;
+                }
+                let stime = event.media_time_ms as f64 / 1000.0;
+                let mode = event
+                    .data
+                    .get("mode")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(1)
+                    .clamp(1, 8);
+                let size = event
+                    .data
+                    .get("font_size")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(25)
+                    .clamp(1, 100);
+                let color = event
+                    .data
+                    .get("color")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0xFFFFFF)
+                    & 0xFFFFFF;
+                xml.write_all(
+                    format!(
+                        "<d p=\"{:.5},{},{},{},0,0,0,0\">{}</d>\n",
+                        stime,
+                        mode,
+                        size,
+                        color,
+                        escape_xml(text)
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+                count += 1;
+            }
+            "super_chat" => {
+                let message = event
+                    .data
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                if message.is_empty() {
+                    continue;
+                }
+                let stime = event.media_time_ms as f64 / 1000.0;
+                // SC 用顶部固定弹幕(mode=5)
+                xml.write_all(
+                    format!(
+                        "<d p=\"{:.5},5,25,16777215,0,0,0,0\">SC: {}</d>\n",
+                        stime,
+                        escape_xml(message)
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+                count += 1;
+            }
+            _ => {}
         }
     }
-    let legacy = json!({
-        "schema_version": 2,
-        "room_id": room_id,
-        "title": title,
-        "event_count": events.len(),
-        "events": events,
-    });
-    tokio::fs::write(&paths.legacy, serde_json::to_vec_pretty(&legacy)?).await?;
-
-    let mut xml = String::new();
-    xml.push_str(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<live_archive schema_version="2" room_id=""#,
+    xml.write_all(b"</i>\n").await?;
+    info!(
+        standard_xml = %paths.standard_xml.display(),
+        count,
+        "已生成标准 B 站弹幕 XML"
     );
-    xml.push_str(&room_id.to_string());
-    xml.push_str(r#"" title=""#);
-    xml.push_str(&escape_xml(title));
-    xml.push_str(
-        r#"">
-<metadata><source>jsonl-archive</source><uid_policy>redacted</uid_policy></metadata>
-"#,
-    );
-    for event in events {
-        let data = redact_uid_fields(event.data);
-        xml.push_str(&format!(
-            "<event seq=\"{}\" ts=\"{}\" type=\"{}\" segment=\"{}\"><data>{}</data></event>\n",
-            event.seq,
-            event.media_time_ms,
-            escape_xml(&event.event_type),
-            event.segment_index,
-            escape_xml(&data.to_string()),
-        ));
-    }
-    xml.push_str("</live_archive>\n");
-    tokio::fs::write(&paths.xml, xml).await?;
     Ok(())
 }
 
@@ -430,6 +569,7 @@ mod tests {
     fn test_recording_info() -> RecordingInfo {
         RecordingInfo {
             room_id: 1,
+            recording_id: None,
             title: "tail drain".to_owned(),
             status: super::super::RecordingStatus::Recording,
             output_path: String::new(),
@@ -484,6 +624,7 @@ mod tests {
             legacy: temp.path().join("danmu.json"),
             events: temp.path().join("events.jsonl"),
             xml: temp.path().join("danmaku.xml"),
+            standard_xml: temp.path().join("danmaku_bilibili.xml"),
             summary: temp.path().join("summary.json"),
         };
         let (tx, mut rx) = mpsc::channel(4);
@@ -520,5 +661,32 @@ mod tests {
         assert!(jsonl.contains("tail event"));
         assert!(legacy.contains("tail event"));
         assert!(xml.contains("tail event"));
+    }
+
+    #[tokio::test]
+    async fn standard_xml_preserves_source_danmaku_style() {
+        let temp = tempdir().expect("temporary directory");
+        let paths = InteractionPaths {
+            legacy: temp.path().join("danmu.json"),
+            events: temp.path().join("events.jsonl"),
+            xml: temp.path().join("danmaku.xml"),
+            standard_xml: temp.path().join("danmaku_bilibili.xml"),
+            summary: temp.path().join("summary.json"),
+        };
+        tokio::fs::write(
+            &paths.events,
+            r#"{"schema_version":1,"seq":1,"received_at":"2026-01-01T00:00:00Z","media_time_ms":1250,"segment_index":0,"cmd":"DANMU_MSG","event_type":"danmaku","data":{"text":"彩色","mode":4,"font_size":33,"color":1122867}}"#,
+        )
+        .await
+        .expect("write event archive");
+
+        write_standard_bilibili_xml(&paths)
+            .await
+            .expect("write standard XML");
+        let xml = tokio::fs::read_to_string(&paths.standard_xml)
+            .await
+            .expect("read standard XML");
+        assert!(xml.contains("1.25000,4,33,1122867"));
+        assert!(xml.contains(">彩色</d>"));
     }
 }

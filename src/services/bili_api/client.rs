@@ -3,12 +3,16 @@
 
 use crate::error::{BiliApiError, BiliErrorKind};
 use anyhow::{anyhow, Context, Result};
+use futures::StreamExt;
 use reqwest::RequestBuilder;
 use serde::de::DeserializeOwned;
 use serde::de::IntoDeserializer;
 use serde_json::json;
 use std::collections::HashMap;
 use tracing::{debug, warn};
+
+const MAX_API_JSON_BYTES: usize = 2 * 1024 * 1024;
+const MAX_API_ERROR_PREVIEW_BYTES: usize = 32 * 1024;
 
 use super::models::{BiliEnvelope, RiskControlData};
 use super::BiliApi;
@@ -160,13 +164,15 @@ impl BiliApi {
                 }
                 Ok(response) if response.status().is_server_error() && server_retries < 3 => {
                     let status = response.status();
-                    let body_preview: String = response
-                        .text()
+                    let body_preview = read_limited_body(response, MAX_API_ERROR_PREVIEW_BYTES)
                         .await
-                        .unwrap_or_default()
-                        .chars()
-                        .take(200)
-                        .collect();
+                        .map(|bytes| {
+                            String::from_utf8_lossy(&bytes)
+                                .chars()
+                                .take(200)
+                                .collect::<String>()
+                        })
+                        .unwrap_or_default();
                     server_retries += 1;
                     let delay_secs = 1u64 << (server_retries - 1); // 指数退避: 1s, 2s, 4s
                     warn!(
@@ -255,23 +261,53 @@ impl BiliApi {
     ) -> Result<BiliEnvelope> {
         let status = response.status();
         let host = response.url().host_str().map(str::to_owned);
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         if !status.is_success() {
             if let Some(host) = host.as_deref() {
                 self.bad_cdns.record_failure(host).await;
             }
-            let preview: String = response
-                .text()
-                .await
-                .context("读取 B站 API 错误响应失败")?
-                .chars()
-                .take(500)
-                .collect();
+            let preview = String::from_utf8_lossy(
+                &read_limited_body(response, MAX_API_ERROR_PREVIEW_BYTES)
+                    .await
+                    .context("读取 B站 API 错误响应失败")?,
+            )
+            .chars()
+            .take(500)
+            .collect::<String>();
+            if status.as_u16() == 412 {
+                let error = BiliApiError::classify(-412, preview.clone());
+                if notify {
+                    self.notify_bili_error(&error, &serde_json::Value::Null)
+                        .await;
+                }
+                return Err(error.into());
+            }
             return Err(anyhow!("B站 API {api_name} 返回 HTTP {status}: {preview}"));
+        }
+        if !content_type.is_empty() && !content_type.contains("json") {
+            let preview = String::from_utf8_lossy(
+                &read_limited_body(response, MAX_API_ERROR_PREVIEW_BYTES)
+                    .await
+                    .context("读取 B站 API 非 JSON 响应失败")?,
+            )
+            .chars()
+            .take(500)
+            .collect::<String>();
+            return Err(anyhow!(
+                "B站 API {api_name} 返回非 JSON Content-Type {content_type}: {preview}"
+            ));
         }
         if let Some(host) = host.as_deref() {
             self.bad_cdns.record_success(host).await;
         }
-        let bytes = response.bytes().await.context("读取 B站 API 响应失败")?;
+        let bytes = read_limited_body(response, MAX_API_JSON_BYTES)
+            .await
+            .context("读取 B站 API 响应失败")?;
         let envelope: BiliEnvelope = serde_json::from_slice(&bytes)
             .with_context(|| format!("解析 B站 API {api_name} JSON 失败"))?;
         // 统一入口：缺 code 字段视为失败（响应异常）；code==0 才是成功，非 0 一律走 classify。
@@ -286,6 +322,9 @@ impl BiliApi {
             .as_deref()
             .unwrap_or("B站 API 返回业务错误");
         let error = BiliApiError::classify(code, message);
+        if matches!(error.kind, BiliErrorKind::RiskControl) && matches!(code, -352 | -412 | -799) {
+            self.wbi_keys.invalidate().await;
+        }
         if notify {
             self.notify_bili_error(&error, &envelope.data).await;
         }
@@ -313,6 +352,19 @@ impl BiliApi {
             warn!("推送 B站系统事件失败: {notify_error}");
         }
     }
+}
+
+async fn read_limited_body(response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("读取响应分块失败")?;
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(anyhow!("响应体超过 {} 字节上限", limit));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 fn deserialize_payload<T: DeserializeOwned>(

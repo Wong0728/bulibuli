@@ -18,7 +18,7 @@ use tracing::{error, info, warn};
 
 use super::completion::CompleteOutcome;
 use super::native::{NativeProgress, TransferRequest};
-use super::{DownloadManager, ProgressCache};
+use super::{task_cache_key, DownloadManager, ProgressCache};
 
 /// 统一下载引擎（枚举分发，非 trait object）。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -47,13 +47,12 @@ impl DownloadManager {
     /// 探测成功即视为恢复（满足「aria2 恢复后自动切回」验收标准）。
     async fn try_recover_aria2(&self) -> bool {
         const RECOVER_COOLDOWN: Duration = Duration::from_secs(60);
-        {
+        let cooldown_active = {
             let guard = self.aria2_recover_failed_at.lock().await;
-            if let Some(last_failed) = *guard {
-                if last_failed.elapsed() < RECOVER_COOLDOWN {
-                    return self.aria2.is_available_uncached().await;
-                }
-            }
+            guard.is_some_and(|last_failed| last_failed.elapsed() < RECOVER_COOLDOWN)
+        };
+        if cooldown_active {
+            return self.aria2.is_available_uncached().await;
         }
         let settings = self.settings_service.current();
         if let Err(e) = self.aria2.init(settings.as_ref()).await {
@@ -225,7 +224,7 @@ impl DownloadManager {
                         0
                     };
                     self.progress_cache.lock().await.insert(
-                        task.bvid.clone(),
+                        task_cache_key(&task.bvid, task.cid),
                         ProgressCache {
                             progress_percent: percent,
                             downloaded_size: downloaded,
@@ -240,7 +239,10 @@ impl DownloadManager {
         };
         drop(permit);
         self.native_tasks.lock().await.remove(&task.id);
-        self.progress_cache.lock().await.remove(&task.bvid);
+        self.progress_cache
+            .lock()
+            .await
+            .remove(&task_cache_key(&task.bvid, task.cid));
 
         if cancel.is_cancelled() {
             // 用户移除任务或程序关停：任务行已删除/无需再写终态

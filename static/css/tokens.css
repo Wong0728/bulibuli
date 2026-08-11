@@ -1,0 +1,4 @@
+/* Compatibility token layer. The legacy entry point remains style.css. */
+:root {
+    --text-muted-deep: var(--text-secondary);
+}

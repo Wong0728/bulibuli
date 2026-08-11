@@ -35,14 +35,13 @@ export function renderDrawerContent(video, bvid) {
         </div>
     ` : '';
 
-    // 文件路径（仅当后端返回时显示，后端会按 show_relative_path 设置决定是否返回）
-    const filePathHtml = video.file_path ? `
-        <div class="drawer-file-path" title="${escapeHtml(video.file_path)}">
+    // 路径展示由后端统一决定；内部相对路径只用于安全打开目录。
+    const filePathHtml = video.file_path || video.relative_path ? `
+        <div class="drawer-file-path" title="${escapeHtml(video.file_path || '路径已隐藏')}">
             <i class="fa-solid fa-file-video"></i>
-            <span>${escapeHtml(video.file_path)}</span>
-            <button class="btn btn-sm btn-ghost copy-path-btn" data-copy-path="${escapeHtml(video.file_path)}" title="复制路径">
-                <i class="fa-solid fa-copy"></i>
-            </button>
+            <span>${escapeHtml(video.file_path || '路径已隐藏')}</span>
+            ${video.file_path ? `<button class="btn btn-sm btn-ghost copy-path-btn" data-copy-path="${escapeHtml(video.file_path)}" title="复制路径"><i class="fa-solid fa-copy"></i></button>` : ''}
+            ${video.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-path="${escapeHtml(video.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
         </div>
     ` : '';
 
@@ -266,7 +265,8 @@ export function renderDrawerFileItem(f, bvid, burned) {
     const type = f.file_type || f.type || 'other';
     const safeBvid = escapeHtml(bvid || '');
     const name = escapeHtml(f.name || '未知文件');
-    const path = escapeHtml(f.path || '');
+    const internalPath = escapeHtml(f.path || '');
+    const path = escapeHtml(f.display_path || '');
     const size = f.size ? formatFileSize(Number(f.size)) : '';
     const iconMap = {
         video: 'fa-film',
@@ -287,11 +287,15 @@ export function renderDrawerFileItem(f, bvid, burned) {
     const versionLabel = f.version ? formatArchiveVersion(f.version) : (f.is_current ? '当前' : '副本');
     const modified = f.modified_at ? new Date(Number(f.modified_at) * 1000).toLocaleString() : '';
 
-    let actions = `<button class="btn btn-sm btn-ghost" data-copy-path="${path}" title="复制文件路径"><i class="fa-solid fa-copy"></i> 路径</button>`;
+    let actions = f.display_path
+        ? `<button class="btn btn-sm btn-ghost" data-copy-path="${path}" title="复制文件路径"><i class="fa-solid fa-copy"></i> 路径</button>` : '';
+    if (f.path) {
+        actions += `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-path="${internalPath}" title="打开所在目录"><i class="fa-solid fa-folder-open"></i> 打开</button>`;
+    }
     if (type === 'comment') {
-        actions += `<button class="btn btn-sm btn-primary" data-action="load-drawer-comments" data-bvid="${safeBvid}" data-path="${path}"><i class="fa-solid fa-eye"></i> 查看</button>`;
+        actions += `<button class="btn btn-sm btn-primary" data-action="load-drawer-comments" data-bvid="${safeBvid}" data-path="${internalPath}"><i class="fa-solid fa-eye"></i> 查看</button>`;
     } else if (type === 'danmaku') {
-        actions += `<button class="btn btn-sm btn-primary" data-action="load-drawer-danmaku" data-bvid="${safeBvid}" data-path="${path}"><i class="fa-solid fa-eye"></i> 查看</button>`;
+        actions += `<button class="btn btn-sm btn-primary" data-action="load-drawer-danmaku" data-bvid="${safeBvid}" data-path="${internalPath}"><i class="fa-solid fa-eye"></i> 查看</button>`;
     }
     if (type === 'video') {
         if (burned.danmaku) {
@@ -313,7 +317,7 @@ export function renderDrawerFileItem(f, bvid, burned) {
         <div class="drawer-file-item" data-file-type="${type}">
             <div class="drawer-file-icon"><i class="fa-solid ${icon}"></i></div>
             <div class="drawer-file-main">
-                <div class="drawer-file-name" title="${path}">${name}</div>
+                <div class="drawer-file-name" title="${path || name}">${name}</div>
                 <div class="drawer-file-meta">
                     <span class="drawer-file-type">${typeLabel}</span>
                     <span class="drawer-file-version ${f.is_current ? 'current' : ''}">${escapeHtml(versionLabel)}</span>
@@ -321,6 +325,7 @@ export function renderDrawerFileItem(f, bvid, burned) {
                     ${f.format ? `<span class="drawer-file-format">${escapeHtml(f.format)}</span>` : ''}
                     ${modified ? `<span>${escapeHtml(modified)}</span>` : ''}
                 </div>
+                ${path ? `<div class="drawer-file-display-path" title="${path}">${path}</div>` : ''}
             </div>
             ${actions ? `<div class="drawer-file-actions">${actions}</div>` : ''}
         </div>

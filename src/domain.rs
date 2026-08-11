@@ -39,11 +39,16 @@ impl DownloadStatus {
 
 impl fmt::Display for DownloadStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = serde_json::to_value(self)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_else(|| "failed".to_string());
-        f.write_str(&value)
+        f.write_str(match self {
+            Self::Pending => "pending",
+            Self::Downloading => "downloading",
+            Self::Paused => "paused",
+            Self::Retrying => "retrying",
+            Self::Merging => "merging",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        })
     }
 }
 
@@ -84,11 +89,13 @@ pub enum TaskKind {
 
 impl fmt::Display for TaskKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = serde_json::to_value(self)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_else(|| "video".to_string());
-        f.write_str(&value)
+        f.write_str(match self {
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Danmaku => "danmaku",
+            Self::Comments => "comments",
+            Self::Cover => "cover",
+        })
     }
 }
 
@@ -166,5 +173,11 @@ mod tests {
             DownloadStatus::from_str("merge_failed").expect("legacy status is known"),
             DownloadStatus::Failed
         );
+    }
+
+    #[test]
+    fn display_values_are_stable() {
+        assert_eq!(DownloadStatus::Retrying.to_string(), "retrying");
+        assert_eq!(TaskKind::Danmaku.to_string(), "danmaku");
     }
 }

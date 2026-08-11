@@ -21,5 +21,6 @@ pub fn router() -> Router<SharedState> {
         .route("/api/history/list", get(board::list_history))
         .route("/api/history/by-uid", get(crud::get_by_uid))
         .route("/api/history/delete", post(crud::delete_history))
+        .route("/api/history/open-directory", post(crud::open_directory))
         .route("/api/history/search", get(crud::search_history))
 }

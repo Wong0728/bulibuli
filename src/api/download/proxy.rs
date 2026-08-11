@@ -4,8 +4,38 @@ use crate::api::bili_resource::BiliResourceClient;
 use crate::error::AppError;
 use crate::state::SharedState;
 use axum::{extract::Query, extract::State, response::Response};
+use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+
+const MAX_PROXY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+fn limit_proxy_stream<S>(stream: S) -> impl Stream<Item = Result<axum::body::Bytes, AppError>>
+where
+    S: Stream<Item = Result<axum::body::Bytes, reqwest::Error>>,
+{
+    stream.scan((0_u64, false), |(received, finished), item| {
+        if *finished {
+            return futures::future::ready(None);
+        }
+        let result = match item {
+            Ok(chunk) => {
+                *received = received.saturating_add(chunk.len() as u64);
+                if *received > MAX_PROXY_BYTES {
+                    *finished = true;
+                    Err(AppError::BadRequest("代理资源超过 4 GiB 限制".to_string()))
+                } else {
+                    Ok(chunk)
+                }
+            }
+            Err(error) => {
+                *finished = true;
+                Err(AppError::Network(error))
+            }
+        };
+        futures::future::ready(Some(result))
+    })
+}
 
 #[derive(Deserialize)]
 pub(super) struct ProxyQuery {
@@ -38,7 +68,7 @@ pub(super) async fn download_proxy(
             .map_err(|e| AppError::Internal(format!("构建拒绝响应失败: {e}")));
     }
 
-    let resp = BiliResourceClient::get(&state, &q.url, "*/*", true, None).await?;
+    let resp = BiliResourceClient::get(&state, &q.url, "*/*", true, Some(MAX_PROXY_BYTES)).await?;
 
     let content_type = resp
         .headers()
@@ -46,13 +76,7 @@ pub(super) async fn download_proxy(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
-    let content_length = resp
-        .headers()
-        .get("Content-Length")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    let stream = resp.bytes_stream();
+    let stream = limit_proxy_stream(resp.bytes_stream());
     let body = Body::from_stream(stream);
 
     let filename = q.filename.unwrap_or_else(|| "download".to_string());
@@ -65,14 +89,11 @@ pub(super) async fn download_proxy(
         )
     };
 
-    let mut builder = Response::builder()
+    let builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_DISPOSITION, disposition)
         .header(header::CACHE_CONTROL, "no-cache");
-    if let Some(len) = content_length {
-        builder = builder.header(header::CONTENT_LENGTH, len);
-    }
     builder
         .body(body)
         .map_err(|e| AppError::Internal(format!("构建响应失败: {e}")))

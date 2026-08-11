@@ -1,13 +1,14 @@
-import { _state } from './state.js';
+import { _state, subscribeState } from './state.js';
 import { setTone, initWebSocket, updateNetworkBanner, updateNetworkDisabledButtons, apiPost, apiGet, checkCookiesStatus, dismissCookieWarning, refreshLoginInfo } from './core.js';
 import { setManualQueryMode, doManualQuery, doManualResolve } from './manual.js';
-import { showAddBloggerModal, closeAddBloggerModal, showEditBloggerModal, closeEditBloggerModal } from './modal.js';
+import { showAddBloggerModal, closeBloggerModal, showEditBloggerModal } from './modal.js';
 import { loadBloggersFromServer, renderBloggerSidebar, startSelectedBlogger, stopSelectedBlogger, startStatusPolling } from './blogger.js';
 import { renderUidHistorySelect, onUidHistorySelectChange, renderKnownBloggers, checkBloggerProfileNotices, showBloggerNoticeModal, closeBloggerNoticeModal, searchBloggers } from './blogger-search.js';
 import { updateDownloadLists } from './download-queue.js';
-import { loadHistoryBoard, manualRefreshBoard, startLastPullPolling } from './history.js';
+import { loadHistoryBoard, manualRefreshBoard } from './history.js';
 import { loadDownloadStatus, startProgressUpdates, showToast, confirmDialog } from './download-status.js';
-import { onCommentsReplyModeChange, onSidecarArchiveModeChange, toggleSmartDownloadSettings, onVerifyModeChange, onDownloadModeChange, onFFmpegModeChange, refreshFFmpegDetectedPath, loadSettingsFromServer, updatePathPreview, initMobileSidebar } from './settings.js';
+import { onCommentsReplyModeChange, onSidecarArchiveModeChange, toggleSmartDownloadSettings, onVerifyModeChange, onDownloadModeChange, onFFmpegModeChange, refreshFFmpegDetectedPath, loadSettingsFromServer, loadSettingsFragment, updatePathPreview, initMobileSidebar } from './settings.js';
+import { startPollingScheduler } from './polling.js';
 import { closeVideoDrawer } from './drawer.js';
 import { getQRCodePayload, getQRCodePollState } from './qrcode-contract.js';
 
@@ -17,6 +18,8 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 async function bootstrapApp() {
+    document.getElementById('blogger-notice-modal')?.querySelector('.modal-header span')?.setAttribute('id', 'blogger-notice-title');
+    document.getElementById('qrcode-modal')?.querySelector('.modal-header span')?.setAttribute('id', 'qrcode-modal-title');
     const authResponse = await fetch('/api/auth/state', {
         credentials: 'same-origin',
         cache: 'no-store',
@@ -27,6 +30,7 @@ async function bootstrapApp() {
     }
     _state.csrfToken = authEnvelope.data.csrf_token;
     _state.sessionRole = authEnvelope.data.role || 'owner';
+    await loadSettingsFragment();
     applySessionRole(_state.sessionRole);
     initTabSwitching();
     const parallelInputs = [
@@ -52,8 +56,8 @@ async function bootstrapApp() {
     startStatusPolling();
     startProgressUpdates();
 
-    // 启动看板"上次拉取"轮询（5s 检查是否超过 60s）
-    startLastPullPolling();
+    // 根据活动 tab 统一调度需要的 HTTP 刷新。
+    startPollingScheduler();
 
     // 初始化移动端侧边栏
     initMobileSidebar();
@@ -108,8 +112,7 @@ async function bootstrapApp() {
         const openModal = document.querySelector('.modal-overlay.active');
         if (!openModal || openModal.id === 'confirm-modal') return; // confirm-modal 自行处理 ESC
         if (openModal.id === 'qrcode-modal') closeQRCodeModal();
-        else if (openModal.id === 'add-blogger-modal') closeAddBloggerModal();
-        else if (openModal.id === 'edit-blogger-modal') closeEditBloggerModal();
+        else if (openModal.id === 'blogger-modal') closeBloggerModal();
         else if (openModal.id === 'blogger-notice-modal') closeBloggerNoticeModal();
         else openModal.classList.remove('active');
     });
@@ -175,7 +178,7 @@ function applySessionRole(role) {
     if (role === 'owner') return;
     // Credential and foundation controls are never rendered for delegated
     // sessions.  Backend RBAC is the authoritative enforcement mechanism.
-    ['account', 'ai-skill', 'setup-wizard', 'foundation-summary', 'aria2', 'ffmpeg']
+    ['account', 'local-config', 'aria2', 'ffmpeg']
         .forEach(section => document.querySelector(`[data-section="${section}"]`)?.setAttribute('hidden', ''));
     document.getElementById('cookie-warning-banner')?.setAttribute('hidden', '');
     document.getElementById('login-user-card')?.setAttribute('hidden', '');
@@ -231,6 +234,7 @@ export function initTabSwitching() {
 }
 
 export function switchTab(tabName) {
+    _state.currentTab = tabName;
     document.querySelectorAll('.tab-panel, .nav-tab').forEach(el => el.classList.remove('active'));
     document.getElementById(`tab-${tabName}`).classList.add('active');
     document.querySelectorAll('.nav-tab').forEach(tab => {
@@ -367,23 +371,13 @@ export function startPollingQRCode(qrcodeKey, generation = _state.qrcodePollGene
 
                 statusEl.hidden = false;
                 setTone(statusEl, 'success');
-                statusEl.textContent = '登录成功！Cookie 已安全保存。';
+                statusEl.textContent = '登录成功，账号信息已更新。';
                 showToast('扫码登录成功', 'success');
-
-                // 几秒后隐藏 cookie，显示“已保存”
-                setTimeout(() => {
-                    if (!isActiveQRCodeGeneration(generation)) return;
-                    statusEl.textContent = 'Cookie 已保存 ✓';
-                }, 4000);
-
-                // 刷新顶部登录卡片与横幅
-                setTimeout(() => {
-                    if (isActiveQRCodeGeneration(generation)) refreshLoginInfo();
-                }, 800);
-
+                // 账号信息刷新完成后短暂保留成功反馈，再关闭弹窗。
+                refreshLoginInfo();
                 setTimeout(() => {
                     if (isActiveQRCodeGeneration(generation)) closeQRCodeModal();
-                }, 6000);
+                }, 1500);
             } else if (poll.kind === 'waiting') {
                 // 未扫码
                 statusEl.hidden = true;

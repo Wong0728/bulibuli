@@ -1,10 +1,18 @@
-import { _state, _NETWORK_ERR_MSG } from './state.js';
+import { _state, _NETWORK_ERR_MSG, subscribeState } from './state.js';
 import { showToast as renderToast } from './toast.js';
 import { escapeHtml } from './utils.js';
-import { setElementHandler, dismissNetworkToast } from './core.js';
+import { setElementHandler } from './core.js';
+import { dismissNetworkToast } from './network.js';
 import { updateManualDownloadProgress } from './media-links.js';
 import { patchBoardCardProgress } from './download-queue.js';
 import { fetchDownloadHealth, fetchDownloadSnapshot } from './download-status-store.js';
+
+let activeConfirmCancel = null;
+let activeConfirmTitle = null;
+
+subscribeState('currentDownloadStatuses', statuses => {
+    if (statuses) patchBoardCardProgress(statuses);
+});
 
 // ==================== 下载状态管理 ====================
 // 根据 /api/download/status 返回的结果更新 Aria2 状态指示点。
@@ -81,7 +89,6 @@ export async function loadDownloadStatus() {
                 updateManualDownloadProgress(s.bvid, s.type);
             }
             _state.currentDownloadStatuses = statuses;
-            patchBoardCardProgress(statuses);
         }
     } catch (e) {
         // 网络错误时将 Aria2 指示点置为断开，避免给用户"状态正常"的错觉
@@ -112,6 +119,12 @@ export function showToast(msg, type = 'info', duration = 2700) {
     return handle;
 }
 
+export function closeConfirmDialog(title = null) {
+    if (activeConfirmCancel && (!title || activeConfirmTitle === title)) {
+        activeConfirmCancel();
+    }
+}
+
 export function confirmDialog(message, opts) {
     opts = opts || {};
     return new Promise((resolve) => {
@@ -137,6 +150,8 @@ export function confirmDialog(message, opts) {
             cancelBtn.removeEventListener('click', onCancel);
             modal.removeEventListener('click', onBackdrop);
             document.removeEventListener('keydown', onKey);
+            activeConfirmCancel = null;
+            activeConfirmTitle = null;
         };
         const onOk = () => { cleanup(); resolve(true); };
         const onCancel = () => { cleanup(); resolve(false); };
@@ -145,6 +160,9 @@ export function confirmDialog(message, opts) {
             if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
             else if (e.key === 'Enter') { e.preventDefault(); onOk(); }
         };
+        activeConfirmCancel?.();
+        activeConfirmTitle = opts.title || '请确认';
+        activeConfirmCancel = onCancel;
         okBtn.addEventListener('click', onOk);
         cancelBtn.addEventListener('click', onCancel);
         modal.addEventListener('click', onBackdrop);

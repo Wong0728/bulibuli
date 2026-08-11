@@ -6,6 +6,7 @@ use crate::services::security_config::{is_effectively_loopback, AccessMode};
 use crate::state::bili::BiliState;
 use crate::state::SharedState;
 use crate::ws::WebSocketManager;
+use anyhow::Context;
 use axum::{
     body::Body,
     extract::{ConnectInfo, Extension, MatchedPath, State},
@@ -90,11 +91,8 @@ pub async fn bind_main_listener(
     };
     let listener = if security.mode == AccessMode::Lan {
         bind_lan_with_port_fallback(port).await?
-    } else if security.mode == AccessMode::Local {
-        bind_with_port_fallback("127.0.0.1", port).await?
-    } else if security.mode == AccessMode::Proxy {
-        tokio::net::TcpListener::bind((host, port)).await?
     } else {
+        // Local / Proxy 统一走 IPv4 fallback
         bind_with_port_fallback(host, port).await?
     };
     let actual_port = listener.local_addr()?.port();
@@ -134,6 +132,14 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
     });
 
     let static_root = state.infra.paths.static_dir();
+    let static_pages = Arc::new(StaticPages {
+        index: tokio::fs::read(static_root.join("index.html"))
+            .await
+            .context("读取 index.html 失败")?,
+        pair: tokio::fs::read(static_root.join("pair.html"))
+            .await
+            .context("读取 pair.html 失败")?,
+    });
     let api = api::router().layer(rate_limit);
     let security_layer = middleware::from_fn_with_state(state.clone(), enforce_request_security);
     Ok(Router::new()
@@ -160,17 +166,24 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
                     .join("JetBrains Mono.woff2"),
             ),
         )
+        .route("/index.html", get(index))
         .route_service(
-            "/index.html",
-            ServeFile::new(static_root.join("index.html")),
+            "/settings.html",
+            ServeFile::new(static_root.join("settings.html")),
         )
         .nest_service("/css", ServeDir::new(static_root.join("css")))
         .nest_service("/js", ServeDir::new(static_root.join("js")))
         .merge(api)
         .layer(middleware::from_fn(trace_request))
         .layer(socket_layer)
+        .layer(Extension(static_pages))
         .layer(security_layer)
         .with_state(state))
+}
+
+struct StaticPages {
+    index: Vec<u8>,
+    pair: Vec<u8>,
 }
 
 async fn trace_request(request: Request<Body>, next: Next) -> Response {
@@ -187,35 +200,31 @@ async fn trace_request(request: Request<Body>, next: Next) -> Response {
 
 async fn index(
     State(state): State<SharedState>,
+    Extension(pages): Extension<Arc<StaticPages>>,
     Extension(client): Extension<ClientInfo>,
     headers: HeaderMap,
 ) -> Response {
     let token = session_cookie(&headers).unwrap_or_default();
     let authenticated = state.bili.auth.authenticate(&token, client.ip).await;
-    let (file, session) = match authenticated {
-        Ok(Some(session)) => ("index.html", Some(session)),
-        Ok(None) => ("pair.html", None),
+    let (bytes, session) = match authenticated {
+        Ok(Some(session)) => (pages.index.clone(), Some(session)),
+        Ok(None) => (pages.pair.clone(), None),
         Err(error) => return error.into_response(),
     };
-    match tokio::fs::read(state.infra.paths.static_dir().join(file)).await {
-        Ok(bytes) => {
-            let mut response = Response::new(Body::from(bytes));
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/html; charset=utf-8"),
-            );
-            response
-                .headers_mut()
-                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            if let Some(token) = session.and_then(|value| value.rotated_token) {
-                if let Err(error) = set_session_cookie(&state.bili, &mut response, &token) {
-                    return error.into_response();
-                }
-            }
-            response
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Some(token) = session.and_then(|value| value.rotated_token) {
+        if let Err(error) = set_session_cookie(&state.bili, &mut response, &token) {
+            return error.into_response();
         }
-        Err(error) => crate::error::AppError::Io(error).into_response(),
     }
+    response
 }
 
 async fn enforce_request_security(
@@ -310,7 +319,7 @@ async fn enforce_request_security(
             return error.into_response();
         }
     }
-    add_security_headers(&mut response);
+    add_security_headers(&mut response, &path);
     response
 }
 
@@ -497,7 +506,7 @@ fn is_mutating(method: &Method) -> bool {
     )
 }
 
-fn add_security_headers(response: &mut Response) {
+fn add_security_headers(response: &mut Response, path: &str) {
     let headers = response.headers_mut();
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -512,9 +521,28 @@ fn add_security_headers(response: &mut Response) {
         header::CONTENT_SECURITY_POLICY,
         // connect-src 仅同源（Socket.IO/WebSocket 均同源），不开放裸 wss: 防连向任意主机
         HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         ),
     );
+    if is_static_asset(path) {
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=300"),
+        );
+    }
+}
+
+fn is_static_asset(path: &str) -> bool {
+    matches!(
+        path,
+        "/favicon.ico"
+            | "/pair.css"
+            | "/pair.js"
+            | "/pair-font.woff2"
+            | "/index.html"
+            | "/settings.html"
+    ) || path.starts_with("/css/")
+        || path.starts_with("/js/")
 }
 
 fn api_error(status: StatusCode, code: i64, message: &'static str) -> Response {
@@ -538,12 +566,21 @@ async fn bind_with_port_fallback(
             break;
         };
         match tokio::net::TcpListener::bind((host, port)).await {
-            Ok(listener) => return Ok(listener),
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
-            Err(error) => return Err(error.into()),
+            Ok(listener) => {
+                if offset > 0 {
+                    info!("端口 {start_port} 不可用，已回退到 {port}");
+                }
+                return Ok(listener);
+            }
+            // 不仅 catch AddrInUse：Windows Hyper-V 保留端口返回 PermissionDenied (10013)，
+            // 同样需要回退到下一个端口。
+            Err(error) => {
+                warn!("绑定 {host}:{port} 失败: {error}，尝试下一个端口");
+                continue;
+            }
         }
     }
-    Err(anyhow::anyhow!("no available port"))
+    Err(anyhow::anyhow!("端口 {start_port} 起连续 100 个端口均不可用"))
 }
 
 async fn bind_lan_with_port_fallback(start_port: u16) -> anyhow::Result<tokio::net::TcpListener> {
@@ -561,13 +598,19 @@ async fn bind_lan_with_port_fallback(start_port: u16) -> anyhow::Result<tokio::n
             Ok(()) => {
                 socket.listen(1024)?;
                 let listener: std::net::TcpListener = socket.into();
+                if offset > 0 {
+                    info!("端口 {start_port} 不可用，已回退到 {port}");
+                }
                 return Ok(tokio::net::TcpListener::from_std(listener)?);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
-            Err(error) => return Err(error.into()),
+            // 同 bind_with_port_fallback：PermissionDenied (Windows 10013) 也回退。
+            Err(error) => {
+                warn!("绑定 [::]:{port} 失败: {error}，尝试下一个端口");
+                continue;
+            }
         }
     }
-    Err(anyhow::anyhow!("no available dual-stack port"))
+    Err(anyhow::anyhow!("端口 {start_port} 起连续 100 个双栈端口均不可用"))
 }
 
 async fn shutdown_signal(cancellation: tokio_util::sync::CancellationToken) {

@@ -116,10 +116,17 @@ async fn bind_setup_port(start_port: u16) -> anyhow::Result<tokio::net::TcpListe
             break;
         };
         match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
-            Ok(listener) => return Ok(listener),
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
-            Err(error) => return Err(error.into()),
+            Ok(listener) => {
+                if offset > 0 {
+                    info!("Setup 端口 {start_port} 不可用，已回退到 {port}");
+                }
+                return Ok(listener);
+            }
+            Err(error) => {
+                tracing::warn!("绑定 127.0.0.1:{port} 失败: {error}，尝试下一个端口");
+                continue;
+            }
         }
     }
-    Err(anyhow::anyhow!("no available setup port"))
+    Err(anyhow::anyhow!("Setup 端口 {start_port} 起连续 10 个端口均不可用"))
 }

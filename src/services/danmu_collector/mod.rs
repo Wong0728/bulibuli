@@ -117,7 +117,18 @@ impl DanmuCollector {
 
             // 选择 host（轮询）
             let (host, wss_port) = &hosts[reconnect_attempts as usize % hosts.len()];
-            let ws_url = websocket_url(host, *wss_port);
+            let Some(ws_url) = websocket_url(host, *wss_port) else {
+                warn!(room_id, host, "拒绝不受支持的弹幕 WebSocket 端点");
+                reconnect_attempts += 1;
+                if reconnect_attempts > MAX_RECONNECT_ATTEMPTS {
+                    let _ = tx.try_send(connection_status(
+                        "unavailable",
+                        Some("弹幕 WebSocket 端点全部无效".to_string()),
+                    ));
+                    return;
+                }
+                continue;
+            };
             if reconnect_attempts == 0 {
                 let _ = tx.try_send(connection_status("connecting", None));
             }
@@ -143,6 +154,32 @@ impl DanmuCollector {
                 }
                 Err(e) => {
                     let _ = tx.try_send(connection_status("degraded", Some(e.to_string())));
+                    if is_auth_error(&e) {
+                        match (bili_api.as_ref(), cookies.as_deref()) {
+                            (Some(bili_api), Some(cookies)) => {
+                                match bili_api.live_danmu_conf(room_id, cookies).await {
+                                    Ok(conf) if !conf.host_server_list.is_empty() => {
+                                        token = conf.token;
+                                        hosts = conf
+                                            .host_server_list
+                                            .into_iter()
+                                            .map(|host| (host.host, host.wss_port))
+                                            .collect();
+                                        reconnect_attempts = 0;
+                                        info!(room_id, "弹幕鉴权失败后立即刷新 token 与服务器列表");
+                                        continue;
+                                    }
+                                    Ok(_) => {
+                                        warn!(room_id, "鉴权失败后刷新弹幕配置为空，继续使用旧配置")
+                                    }
+                                    Err(error) => {
+                                        warn!(room_id, "鉴权失败后刷新弹幕 token 失败: {error}")
+                                    }
+                                }
+                            }
+                            _ => warn!(room_id, "测试传输未配置 B站 API，跳过弹幕 token 刷新"),
+                        }
+                    }
                     if is_fatal_error(&e) {
                         warn!(room_id, error_chain = ?e, "弹幕采集遇到不可恢复错误，熔断本次会话");
                         let _ = tx.try_send(connection_status("unavailable", Some(e.to_string())));
@@ -362,12 +399,19 @@ impl DanmuCollector {
     }
 }
 
-fn websocket_url(host: &str, wss_port: i32) -> String {
-    if host.starts_with("ws://") || host.starts_with("wss://") {
+fn websocket_url(host: &str, wss_port: i32) -> Option<String> {
+    #[cfg(test)]
+    if host.starts_with("ws://") {
+        return Some(format!("{host}:{wss_port}/sub"));
+    }
+    let raw = if host.starts_with("wss://") {
         format!("{host}:{wss_port}/sub")
     } else {
         format!("wss://{host}:{wss_port}/sub")
-    }
+    };
+    crate::services::bili_url_policy::validate_live_endpoint_syntax(&raw, true)
+        .ok()
+        .map(|url| url.to_string())
 }
 
 fn insert_seen_key(seen: &mut HashSet<String>, key: String) -> bool {
@@ -393,14 +437,21 @@ fn reconnect_backoff(attempt: u32) -> Duration {
 
 fn is_fatal_error(error: &anyhow::Error) -> bool {
     let message = error.to_string().to_ascii_lowercase();
-    message.contains("认证失败")
-        || message.contains("认证回复")
-        || message.contains("操作码非法")
+    message.contains("操作码非法")
         || message.contains("缺少 code")
         || message.contains("协议版本")
         || message.contains("包头")
+}
+
+fn is_auth_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("认证失败")
+        || message.contains("认证回复")
+        || message.contains("操作码非法")
         || message.contains("-101")
         || message.contains("-352")
+        || message.contains("-412")
+        || message.contains("-799")
         || message.contains("unauthorized")
 }
 

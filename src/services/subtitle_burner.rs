@@ -34,6 +34,8 @@ const MAX_DELAY: f64 = 6.0;
 /// - `fix_time`：固定弹幕（TOP/BOTTOM）时长（秒），默认 4.0。
 /// - `font_size_scale`：字号缩放比例（0.5~2.0），默认 1.0（保持原大小）。
 /// - `bottom_reserve`：底部保留高度（像素），默认 50.0，避免弹幕遮挡字幕。
+/// - `font_family`：ASS 字体，auto 使用当前平台默认字体。
+/// - `color_mode` / `color`：保留源颜色或使用统一颜色。
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct BurnConfig {
     pub opacity: f64,
@@ -41,6 +43,9 @@ pub struct BurnConfig {
     pub fix_time: f64,
     pub font_size_scale: f64,
     pub bottom_reserve: f64,
+    pub font_family: String,
+    pub color_mode: String,
+    pub color: String,
 }
 
 impl Default for BurnConfig {
@@ -51,6 +56,9 @@ impl Default for BurnConfig {
             fix_time: 4.0,
             font_size_scale: 1.0,
             bottom_reserve: 50.0,
+            font_family: "auto".to_string(),
+            color_mode: "source".to_string(),
+            color: "FFFFFF".to_string(),
         }
     }
 }

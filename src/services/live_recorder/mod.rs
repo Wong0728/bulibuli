@@ -21,7 +21,7 @@ pub use interactions::ArchivedLiveEvent;
 use interactions::{InteractionPaths, InteractionWriterArgs};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, Statement,
+    QueryOrder, QueryResult, QuerySelect, Set, Statement,
 };
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
@@ -118,6 +118,7 @@ impl std::fmt::Display for RecordingStatus {
 #[derive(Clone, Debug, Serialize)]
 pub struct RecordingInfo {
     pub room_id: i64,
+    pub recording_id: Option<i32>,
     pub title: String,
     pub status: RecordingStatus,
     /// Internal filesystem path; deliberately omitted from API serialization.
@@ -199,6 +200,10 @@ enum SessionEntry {
         cancellation: CancellationToken,
     },
     Active(RecordingSessionHandle),
+    Stopping {
+        snapshot: Arc<Mutex<RecordingInfo>>,
+        job_id: String,
+    },
 }
 
 #[derive(Clone)]
@@ -210,7 +215,10 @@ struct RecordingSessionHandle {
 
 enum SessionCommand {
     Stop(oneshot::Sender<Result<RecordingInfo>>),
-    StopBackground(oneshot::Sender<String>),
+    StopBackground {
+        job_id: String,
+        reply: oneshot::Sender<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -273,6 +281,7 @@ impl LiveRecorder {
         let room_id = init.room_id;
         let startup_snapshot = Arc::new(Mutex::new(RecordingInfo {
             room_id,
+            recording_id: None,
             title: "正在获取直播信息".to_string(),
             status: RecordingStatus::Starting,
             output_path: String::new(),
@@ -400,7 +409,12 @@ impl LiveRecorder {
         }
         let now_local = chrono::Local::now();
         let timestamp = now_local.format("%Y%m%d_%H%M%S");
-        let rendered = render_file_template(&live_cfg.file_name_template, room_id, &info.title, now_local);
+        let rendered = render_file_template(
+            &live_cfg.file_name_template,
+            room_id,
+            &info.title,
+            now_local,
+        );
         let safe_name = sanitize_filename(&rendered);
         // 保留短时间戳与随机后缀，避免同日多场直播文件名碰撞
         let unique_suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
@@ -411,10 +425,12 @@ impl LiveRecorder {
             legacy: live_dir.join(format!("{base_prefix}_danmu.json")),
             events: live_dir.join(format!("{base_prefix}_events.jsonl")),
             xml: live_dir.join(format!("{base_prefix}_danmaku.xml")),
+            standard_xml: live_dir.join(format!("{base_prefix}_danmaku_bilibili.xml")),
             summary: live_dir.join(format!("{base_prefix}_interaction_summary.json")),
         };
         let initial_info = RecordingInfo {
             room_id,
+            recording_id: None,
             title: info.title.clone(),
             status: RecordingStatus::Starting,
             output_path: first_segment.to_string_lossy().to_string(),
@@ -607,9 +623,26 @@ impl LiveRecorder {
                 return Err(error).context("保存直播录制记录失败");
             }
         };
-        persist_segment(&self.inner.db, recording.id, 0, &first_segment, "open")
-            .await
-            .context("persist initial recording segment failed")?;
+        snapshot.lock().await.recording_id = Some(recording.id);
+        if let Err(error) =
+            persist_segment(&self.inner.db, recording.id, 0, &first_segment, "open").await
+        {
+            collector_cancel.cancel();
+            if let Some(handle) = danmu_collector_monitor.take() {
+                handle.abort();
+            }
+            if let Some(handle) = danmu_write_handle.take() {
+                handle.abort();
+            }
+            mark_startup_recording(
+                &self.inner.db,
+                recording.id,
+                RecordingStatus::Failed,
+                format!("persist initial recording segment failed: {error}"),
+            )
+            .await;
+            return Err(error).context("persist initial recording segment failed");
+        }
         // FFmpeg is intentionally the final startup side effect: all metadata,
         // interaction wiring and the durable recording row already exist.
         let mut ffmpeg = match FfmpegSession::start(
@@ -642,16 +675,21 @@ impl LiveRecorder {
             }
         };
         if startup_cancellation.is_cancelled() {
+            collector_cancel.cancel();
+            if let Some(handle) = danmu_collector_monitor.take() {
+                handle.abort();
+            }
+            if let Some(handle) = danmu_write_handle.take() {
+                handle.abort();
+            }
             let _ = ffmpeg.stop_with_timeout(STOP_TIMEOUT).await;
-            let cancelled = live_recording::ActiveModel {
-                id: Set(recording.id),
-                status: Set(RecordingStatus::Cancelled.to_string()),
-                ended_at: Set(Some(chrono::Utc::now().to_rfc3339())),
-                error_msg: Set(Some("启动已由用户取消".to_owned())),
-                updated_at: Set(chrono::Utc::now().to_rfc3339()),
-                ..Default::default()
-            };
-            let _ = cancelled.update(&self.inner.db).await;
+            mark_startup_recording(
+                &self.inner.db,
+                recording.id,
+                RecordingStatus::Cancelled,
+                "启动已由用户取消".to_owned(),
+            )
+            .await;
             return Err(anyhow!("直播录制启动已取消"));
         }
         {
@@ -669,6 +707,13 @@ impl LiveRecorder {
         };
         if let Err(error) = started.update(&self.inner.db).await {
             let _ = ffmpeg.stop_with_timeout(STOP_TIMEOUT).await;
+            mark_startup_recording(
+                &self.inner.db,
+                recording.id,
+                RecordingStatus::Failed,
+                format!("update recording startup state failed: {error}"),
+            )
+            .await;
             return Err(error.into());
         }
         let (command_tx, command_rx) = mpsc::channel(8);
@@ -719,50 +764,72 @@ impl LiveRecorder {
             merge_jobs: self.inner.merge_jobs.clone(),
             merge_cancellations: self.inner.merge_cancellations.clone(),
         };
-        tokio::spawn(async move { worker.run().await });
-
         self.inner
             .sessions
             .lock()
             .await
             .insert(room_id, SessionEntry::Active(handle));
+        tokio::spawn(async move { worker.run().await });
         info!(room_id, "直播录制已开始");
         Ok(initial_info)
     }
 
     /// 停止录制并等待 worker 完成弹幕收尾和分段合并。
     pub async fn stop(&self, room_id: i64) -> Result<RecordingInfo> {
-        let handle = {
+        let startup = {
             let sessions = self.inner.sessions.lock().await;
             match sessions.get(&room_id) {
-                Some(SessionEntry::Active(handle)) => handle.clone(),
+                Some(SessionEntry::Active(_)) => None,
                 Some(SessionEntry::Starting {
                     snapshot,
                     cancellation,
                 }) => {
                     cancellation.cancel();
-                    let result = {
-                        let mut info = snapshot.lock().await;
-                        info.status = RecordingStatus::Cancelled;
-                        info.error_msg = Some("启动已由用户取消".to_owned());
-                        info.clone()
-                    };
+                    Some(snapshot.clone())
+                }
+                Some(SessionEntry::Stopping { snapshot, .. }) => {
+                    let snapshot = snapshot.clone();
                     drop(sessions);
-                    self.inner.sessions.lock().await.remove(&room_id);
-                    return Ok(result);
+                    return Ok(snapshot.lock().await.clone());
                 }
                 None => return Err(anyhow!("直播间 {room_id} 未在录制")),
             }
         };
 
+        if let Some(snapshot) = startup {
+            let result = {
+                let mut info = snapshot.lock().await;
+                info.status = RecordingStatus::Cancelled;
+                info.error_msg = Some("启动已由用户取消".to_owned());
+                info.clone()
+            };
+            self.inner.sessions.lock().await.remove(&room_id);
+            return Ok(result);
+        }
+        let handle = {
+            let sessions = self.inner.sessions.lock().await;
+            match sessions.get(&room_id) {
+                Some(SessionEntry::Active(handle)) => handle.clone(),
+                Some(SessionEntry::Stopping { snapshot, .. }) => {
+                    let snapshot = snapshot.clone();
+                    drop(sessions);
+                    return Ok(snapshot.lock().await.clone());
+                }
+                _ => return Err(anyhow!("直播间 {room_id} 未在录制")),
+            }
+        };
+
         let (reply_tx, reply_rx) = oneshot::channel();
-        handle
-            .command_tx
-            .send(SessionCommand::Stop(reply_tx))
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            handle.command_tx.send(SessionCommand::Stop(reply_tx)),
+        )
+        .await
+        .map_err(|_| anyhow!("发送停止命令超时"))?
+        .map_err(|_| anyhow!("直播录制 worker 已退出"))?;
+        let result = tokio::time::timeout(Duration::from_secs(30), reply_rx)
             .await
-            .map_err(|_| anyhow!("直播录制 worker 已退出"))?;
-        let result = reply_rx
-            .await
+            .map_err(|_| anyhow!("等待直播录制停止结果超时"))?
             .map_err(|_| anyhow!("直播录制 worker 未返回停止结果"))?;
         self.inner.sessions.lock().await.remove(&room_id);
         result
@@ -771,10 +838,11 @@ impl LiveRecorder {
     /// Request stop without keeping the HTTP request open while interaction
     /// drain and FFmpeg/ffprobe merge complete.
     pub async fn request_stop(&self, room_id: i64) -> Result<MergeJobInfo> {
-        let handle = {
+        let (handle, existing_job) = {
             let sessions = self.inner.sessions.lock().await;
             match sessions.get(&room_id) {
-                Some(SessionEntry::Active(handle)) => handle.clone(),
+                Some(SessionEntry::Active(handle)) => (Some(handle.clone()), None),
+                Some(SessionEntry::Stopping { job_id, .. }) => (None, Some(job_id.clone())),
                 Some(SessionEntry::Starting { cancellation, .. }) => {
                     cancellation.cancel();
                     return Err(anyhow!("recording startup cancellation requested"));
@@ -782,21 +850,109 @@ impl LiveRecorder {
                 None => return Err(anyhow!("recording session not found")),
             }
         };
-        let (reply_tx, reply_rx) = oneshot::channel();
-        handle
-            .command_tx
-            .send(SessionCommand::StopBackground(reply_tx))
+        if let Some(job_id) = existing_job {
+            return self
+                .merge_job(&job_id)
+                .await
+                .ok_or_else(|| anyhow!("stop operation not found"));
+        }
+        let handle = handle.ok_or_else(|| anyhow!("recording session is not active"))?;
+        let recording_id = handle
+            .snapshot
+            .lock()
             .await
-            .map_err(|_| anyhow!("recording worker stopped"))?;
-        let job_id = reply_rx
-            .await
-            .map_err(|_| anyhow!("stop operation was not acknowledged"))?;
+            .recording_id
+            .ok_or_else(|| anyhow!("recording id not available"))?;
+        if let Some(job) = self.find_active_merge_job(recording_id).await? {
+            return Ok(job);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let job = MergeJobInfo {
+            id: uuid::Uuid::new_v4().simple().to_string(),
+            recording_id,
+            status: "queued".to_owned(),
+            progress: 0,
+            error: None,
+            source_segment_count: 0,
+            cancel_requested: false,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        let job_id = job.id.clone();
+        let cancellation = CancellationToken::new();
+        handle.snapshot.lock().await.status = RecordingStatus::Stopping;
         self.inner
             .merge_jobs
             .lock()
             .await
-            .get(&job_id)
-            .cloned()
+            .insert(job_id.clone(), job.clone());
+        self.inner
+            .merge_cancellations
+            .lock()
+            .await
+            .insert(job_id.clone(), cancellation);
+        let existing_job = {
+            let mut sessions = self.inner.sessions.lock().await;
+            match sessions.get(&room_id) {
+                Some(SessionEntry::Active(_)) => {
+                    sessions.insert(
+                        room_id,
+                        SessionEntry::Stopping {
+                            snapshot: handle.snapshot.clone(),
+                            job_id: job_id.clone(),
+                        },
+                    );
+                    None
+                }
+                Some(SessionEntry::Stopping { job_id, .. }) => Some(job_id.clone()),
+                _ => Some(String::new()),
+            }
+        };
+        if let Some(existing_job_id) = existing_job {
+            self.inner.merge_jobs.lock().await.remove(&job_id);
+            self.inner.merge_cancellations.lock().await.remove(&job_id);
+            if existing_job_id.is_empty() {
+                return Err(anyhow!("recording session is no longer active"));
+            }
+            return self
+                .merge_job(&existing_job_id)
+                .await
+                .ok_or_else(|| anyhow!("stop operation not found"));
+        }
+        if let Err(error) = persist_merge_job(&self.inner.db, &job).await {
+            update_merge_job(
+                &self.inner,
+                &job_id,
+                "failed",
+                100,
+                Some("failed to persist stop operation".to_owned()),
+            )
+            .await;
+            return Err(error);
+        }
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if handle
+            .command_tx
+            .send(SessionCommand::StopBackground {
+                job_id: job_id.clone(),
+                reply: reply_tx,
+            })
+            .await
+            .is_err()
+        {
+            update_merge_job(
+                &self.inner,
+                &job_id,
+                "failed",
+                100,
+                Some("recording worker stopped".to_owned()),
+            )
+            .await;
+            return Err(anyhow!("recording worker stopped"));
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(5), reply_rx).await;
+        self.merge_job(&job_id)
+            .await
             .ok_or_else(|| anyhow!("stop operation disappeared"))
     }
 
@@ -809,6 +965,7 @@ impl LiveRecorder {
                 .map(|entry| match entry {
                     SessionEntry::Active(handle) => handle.snapshot.clone(),
                     SessionEntry::Starting { snapshot, .. } => snapshot.clone(),
+                    SessionEntry::Stopping { snapshot, .. } => snapshot.clone(),
                 })
                 .collect::<Vec<_>>()
         };
@@ -826,6 +983,7 @@ impl LiveRecorder {
             sessions.get(&room_id).map(|entry| match entry {
                 SessionEntry::Active(handle) => handle.snapshot.clone(),
                 SessionEntry::Starting { snapshot, .. } => snapshot.clone(),
+                SessionEntry::Stopping { snapshot, .. } => snapshot.clone(),
             })
         }?;
         let info = snapshot.lock().await.clone();
@@ -876,20 +1034,55 @@ impl LiveRecorder {
     }
 
     pub async fn merge_jobs(&self) -> Vec<MergeJobInfo> {
-        let mut jobs = self
+        match self
             .inner
-            .merge_jobs
-            .lock()
+            .db
+            .query_all_raw(Statement::from_string(
+                self.inner.db.get_database_backend(),
+                "SELECT id, recording_id, status, progress, error_msg, source_segment_count,
+                        cancel_requested, created_at, updated_at
+                   FROM live_merge_jobs
+                  ORDER BY updated_at DESC
+                  LIMIT 200"
+                    .to_owned(),
+            ))
             .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        jobs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        jobs
+        {
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|row| match merge_job_from_row(&row) {
+                    Ok(job) => Some(job),
+                    Err(error) => {
+                        warn!("read persisted merge job failed: {error}");
+                        None
+                    }
+                })
+                .collect(),
+            Err(error) => {
+                warn!("read persisted merge jobs failed: {error}");
+                Vec::new()
+            }
+        }
     }
 
     pub async fn merge_job(&self, job_id: &str) -> Option<MergeJobInfo> {
-        self.inner.merge_jobs.lock().await.get(job_id).cloned()
+        if let Some(job) = self.inner.merge_jobs.lock().await.get(job_id).cloned() {
+            return Some(job);
+        }
+        let row = self
+            .inner
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                self.inner.db.get_database_backend(),
+                "SELECT id, recording_id, status, progress, error_msg, source_segment_count,
+                        cancel_requested, created_at, updated_at
+                   FROM live_merge_jobs WHERE id = ?"
+                    .to_owned(),
+                [job_id.to_owned().into()],
+            ))
+            .await
+            .ok()??;
+        merge_job_from_row(&row).ok()
     }
 
     /// Rebuild a failed/recoverable recording in the background.  The source
@@ -911,6 +1104,9 @@ impl LiveRecorder {
         }
         let (ffmpeg_path, _) = self.inner.video_processor.detect_ffmpeg("auto", None).await;
         let ffmpeg_path = ffmpeg_path.ok_or_else(|| anyhow!("FFmpeg not found"))?;
+        if let Some(job) = self.find_active_merge_job(recording_id).await? {
+            return Ok(job);
+        }
         let now = chrono::Utc::now().to_rfc3339();
         let job = MergeJobInfo {
             id: uuid::Uuid::new_v4().simple().to_string(),
@@ -923,63 +1119,75 @@ impl LiveRecorder {
             created_at: now.clone(),
             updated_at: now,
         };
+        self.start_merge_job(job, ffmpeg_path, segments).await
+    }
+
+    async fn find_active_merge_job(&self, recording_id: i32) -> Result<Option<MergeJobInfo>> {
+        let row = self
+            .inner
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                self.inner.db.get_database_backend(),
+                "SELECT id, recording_id, status, progress, error_msg, source_segment_count,
+                        cancel_requested, created_at, updated_at
+                   FROM live_merge_jobs
+                  WHERE recording_id = ? AND status IN ('queued', 'running', 'cancelling')
+                  ORDER BY updated_at DESC LIMIT 1"
+                    .to_owned(),
+                [recording_id.into()],
+            ))
+            .await?;
+        row.as_ref().map(merge_job_from_row).transpose()
+    }
+
+    async fn start_merge_job(
+        &self,
+        job: MergeJobInfo,
+        ffmpeg_path: PathBuf,
+        segments: Vec<PathBuf>,
+    ) -> Result<MergeJobInfo> {
+        let cancellation = CancellationToken::new();
         self.inner
             .merge_jobs
             .lock()
             .await
             .insert(job.id.clone(), job.clone());
         if let Err(error) = persist_merge_job(&self.inner.db, &job).await {
-            warn!(job_id = %job.id, "persist merge job failed: {error}");
+            self.inner.merge_jobs.lock().await.remove(&job.id);
+            if let Some(existing) = self.find_active_merge_job(job.recording_id).await? {
+                return Ok(existing);
+            }
+            return Err(error);
         }
-        let merge_cancellation = CancellationToken::new();
         self.inner
             .merge_cancellations
             .lock()
             .await
-            .insert(job.id.clone(), merge_cancellation.clone());
+            .insert(job.id.clone(), cancellation.clone());
         let inner = self.inner.clone();
-        let job_id = job.id.clone();
-        tokio::spawn(async move {
-            update_merge_job(&inner, &job_id, "running", 10, None).await;
-            let result =
-                merge_segments_to_mp4_cancelable(&ffmpeg_path, &segments, &merge_cancellation)
-                    .await;
-            match result {
-                Ok(output) => {
-                    for segment in &segments {
-                        let _ = tokio::fs::remove_file(segment).await;
-                    }
-                    let update = live_recording::ActiveModel {
-                        id: Set(recording_id),
-                        status: Set("stopped".to_owned()),
-                        output_path: Set(Some(output.to_string_lossy().to_string())),
-                        error_msg: Set(None),
-                        is_recoverable: Set(false),
-                        updated_at: Set(chrono::Utc::now().to_rfc3339()),
-                        ..Default::default()
-                    };
-                    if let Err(error) = update.update(&inner.db).await {
-                        update_merge_job(&inner, &job_id, "failed", 90, Some(error.to_string()))
-                            .await;
-                    } else {
-                        update_merge_job(&inner, &job_id, "completed", 100, None).await;
-                    }
-                }
-                Err(error) => {
-                    let status = if merge_cancellation.is_cancelled() {
-                        "cancelled"
-                    } else {
-                        "failed"
-                    };
-                    update_merge_job(&inner, &job_id, status, 100, Some(error.to_string())).await;
-                }
-            }
-            inner.merge_cancellations.lock().await.remove(&job_id);
-        });
+        tokio::spawn(run_merge_job(
+            inner,
+            job.id.clone(),
+            job.recording_id,
+            ffmpeg_path,
+            segments,
+            cancellation,
+        ));
         Ok(job)
     }
 
     pub async fn cancel_merge(&self, job_id: &str) -> Result<MergeJobInfo> {
+        if !self.inner.merge_jobs.lock().await.contains_key(job_id) {
+            let job = self
+                .merge_job(job_id)
+                .await
+                .ok_or_else(|| anyhow!("merge job not found"))?;
+            self.inner
+                .merge_jobs
+                .lock()
+                .await
+                .insert(job_id.to_owned(), job);
+        }
         let mut jobs = self.inner.merge_jobs.lock().await;
         let job = jobs
             .get_mut(job_id)
@@ -1031,6 +1239,85 @@ impl LiveRecorder {
         Ok(result)
     }
 
+    pub async fn restore_merge_jobs(&self) -> Result<()> {
+        prune_persisted_merge_jobs(&self.inner.db).await?;
+        let rows = self
+            .inner
+            .db
+            .query_all_raw(Statement::from_string(
+                self.inner.db.get_database_backend(),
+                "SELECT id, recording_id, status, progress, error_msg, source_segment_count,
+                        cancel_requested, created_at, updated_at
+                   FROM live_merge_jobs
+                  WHERE status IN ('queued', 'running', 'cancelling')
+                  ORDER BY updated_at ASC"
+                    .to_owned(),
+            ))
+            .await?;
+        for row in rows {
+            let mut job = merge_job_from_row(&row)?;
+            let Some(recording) = live_recording::Entity::find_by_id(job.recording_id)
+                .one(&self.inner.db)
+                .await?
+            else {
+                job.status = "failed".to_owned();
+                job.progress = 100;
+                job.error = Some("recording not found after restart".to_owned());
+                job.updated_at = chrono::Utc::now().to_rfc3339();
+                persist_merge_job(&self.inner.db, &job).await?;
+                continue;
+            };
+            let directory = self
+                .inner
+                .paths
+                .download_dir
+                .join("live")
+                .join(recording.room_id.to_string());
+            let segments =
+                find_recording_segments(&directory, recording.output_path.as_deref()).await;
+            let (ffmpeg_path, _) = self.inner.video_processor.detect_ffmpeg("auto", None).await;
+            let Some(ffmpeg_path) = ffmpeg_path else {
+                job.status = "failed".to_owned();
+                job.progress = 100;
+                job.error = Some("FFmpeg not found after restart".to_owned());
+                job.updated_at = chrono::Utc::now().to_rfc3339();
+                persist_merge_job(&self.inner.db, &job).await?;
+                continue;
+            };
+            if segments.is_empty() {
+                job.status = "failed".to_owned();
+                job.progress = 100;
+                job.error = Some("no recoverable recording segments found".to_owned());
+                job.updated_at = chrono::Utc::now().to_rfc3339();
+                persist_merge_job(&self.inner.db, &job).await?;
+                continue;
+            }
+            self.inner
+                .merge_jobs
+                .lock()
+                .await
+                .insert(job.id.clone(), job.clone());
+            let cancellation = CancellationToken::new();
+            if job.status == "cancelling" || job.cancel_requested {
+                cancellation.cancel();
+            }
+            self.inner
+                .merge_cancellations
+                .lock()
+                .await
+                .insert(job.id.clone(), cancellation.clone());
+            tokio::spawn(run_merge_job(
+                self.inner.clone(),
+                job.id,
+                recording.id,
+                ffmpeg_path,
+                segments,
+                cancellation,
+            ));
+        }
+        Ok(())
+    }
+
     /// Mark sessions left in a running state by a previous crash as failed and
     /// report residual FLV segments for manual recovery instead of silently
     /// presenting them as active recordings.
@@ -1075,7 +1362,11 @@ impl LiveRecorder {
             sessions
                 .iter()
                 .filter_map(|(room_id, entry)| {
-                    matches!(entry, SessionEntry::Active(_)).then_some(*room_id)
+                    matches!(
+                        entry,
+                        SessionEntry::Active(_) | SessionEntry::Starting { .. }
+                    )
+                    .then_some(*room_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -1151,33 +1442,32 @@ impl RecordingWorker {
                             let _ = reply.send(result);
                             return;
                         }
-                        Some(SessionCommand::StopBackground(reply)) => {
+                        Some(SessionCommand::StopBackground { job_id, reply }) => {
                             self.stop_requested = true;
                             self.stop_reason = Some(STOP_REASON_MANUAL);
-                            let now = chrono::Utc::now().to_rfc3339();
-                            let job = MergeJobInfo {
-                                id: uuid::Uuid::new_v4().simple().to_string(),
-                                recording_id: self.recording_id,
-                                status: "queued".to_owned(),
-                                progress: 0,
-                                error: None,
-                                source_segment_count: self.segments.len(),
-                                cancel_requested: false,
-                                created_at: now.clone(),
-                                updated_at: now,
+                            let job_snapshot = if let Some(job) = self.merge_jobs.lock().await.get_mut(&job_id) {
+                                job.source_segment_count = self.segments.len();
+                                job.updated_at = chrono::Utc::now().to_rfc3339();
+                                Some(job.clone())
+                            } else {
+                                None
                             };
-                            let job_id = job.id.clone();
-                            let merge_cancellation = CancellationToken::new();
-                            self.merge_cancellations
-                                .lock()
-                                .await
-                                .insert(job_id.clone(), merge_cancellation.clone());
-                            self.merge_jobs.lock().await.insert(job_id.clone(), job);
-                            if let Some(job) = self.merge_jobs.lock().await.get(&job_id).cloned() {
+                            if let Some(job) = job_snapshot {
                                 if let Err(error) = persist_merge_job(&self.db, &job).await {
                                     warn!(job_id = %job_id, "persist merge job failed: {error}");
                                 }
                             }
+                            let merge_cancellation = self
+                                .merge_cancellations
+                                .lock()
+                                .await
+                                .get(&job_id)
+                                .cloned()
+                                .unwrap_or_else(CancellationToken::new);
+                            self.merge_cancellations
+                                .lock()
+                                .await
+                                .insert(job_id.clone(), merge_cancellation.clone());
                             let merge_jobs = self.merge_jobs.clone();
                             let merge_cancellations = self.merge_cancellations.clone();
                             let sessions = self.sessions.clone();
@@ -1461,7 +1751,10 @@ impl RecordingWorker {
         // 混合不同格式的分段。仅在同格式线路都不可用时才跨格式降级。
         let (current_format, current_codec) = {
             let snapshot = self.snapshot.lock().await;
-            (snapshot.stream_format.clone(), snapshot.stream_codec.clone())
+            (
+                snapshot.stream_format.clone(),
+                snapshot.stream_codec.clone(),
+            )
         };
         let same_profile = |stream: &LiveStreamUrl| {
             current_format
@@ -1610,6 +1903,7 @@ impl RecordingWorker {
         }
 
         self.set_status(RecordingStatus::Finalizing).await;
+        persist_closed_segments(&self.db, self.recording_id, &self.segments).await;
         let merge_result = match merge_cancellation {
             Some(cancellation) => {
                 merge_segments_to_mp4_cancelable(&self.ffmpeg_path, &self.segments, cancellation)
@@ -1665,7 +1959,6 @@ impl RecordingWorker {
         if info.capture_mode != "off" && info.interaction_capture_status == "capturing" {
             info.interaction_capture_status = "completed".to_owned();
         }
-        persist_closed_segments(&self.db, self.recording_id, &self.segments).await;
         self.persist_recording(&info, true).await;
         *self.snapshot.lock().await = info.clone();
         info!(
@@ -1854,6 +2147,29 @@ async fn total_file_size(paths: &[PathBuf]) -> u64 {
     total
 }
 
+async fn mark_startup_recording(
+    db: &DatabaseConnection,
+    recording_id: i32,
+    status: RecordingStatus,
+    error: String,
+) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let update = live_recording::ActiveModel {
+        id: Set(recording_id),
+        status: Set(status.to_string()),
+        ended_at: Set(Some(now.clone())),
+        error_msg: Set(Some(redact_diagnostics(&error))),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    if let Err(update_error) = update.update(db).await {
+        warn!(
+            recording_id,
+            "failed to persist recording startup failure: {update_error}"
+        );
+    }
+}
+
 async fn persist_segment(
     db: &DatabaseConnection,
     recording_id: i32,
@@ -1950,6 +2266,73 @@ async fn persist_merge_job(db: &DatabaseConnection, job: &MergeJobInfo) -> Resul
     Ok(())
 }
 
+async fn prune_persisted_merge_jobs(db: &DatabaseConnection) -> Result<()> {
+    let cutoff = (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339();
+    db.execute_raw(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "DELETE FROM live_merge_jobs
+          WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?"
+            .to_owned(),
+        [cutoff.into()],
+    ))
+    .await?;
+    db.execute_raw(Statement::from_string(
+        db.get_database_backend(),
+        "DELETE FROM live_merge_jobs
+          WHERE id IN (
+              SELECT id FROM live_merge_jobs
+               WHERE status IN ('completed', 'failed', 'cancelled')
+               ORDER BY updated_at DESC LIMIT -1 OFFSET 200
+          )"
+        .to_owned(),
+    ))
+    .await?;
+    Ok(())
+}
+
+async fn run_merge_job(
+    inner: Arc<LiveRecorderInner>,
+    job_id: String,
+    recording_id: i32,
+    ffmpeg_path: PathBuf,
+    segments: Vec<PathBuf>,
+    cancellation: CancellationToken,
+) {
+    update_merge_job(&inner, &job_id, "running", 10, None).await;
+    let result = merge_segments_to_mp4_cancelable(&ffmpeg_path, &segments, &cancellation).await;
+    match result {
+        Ok(output) => {
+            persist_closed_segments(&inner.db, recording_id, &segments).await;
+            for segment in &segments {
+                let _ = tokio::fs::remove_file(segment).await;
+            }
+            let update = live_recording::ActiveModel {
+                id: Set(recording_id),
+                status: Set("stopped".to_owned()),
+                output_path: Set(Some(output.to_string_lossy().to_string())),
+                error_msg: Set(None),
+                is_recoverable: Set(false),
+                updated_at: Set(chrono::Utc::now().to_rfc3339()),
+                ..Default::default()
+            };
+            if let Err(error) = update.update(&inner.db).await {
+                update_merge_job(&inner, &job_id, "failed", 90, Some(error.to_string())).await;
+            } else {
+                update_merge_job(&inner, &job_id, "completed", 100, None).await;
+            }
+        }
+        Err(error) => {
+            let status = if cancellation.is_cancelled() {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            update_merge_job(&inner, &job_id, status, 100, Some(error.to_string())).await;
+        }
+    }
+    inner.merge_cancellations.lock().await.remove(&job_id);
+}
+
 async fn update_merge_job(
     inner: &Arc<LiveRecorderInner>,
     job_id: &str,
@@ -1971,6 +2354,20 @@ async fn update_merge_job(
             warn!(job_id, "persist merge job failed: {error}");
         }
     }
+}
+
+fn merge_job_from_row(row: &QueryResult) -> Result<MergeJobInfo> {
+    Ok(MergeJobInfo {
+        id: row.try_get("", "id")?,
+        recording_id: row.try_get("", "recording_id")?,
+        status: row.try_get("", "status")?,
+        progress: row.try_get::<i32>("", "progress")?.clamp(0, 100) as u8,
+        error: row.try_get("", "error_msg")?,
+        source_segment_count: row.try_get::<i32>("", "source_segment_count")?.max(0) as usize,
+        cancel_requested: row.try_get::<i32>("", "cancel_requested")? != 0,
+        created_at: row.try_get("", "created_at")?,
+        updated_at: row.try_get("", "updated_at")?,
+    })
 }
 
 async fn find_recording_segments(directory: &Path, output_path: Option<&str>) -> Vec<PathBuf> {
@@ -2093,6 +2490,9 @@ mod tests {
     fn file_template_falls_back_for_empty_result() {
         let now = chrono::Local::now();
         assert_eq!(render_file_template("   ", 123, "标题", now), "live_123");
-        assert_eq!(render_file_template("{missing}", 456, "标题", now), "{missing}");
+        assert_eq!(
+            render_file_template("{missing}", 456, "标题", now),
+            "{missing}"
+        );
     }
 }

@@ -7,7 +7,7 @@ use super::DanmakuService;
 
 /// 评论 HTML 的内嵌样式（简洁，贴近下载助手配色）。
 const COMMENT_HTML_STYLE: &str = r#"<style>
-:root { --brand:#00a1d6; --text:#18191c; --muted:#9499a0; --border:#e3e5e7; --bg:#f6f7f8; }
+:root { --brand:#00a1d6; --text:#18191c; --muted:#9499a0; --border:#e3e5e7; --bg:#f6f7f8; --vip:#fb7299; }
 * { box-sizing:border-box; }
 body { margin:0; padding:20px; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; font-size:14px; line-height:1.6; }
 .wrap { max-width:820px; margin:0 auto; }
@@ -19,7 +19,9 @@ body { margin:0; padding:20px; background:var(--bg); color:var(--text); font-fam
 .cmt-idx { color:var(--muted); font-size:12px; }
 .cmt-user { font-weight:600; color:var(--brand); }
 .cmt-lv { font-size:11px; color:var(--muted); border:1px solid var(--border); border-radius:4px; padding:0 5px; }
+.cmt-vip { color:#fff; background:var(--vip); border-radius:999px; padding:0 6px; font-size:11px; font-weight:600; }
 .cmt-meta { color:var(--muted); font-size:12px; margin-left:auto; }
+.cmt-meta-item { white-space:nowrap; }
 .cmt-body { white-space:pre-wrap; word-break:break-word; }
 .cmt-replies { margin-top:10px; padding-left:12px; border-left:2px solid var(--border); }
 .cmt-replies-title { color:var(--muted); font-size:12px; margin-bottom:6px; }
@@ -38,6 +40,33 @@ impl DanmakuService {
             .replace('>', "&gt;")
             .replace('"', "&quot;")
             .replace('\'', "&#39;")
+    }
+
+    fn user_badges(comment: &Value) -> String {
+        let name_color = comment["name_color"].as_str().unwrap_or("");
+        let color = if name_color.starts_with('#') && name_color.len() == 7 {
+            format!(" style=\"color:{}\"", Self::html_escape(name_color))
+        } else {
+            String::new()
+        };
+        let vip = if comment["vip_status"].as_i64().unwrap_or(0) > 0 {
+            let label = comment["vip_label"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("大会员");
+            format!(
+                "<span class=\"cmt-vip\">{}</span>",
+                Self::html_escape(label)
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "<span class=\"cmt-user\"{}>{}</span>{}",
+            color,
+            Self::html_escape(comment["uname"].as_str().unwrap_or("")),
+            vip
+        )
     }
 
     /// 生成自包含评论 HTML：可直接浏览器打开，样式贴近下载助手；
@@ -63,15 +92,14 @@ impl DanmakuService {
         ));
 
         for (i, c) in comments.iter().enumerate() {
-            let uname = Self::html_escape(c["uname"].as_str().unwrap_or(""));
             let level = c["level"].as_i64().unwrap_or(0);
             let like = c["like"].as_i64().unwrap_or(0);
             let rcount = c["total_replies"].as_i64().unwrap_or(0);
             let time = fmt_time(c["ctime"].as_i64().unwrap_or(0));
             let message = Self::html_escape(c["message"].as_str().unwrap_or(""));
             html.push_str(&format!(
-                "<div class=\"cmt\"><div class=\"cmt-head\"><span class=\"cmt-idx\">#{}</span><span class=\"cmt-user\">{}</span><span class=\"cmt-lv\">Lv{}</span><span class=\"cmt-meta\">👍 {} · 💬 {} · {}</span></div><div class=\"cmt-body\">{}</div>",
-                i + 1, uname, level, like, rcount, time, message
+                "<div class=\"cmt\"><div class=\"cmt-head\"><span class=\"cmt-idx\">#{}</span>{}<span class=\"cmt-lv\">Lv{}</span><span class=\"cmt-meta\"><span class=\"cmt-meta-item\">赞 {}</span> · <span class=\"cmt-meta-item\">回复 {}</span> · {}</span></div><div class=\"cmt-body\">{}</div>",
+                i + 1, Self::user_badges(c), level, like, rcount, time, message
             ));
             if let Some(replies) = c["replies"].as_array() {
                 if !replies.is_empty() {
@@ -80,14 +108,13 @@ impl DanmakuService {
                         replies.len(), rcount
                     ));
                     for r in replies {
-                        let runame = Self::html_escape(r["uname"].as_str().unwrap_or(""));
                         let rlevel = r["level"].as_i64().unwrap_or(0);
                         let rlike = r["like"].as_i64().unwrap_or(0);
                         let rtime = fmt_time(r["ctime"].as_i64().unwrap_or(0));
                         let rmsg = Self::html_escape(r["message"].as_str().unwrap_or(""));
                         html.push_str(&format!(
-                            "<div class=\"reply\"><div class=\"reply-head\"><span class=\"cmt-user\">{}</span><span class=\"cmt-lv\">Lv{}</span><span class=\"cmt-meta\">👍 {} · {}</span></div><div class=\"reply-body\">{}</div></div>",
-                            runame, rlevel, rlike, rtime, rmsg
+                            "<div class=\"reply\"><div class=\"reply-head\">{}<span class=\"cmt-lv\">Lv{}</span><span class=\"cmt-meta\">赞 {} · {}</span></div><div class=\"reply-body\">{}</div></div>",
+                            Self::user_badges(r), rlevel, rlike, rtime, rmsg
                         ));
                     }
                     html.push_str("</div>");
@@ -103,5 +130,24 @@ impl DanmakuService {
         html.push_str(&data_json);
         html.push_str("</script>\n</body>\n</html>");
         html
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn renders_optional_vip_badge_and_escapes_comment_name() {
+        let badges = DanmakuService::user_badges(&json!({
+            "uname": "<用户>",
+            "vip_status": 1,
+            "vip_label": "年度大会员",
+            "name_color": "#fb7299"
+        }));
+        assert!(badges.contains("年度大会员"));
+        assert!(badges.contains("&lt;用户&gt;"));
+        assert!(!badges.contains('👍'));
     }
 }

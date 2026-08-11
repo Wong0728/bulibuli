@@ -11,18 +11,9 @@ use super::models::user::{
     UserSearchPage, UserSeriesList, UserVideo, UserVideosPage,
 };
 use super::BiliApi;
-use super::{VideoListCacheKey, VIDEO_LIST_CACHE_TTL};
+use super::{session_fingerprint, VideoListCacheKey, VIDEO_LIST_CACHE_TTL};
 
 impl BiliApi {
-    pub async fn get_user_videos(
-        &self,
-        uid: i64,
-        cookies: &str,
-        limit: i32,
-    ) -> Result<UserVideosPage> {
-        self.get_user_videos_page(uid, cookies, 1, limit).await
-    }
-
     /// 获取投稿列表的指定页。监控服务用它向后扫描直到命中检查点，
     /// 避免仅查询"最新 N 条"时在高频投稿期间漏档。
     ///
@@ -35,7 +26,7 @@ impl BiliApi {
         page: i32,
         page_size: i32,
     ) -> Result<UserVideosPage> {
-        let cache_key: VideoListCacheKey = (uid, page, page_size);
+        let cache_key: VideoListCacheKey = (session_fingerprint(cookies), uid, page, page_size);
 
         // 快速路径：读锁检查缓存命中
         {
@@ -83,6 +74,8 @@ impl BiliApi {
             total: data.page.count,
             page: page.max(1),
             page_size: ps,
+            offset: (page.max(1) - 1) * ps,
+            has_more: i64::from(page.max(1)) * i64::from(ps) < data.page.count,
         };
 
         // 写入缓存
@@ -100,38 +93,52 @@ impl BiliApi {
     /// 接口：https://api.bilibili.com/x/polymer/web-space/seasons_series_list?mid={uid}
     pub async fn get_user_series(&self, uid: i64, cookies: &str) -> Result<UserSeriesList> {
         let enriched = self.enrich_cookies(cookies).await?;
-        let mut params = HashMap::new();
-        params.insert("mid".to_string(), uid.to_string());
-        params.insert("page_num".to_string(), "1".to_string());
-        params.insert("page_size".to_string(), "20".to_string());
-        params.insert("web_location".to_string(), "333.1387".to_string());
-
         let url = "https://api.bilibili.com/x/polymer/web-space/seasons_series_list";
         let referer = format!("https://space.bilibili.com/{uid}/lists");
         debug!(url, uid, "B站 API 请求: get_user_series");
-
-        let request = self
-            .build_get_request(url, &params, &referer, &enriched)
-            .await;
-        let resp = self.send_with_retry(request).await?;
-        let data: SeasonsSeriesData = self.parse_data(resp, "get_user_series").await?;
-
         let mut series: Vec<SeriesEntry> = Vec::new();
-        // 解析合集 (seasons_list)：以 season_id 为主键
-        for item in data.items_lists.seasons_list {
-            if item.meta.season_id != 0 {
-                series.push(series_entry(&item.meta, item.meta.season_id, "season"));
+        let mut seen = std::collections::HashSet::new();
+        let mut truncated = false;
+        const PAGE_SIZE: i32 = 20;
+        const MAX_PAGES: i32 = 50;
+        for page_num in 1..=MAX_PAGES {
+            let mut params = HashMap::new();
+            params.insert("mid".to_string(), uid.to_string());
+            params.insert("page_num".to_string(), page_num.to_string());
+            params.insert("page_size".to_string(), PAGE_SIZE.to_string());
+            params.insert("web_location".to_string(), "333.1387".to_string());
+            let request = self
+                .build_get_request(url, &params, &referer, &enriched)
+                .await;
+            let resp = self.send_with_retry(request).await?;
+            let data: SeasonsSeriesData = self.parse_data(resp, "get_user_series").await?;
+            let returned = data.items_lists.seasons_list.len() + data.items_lists.series_list.len();
+            let before = series.len();
+            for item in data.items_lists.seasons_list {
+                if item.meta.season_id != 0 && seen.insert(("season", item.meta.season_id)) {
+                    series.push(series_entry(&item.meta, item.meta.season_id, "season"));
+                }
             }
-        }
-        // 解析系列 (series_list)：以 series_id 为主键
-        for item in data.items_lists.series_list {
-            if item.meta.series_id != 0 {
-                series.push(series_entry(&item.meta, item.meta.series_id, "series"));
+            for item in data.items_lists.series_list {
+                if item.meta.series_id != 0 && seen.insert(("series", item.meta.series_id)) {
+                    series.push(series_entry(&item.meta, item.meta.series_id, "series"));
+                }
+            }
+            if returned == 0 || series.len() == before || returned < PAGE_SIZE as usize {
+                break;
+            }
+            if page_num == MAX_PAGES {
+                truncated = true;
             }
         }
 
         let total = series.len() as i64;
-        Ok(UserSeriesList { series, total })
+        Ok(UserSeriesList {
+            series,
+            total,
+            has_more: truncated,
+            truncated,
+        })
     }
 
     /// 获取合集/系列内的视频列表。
@@ -147,6 +154,9 @@ impl BiliApi {
         offset: Option<i32>,
         limit: Option<i32>,
     ) -> Result<SeriesVideosPage> {
+        if !matches!(collection_type, "season" | "series") {
+            return Err(anyhow::anyhow!("不支持的合集类型: {collection_type}"));
+        }
         let enriched = self.enrich_cookies(cookies).await?;
 
         let limit = limit.unwrap_or(30).clamp(1, 30);

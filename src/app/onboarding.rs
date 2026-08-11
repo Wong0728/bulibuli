@@ -196,12 +196,22 @@ async fn run_qr_login_inner(state: &SharedState, paths: &AppPaths) -> Result<()>
         match poll.code {
             0 => {
                 if let Some(cookies) = poll.cookies.as_deref().filter(|c| !c.trim().is_empty()) {
+                    let nav = state
+                        .bili
+                        .bili_api
+                        .get_nav_info(cookies)
+                        .await
+                        .context("扫码凭证校验失败")?;
+                    if !nav.is_login {
+                        anyhow::bail!("扫码凭证未通过 B 站登录校验");
+                    }
                     state
                         .infra
                         .settings_service
                         .save_cookie_header(cookies)
                         .await
                         .context("保存扫码登录凭证失败")?;
+                    state.bili.bili_api.invalidate_session_caches().await;
                 }
                 println!("✓ 扫码登录成功");
                 refresh_bili_uid(state, paths).await;

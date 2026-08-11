@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 use super::models::auth::{NavData, NavStatus, QrcodeGenerate, QrcodePoll, QrcodePollData};
@@ -51,8 +52,16 @@ impl BiliApi {
             .await;
         let resp = self.send_with_retry(request).await?;
         debug!(url, "B站 API 请求: get_qrcode_url");
-        self.parse_data::<QrcodeGenerate>(resp, "get_qrcode_url")
-            .await
+        let result = self
+            .parse_data::<QrcodeGenerate>(resp, "get_qrcode_url")
+            .await?;
+        if !result.qrcode_key.is_empty() {
+            self.qrcode_sessions
+                .lock()
+                .await
+                .insert(result.qrcode_key.clone(), (HashMap::new(), Instant::now()));
+        }
+        Ok(result)
     }
 
     pub async fn check_qrcode_status(&self, qrcode_key: &str) -> Result<QrcodePoll> {
@@ -76,7 +85,7 @@ impl BiliApi {
         let resp = self.send_with_retry(request).await?;
         debug!(url, qrcode_key, "B站 API 请求: check_qrcode_status");
         // 注意：必须先收集 cookies 再读 body，否则可能丢失
-        let cookies: HashMap<String, String> = resp
+        let response_cookies: HashMap<String, String> = resp
             .cookies()
             .map(|c| (c.name().to_string(), c.value().to_string()))
             .collect();
@@ -87,18 +96,37 @@ impl BiliApi {
             message: poll.message,
             cookies: None,
         };
+        let mut sessions = self.qrcode_sessions.lock().await;
+        if sessions
+            .get(qrcode_key)
+            .is_some_and(|(_, created_at)| created_at.elapsed() >= Duration::from_secs(5 * 60))
+        {
+            sessions.remove(qrcode_key);
+        }
+        let entry = sessions
+            .entry(qrcode_key.to_string())
+            .or_insert_with(|| (HashMap::new(), Instant::now()));
+        if entry.1.elapsed() >= Duration::from_secs(5 * 60) {
+            entry.0.clear();
+            entry.1 = Instant::now();
+        }
+        entry.0.extend(response_cookies);
         if poll.code == 0 {
-            if cookies.contains_key("SESSDATA") {
-                let cookie_str = cookies
+            if entry.0.contains_key("SESSDATA") {
+                let cookie_str = entry
+                    .0
                     .iter()
                     .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>()
                     .join("; ");
                 result.cookies = Some(cookie_str);
+                sessions.remove(qrcode_key);
             } else {
                 result.code = -1;
                 result.message = "登录成功但未获取到有效 Cookies".to_string();
             }
+        } else if matches!(poll.code, 86038 | 86039) {
+            sessions.remove(qrcode_key);
         }
         Ok(result)
     }

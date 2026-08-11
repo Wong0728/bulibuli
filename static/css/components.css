@@ -1,0 +1,9 @@
+.form-note,
+.login-user-sub,
+.settings-fragment-note {
+    color: var(--text-muted-deep);
+}
+
+.modal-overlay[role="dialog"] {
+    overscroll-behavior: contain;
+}

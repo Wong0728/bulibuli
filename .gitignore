@@ -1,5 +1,7 @@
 /target
 /dist/
+/static/dist/
+/static/js/node_modules/
 /data/
 /__pycache__/
 *.py[cod]

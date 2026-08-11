@@ -39,7 +39,7 @@ pub(super) async fn convert_subtitle_to_ass(
     let ass_path = output_dir.join(format!("subtitle-{}.ass", uuid::Uuid::new_v4()));
 
     let alpha = hex_alpha(config.opacity);
-    let font_name = choose_font();
+    let font_name = choose_font(&config.font_family);
     let mut lines = vec![
         format!(
             "[Script Info]\n\

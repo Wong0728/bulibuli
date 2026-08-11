@@ -53,6 +53,7 @@ pub(super) async fn validate_uid(
     State(state): State<SharedState>,
     Query(q): Query<ValidateUidQuery>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
+    crate::api::validate_bili_id("UID", q.uid)?;
     info!("开始校验博主 UID: {}", q.uid);
     let cookies = state
         .infra
@@ -76,6 +77,7 @@ pub(super) async fn get_series(
     State(state): State<SharedState>,
     Query(q): Query<GetSeriesQuery>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
+    crate::api::validate_bili_id("UID", q.uid)?;
     let cookies = state.infra.settings_service.cookie_header().await?;
     match state.bili.bili_api.get_user_series(q.uid, &cookies).await {
         Ok(result) => Ok(Json(ApiResponse::success(serde_json::to_value(result)?))),
@@ -101,12 +103,33 @@ pub(super) async fn get_series_videos(
     State(state): State<SharedState>,
     Query(q): Query<GetSeriesVideosQuery>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let cookies = state.infra.settings_service.cookie_header().await?;
     let ctype = q.collection_type.as_deref().unwrap_or("series");
+    crate::api::validate_bili_id("UID", q.uid)?;
+    crate::api::validate_bili_id("合集 ID", q.series_id)?;
+    if !matches!(ctype, "season" | "series") {
+        return Err(AppError::BadRequest(
+            "collection_type 只能是 season 或 series".to_string(),
+        ));
+    }
+    let offset = q.offset.unwrap_or(0);
+    let limit = q.limit.unwrap_or(30);
+    if offset < 0 || !(1..=30).contains(&limit) || offset % limit != 0 {
+        return Err(AppError::BadRequest(
+            "合集分页 offset 必须非负且按 1-30 的 limit 对齐".to_string(),
+        ));
+    }
+    let cookies = state.infra.settings_service.cookie_header().await?;
     match state
         .bili
         .bili_api
-        .get_series_videos(q.uid, q.series_id, ctype, &cookies, q.offset, q.limit)
+        .get_series_videos(
+            q.uid,
+            q.series_id,
+            ctype,
+            &cookies,
+            Some(offset),
+            Some(limit),
+        )
         .await
     {
         Ok(result) => Ok(Json(ApiResponse::success(serde_json::to_value(result)?))),

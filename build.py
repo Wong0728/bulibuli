@@ -118,6 +118,22 @@ def check_cargo():
     print("  cargo 可用")
 
 
+def build_frontend_bundle():
+    """Build the optional portable bundle; development still serves raw modules."""
+    frontend_dir = ROOT / "static" / "js"
+    npm = "npm.cmd" if sys.platform == "win32" else "npm"
+    if shutil.which(npm) is None:
+        print("  [FAIL] npm is required for the frontend bundle")
+        raise SystemExit(1)
+    run([npm, "ci", "--ignore-scripts"], cwd=str(frontend_dir))
+    run([npm, "run", "build"], cwd=str(frontend_dir))
+    bundle = ROOT / "static" / "dist" / "app.bundle.js"
+    if not bundle.is_file():
+        print(f"  [FAIL] frontend bundle was not created: {bundle}")
+        raise SystemExit(1)
+    return bundle
+
+
 def build_release():
     """cargo build --release"""
     print("[2/5] 编译 Rust 项目 (release)...")
@@ -165,6 +181,12 @@ def assemble_portable(exe_path):
     static_src = ROOT / "static"
     if static_src.exists():
         shutil.copytree(static_src, portable_dir / "static")
+        portable_index = portable_dir / "static" / "index.html"
+        if (portable_dir / "static" / "dist" / "app.bundle.js").is_file() and portable_index.is_file():
+            index_text = portable_index.read_text(encoding="utf-8")
+            portable_index.write_text(
+                index_text.replace("js/app.js", "dist/app.bundle.js"), encoding="utf-8"
+            )
         print("  已复制: static/")
     else:
         print("  [警告] static/ 目录不存在，前端资源将缺失")
@@ -215,7 +237,7 @@ def _quality_error(message):
 def run_quality_checks():
     """Run the mandatory formatting, lint, test and source-policy gates."""
     print("[check] running mandatory quality gates")
-    for command in [
+    commands = [
         ["cargo", "fmt", "--all", "--", "--check"],
         ["cargo", "check", "--all-targets"],
         [
@@ -228,8 +250,13 @@ def run_quality_checks():
             "warnings",
         ],
         ["cargo", "test", "--all-targets"],
-        ["node", "--test", "tests/frontend_api_contract.mjs"],
-    ]:
+    ]
+    frontend_tests = sorted((ROOT / "tests").glob("*.mjs"))
+    if frontend_tests:
+        commands.append(
+            ["node", "--test", *(str(path.relative_to(ROOT)) for path in frontend_tests)]
+        )
+    for command in commands:
         run(command, cwd=str(ROOT))
 
     ok = True
@@ -270,15 +297,22 @@ def run_quality_checks():
             print(f"  [错误] JavaScript 语法检查失败: {path.relative_to(ROOT)}")
             raise SystemExit(1)
 
+    build_frontend_bundle()
+
     rust_source = "\n".join(path.read_text(encoding="utf-8") for path in rust_files)
     js_source = "\n".join(path.read_text(encoding="utf-8") for path in first_party_js)
     html_source = "\n".join(
         (ROOT / "static" / name).read_text(encoding="utf-8")
-        for name in ("index.html", "setup.html")
+        for name in ("index.html", "setup.html", "settings.html")
     )
-    css_lines = (ROOT / "static" / "css" / "style.css").read_text(
-        encoding="utf-8"
-    ).splitlines()
+    css_files = [ROOT / "static" / "css" / "style.css"] + sorted(
+        (ROOT / "static" / "css").glob("*.css")
+    )
+    css_lines = [
+        line
+        for path in dict.fromkeys(css_files)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
     api_source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "src" / "api").rglob("*.rs"))
@@ -359,6 +393,7 @@ def main():
     dist_dir.mkdir(exist_ok=True)
 
     check_cargo()
+    build_frontend_bundle()
     exe_path = build_release()
     assemble_portable(exe_path)
 

@@ -9,12 +9,23 @@ use super::models::playurl::{
     AudioQuality, AudioStreams, PlayurlData, StreamQuality, VideoStreams,
 };
 use super::models::video::{SubtitleInfo, VideoInfo};
-use super::{BiliApi, QUALITY_NAMES};
+use super::{session_fingerprint, BiliApi, QUALITY_NAMES};
+
+const VIDEO_INFO_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
 impl BiliApi {
     /// 获取视频详情（`/x/web-interface/wbi/view`）。
     /// 业务失败（下架/风控/未登录等）一律走 `Err`（由统一入口 classify）。
     pub async fn get_video_info(&self, bvid: &str, cookies: &str) -> Result<VideoInfo> {
+        let cache_key = (session_fingerprint(cookies), bvid.to_string());
+        {
+            let cache = self.video_info_cache.read().await;
+            if let Some((info, fetched_at)) = cache.get(&cache_key) {
+                if fetched_at.elapsed() < VIDEO_INFO_CACHE_TTL {
+                    return Ok(info.clone());
+                }
+            }
+        }
         let enriched = self.enrich_cookies(cookies).await?;
 
         let (img_key, sub_key) = self.get_wbi_keys(&enriched).await?;
@@ -34,6 +45,9 @@ impl BiliApi {
         let mut info = self.parse_data::<VideoInfo>(resp, "get_video_info").await?;
         info.pic = super::models::user::normalize_image_url(&info.pic);
         info.owner.face = super::models::user::normalize_image_url(&info.owner.face);
+        let mut cache = self.video_info_cache.write().await;
+        cache.retain(|_, (_, fetched_at)| fetched_at.elapsed() < VIDEO_INFO_CACHE_TTL);
+        cache.insert(cache_key, (info.clone(), std::time::Instant::now()));
         Ok(info)
     }
 

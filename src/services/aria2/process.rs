@@ -12,10 +12,10 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use super::{Aria2Inner, Aria2Manager, Aria2Mode, DEFAULT_ARIA2_PORT};
+use super::{rpc_endpoint, Aria2Inner, Aria2Manager, Aria2Mode, DEFAULT_ARIA2_PORT};
 
 impl Aria2Manager {
-    pub fn new(paths: Arc<AppPaths>, config: &AppConfig) -> Result<Self> {
+    pub fn new(paths: Arc<AppPaths>, _config: &AppConfig) -> Result<Self> {
         Ok(Self {
             // Aria2 RPC 通信发生在本机或用户指定的外部主机，必须严格校验 TLS，
             // 防止 RPC secret 与管理指令在传输中被中间人截获/篡改。
@@ -24,7 +24,6 @@ impl Aria2Manager {
                 .build()
                 .context("创建 Aria2 HTTP 客户端失败")?,
             paths,
-            tls_verify: config.tls_verify,
             inner: Arc::new(Mutex::new(Aria2Inner {
                 port: DEFAULT_ARIA2_PORT,
                 secret: String::new(),
@@ -68,12 +67,13 @@ impl Aria2Manager {
             );
         }
 
+        let endpoint = rpc_endpoint(host, port)?;
         {
             let mut inner = self.inner.lock().await;
             inner.mode = mode;
             inner.port = port;
             inner.secret = secret.clone();
-            inner.rpc_url = format!("http://{host}:{port}/jsonrpc");
+            inner.rpc_url = endpoint;
             inner.available_cache = None;
             inner.started_at = Some(std::time::Instant::now());
             inner.ready = false;
@@ -135,11 +135,8 @@ impl Aria2Manager {
             .arg(format!("--log={}", log.to_string_lossy()))
             .arg("--log-level=warn")
             .arg(format!("--input-file={}", session.to_string_lossy()))
-            // SSL/TLS: 受 tls_verify 配置控制，默认不验证以兼容 B站 MCDN 节点
-            .arg(format!(
-                "--check-certificate={}",
-                if self.tls_verify { "true" } else { "false" }
-            ))
+            // aria2 可能携带用户 Cookie，凭据下载始终严格校验证书。
+            .arg("--check-certificate=true")
             // `--timeout` 是单连接停滞超时，不是整个文件的下载时限。
             .arg("--timeout=30")
             .arg("--connect-timeout=20")
@@ -286,8 +283,11 @@ impl Aria2Manager {
             }
         }
 
-        let mut inner = self.inner.lock().await;
-        if let Some(mut child) = inner.child.take() {
+        let child = {
+            let mut inner = self.inner.lock().await;
+            inner.child.take()
+        };
+        if let Some(mut child) = child {
             // 等待 aria2c 进程退出，最多 5 秒
             match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
                 Ok(Ok(status)) => info!("Aria2 进程已退出 (status={status})"),
@@ -304,6 +304,7 @@ impl Aria2Manager {
                 }
             }
         }
+        let mut inner = self.inner.lock().await;
         inner.available_cache = None;
         inner.started_at = None;
         inner.ready = false;

@@ -1,0 +1,31 @@
+#tab-live .skeleton,
+#tab-history .skeleton {
+    min-height: 1.25rem;
+}
+
+.skeleton {
+    display: block;
+    border-radius: var(--radius-sm);
+    background: var(--divider);
+    animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.skeleton-line {
+    height: .75rem;
+    margin: .75rem 0;
+}
+
+.skeleton-avatar {
+    width: 2.5rem;
+    height: 2.5rem;
+    float: inline-start;
+    margin-inline-end: .75rem;
+}
+
+.skeleton.short {
+    width: 55%;
+}
+
+@keyframes skeleton-pulse {
+    50% { opacity: .55; }
+}

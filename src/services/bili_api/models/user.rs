@@ -220,6 +220,8 @@ pub struct UserVideosPage {
     pub total: i64,
     pub page: i32,
     pub page_size: i32,
+    pub offset: i32,
+    pub has_more: bool,
 }
 
 /// 合集/系列条目（season/series 归一化）。
@@ -241,6 +243,8 @@ pub struct SeriesEntry {
 pub struct UserSeriesList {
     pub series: Vec<SeriesEntry>,
     pub total: i64,
+    pub has_more: bool,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

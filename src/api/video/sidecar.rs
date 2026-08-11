@@ -39,6 +39,7 @@ pub(super) struct DownloadDanmakuRequest {
     bvid: String,
     uid: Option<String>,
     source: Option<String>,
+    page: Option<i32>,
 }
 
 pub(super) async fn download_danmaku(
@@ -72,6 +73,7 @@ pub(super) async fn download_danmaku(
         .danmaku_service
         .download_danmaku_to(
             bvid,
+            req.page,
             Some(&cookies),
             req.uid.as_deref(),
             archive_policy,

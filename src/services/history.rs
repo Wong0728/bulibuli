@@ -7,6 +7,11 @@ use crate::config::AppPaths;
 use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+const BOARD_CACHE_TTL: Duration = Duration::from_secs(2);
+type BoardCacheKey = (String, u64, u64);
+type BoardCacheEntry = (BoardPage, Instant);
 
 /// 历史记录数据访问与侧车文件聚合服务。
 ///
@@ -15,6 +20,7 @@ use std::sync::Arc;
 pub struct HistoryService {
     db: DatabaseConnection,
     paths: Arc<AppPaths>,
+    board_cache: tokio::sync::RwLock<HashMap<BoardCacheKey, BoardCacheEntry>>,
 }
 
 /// 侧车文件存在性结果。
@@ -49,6 +55,7 @@ pub struct FileEntry {
 }
 
 /// 看板数据库分页结果。任务和博主信息由调用方按本页键集合继续批量查询。
+#[derive(Clone)]
 pub struct BoardPage {
     pub histories: Vec<crate::models::history::Model>,
     pub total: u64,
@@ -66,6 +73,10 @@ pub struct HistoryCounts {
 
 impl HistoryService {
     pub fn new(db: DatabaseConnection, paths: Arc<AppPaths>) -> Self {
-        Self { db, paths }
+        Self {
+            db,
+            paths,
+            board_cache: tokio::sync::RwLock::new(HashMap::new()),
+        }
     }
 }

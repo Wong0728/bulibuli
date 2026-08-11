@@ -177,4 +177,17 @@ mod tests {
         assert!(h.contains("a=1"));
         assert!(h.contains("b=2=3"));
     }
+
+    #[test]
+    fn danmaku_segment_count_is_bounded() {
+        assert_eq!(fetch::capped_segment_count(0), (1, false));
+        assert_eq!(
+            fetch::capped_segment_count(SEGMENT_DURATION * 512),
+            (512, false)
+        );
+        assert_eq!(
+            fetch::capped_segment_count(SEGMENT_DURATION * 513),
+            (512, true)
+        );
+    }
 }

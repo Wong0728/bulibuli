@@ -18,6 +18,7 @@ const liveState = {
     dashboardFailedAt: 0,
     selectedRoom: 0,
     afterSeq: 0,
+    recordingId: null,
     events: [],
     history: [],
     pendingRooms: new Set(),
@@ -25,6 +26,8 @@ const liveState = {
     dashboardInFlight: false,
     eventsInFlight: false,
     eventFailedAt: 0,
+    eventRequestId: 0,
+    mergePending: new Set(),
     boardTab: 'recording',
     liveTabActive: false,
 };
@@ -152,6 +155,12 @@ function scheduleSummary(source) {
 
 export async function refreshDashboard(silent = false) {
     if (liveState.dashboardInFlight || document.visibilityState === 'hidden') return;
+    if (!liveState.dashboard) {
+        const roomList = document.getElementById('live-room-list');
+        if (roomList) {
+            roomList.innerHTML = '<div class="live-skeleton" aria-label="正在加载直播面板"><span class="skeleton skeleton-avatar"></span><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line short"></span></div>';
+        }
+    }
     liveState.dashboardInFlight = true;
     try {
         const response = await apiGet('/api/live/dashboard');
@@ -315,6 +324,8 @@ function renderDetail() {
     }
     if (session?.interaction_capture_status === 'degraded') {
         alerts += `<div class="live-alert warn"><i class="fa-solid fa-circle-exclamation"></i><span>互动采集已降级：${escapeHtml(session.error_msg || '弹幕连接不可用')}。视频录制不受影响。</span></div>`;
+    } else if (session?.interaction_capture_status === 'unavailable') {
+        alerts += `<div class="live-alert error"><i class="fa-solid fa-triangle-exclamation"></i><span>互动采集不可用：${escapeHtml(session.error_msg || '弹幕连接失败')}。视频录制不受影响。</span></div>`;
     } else if (session?.error_msg) {
         alerts += `<div class="live-alert warn"><i class="fa-solid fa-circle-exclamation"></i><span>${escapeHtml(session.error_msg)}</span></div>`;
     }
@@ -328,7 +339,7 @@ function renderDetail() {
     const scheduleText = scheduleSummary(source);
     const nextSchedule = runtime.next_schedule_at ? `下次自动开始：${relativeTime(runtime.next_schedule_at).replace('前', '')}${new Date(runtime.next_schedule_at).toLocaleString('zh-CN', { hour12: false })}` : '';
     // 详情区每轮刷新会重建，先记住当前互动筛选，重建后恢复并立即重绘已有事件
-    const previousFilter = document.getElementById('live-event-filter')?.value || 'all';
+    const previousFilter = document.getElementById('live-event-filter')?.value || 'user';
 
     content.innerHTML = `
         <div class="live-detail-header">
@@ -432,8 +443,8 @@ function interactionMarkup(session) {
         <div id="live-sc-pins" class="live-sc-pins"></div>
         <div class="live-toolbar-row">
             <select id="live-event-filter" class="form-control" aria-label="互动类型筛选">
-                <option value="all">全部互动</option><option value="danmaku">弹幕</option><option value="gift">礼物</option>
-                <option value="super_chat">SC</option><option value="guard">上舰</option><option value="link_mic_pk">连麦 / PK</option>
+                <option value="user">用户互动</option><option value="stats">系统统计</option>
+                <option value="all">全部事件</option>
             </select>
             <span id="live-events-status" class="live-events-status" role="status">实时互动状态：等待检查</span>
         </div>
@@ -530,7 +541,7 @@ function renderHistoryBoard(items) {
                 </span>
             </div>
             <div class="live-recording-actions">
-                ${item.is_recoverable ? `<button class="btn btn-sm btn-primary" data-action="history-merge" data-recording-id="${item.id}">重试合并</button>` : ''}
+                ${item.is_recoverable ? `<button class="btn btn-sm btn-primary" data-action="history-merge" data-recording-id="${item.id}" ${liveState.mergePending.has(item.id) ? 'disabled' : ''}>${liveState.mergePending.has(item.id) ? '创建中...' : '重试合并'}</button>` : ''}
                 ${burnButton}
                 ${item.has_output ? `<button class="btn btn-sm btn-ghost" data-action="history-open" data-recording-id="${item.id}">打开目录</button>` : ''}
             </div>
@@ -564,7 +575,7 @@ function renderAttentionBoard(jobs, recovery) {
                 <span class="live-recording-meta"><span>保留源分段 ${item.segment_count} 个</span><span>${escapeHtml(item.error_msg || '可恢复')}</span></span>
             </div>
             <div class="live-recording-actions">
-                <button class="btn btn-sm btn-primary" data-action="history-merge" data-recording-id="${item.recording_id}">重试合并</button>
+                <button class="btn btn-sm btn-primary" data-action="history-merge" data-recording-id="${item.recording_id}" ${liveState.mergePending.has(item.recording_id) ? 'disabled' : ''}>${liveState.mergePending.has(item.recording_id) ? '创建中...' : '重试合并'}</button>
                 ${item.has_output ? `<button class="btn btn-sm btn-ghost" data-action="history-open" data-recording-id="${item.recording_id}">打开目录</button>` : ''}
             </div>
         </div>`);
@@ -577,10 +588,27 @@ async function pollEvents() {
     const session = selectedSession();
     if (!liveState.selectedRoom || !session || liveState.eventsInFlight
         || document.visibilityState === 'hidden' || !liveState.liveTabActive) return;
+    if (session.recording_id !== liveState.recordingId) {
+        liveState.recordingId = session.recording_id || null;
+        liveState.afterSeq = 0;
+        liveState.events = [];
+        renderEvents();
+    }
+    const requestId = ++liveState.eventRequestId;
+    const roomId = liveState.selectedRoom;
+    const recordingId = liveState.recordingId;
     liveState.eventsInFlight = true;
     try {
-        const response = await apiGet(`/api/live/events?room_id=${liveState.selectedRoom}&after_seq=${liveState.afterSeq}&limit=100`);
+        const recordingQuery = recordingId ? `&recording_id=${recordingId}` : '';
+        const response = await apiGet(`/api/live/events?room_id=${roomId}&after_seq=${liveState.afterSeq}&limit=100${recordingQuery}`);
+        if (requestId !== liveState.eventRequestId || roomId !== liveState.selectedRoom) return;
         liveState.eventFailedAt = 0;
+        const responseRecordingId = response.data?.recording_id || null;
+        if (responseRecordingId !== liveState.recordingId) {
+            liveState.recordingId = responseRecordingId;
+            liveState.afterSeq = 0;
+            liveState.events = [];
+        }
         const events = response.data?.events || [];
         if (events.length) {
             liveState.afterSeq = response.data.next_seq || liveState.afterSeq;
@@ -593,6 +621,15 @@ async function pollEvents() {
             status.textContent = '实时互动状态：正常';
         }
     } catch (error) {
+        if (error?.status === 409) {
+            if (requestId === liveState.eventRequestId) {
+                liveState.recordingId = null;
+                liveState.afterSeq = 0;
+                liveState.events = [];
+                renderEvents();
+            }
+            return;
+        }
         liveState.eventFailedAt = Date.now();
         const status = document.getElementById('live-events-status');
         if (status) {
@@ -606,10 +643,13 @@ async function pollEvents() {
 }
 
 function renderEvents() {
-    const filter = document.getElementById('live-event-filter')?.value || 'all';
+    const filter = document.getElementById('live-event-filter')?.value || 'user';
     const timeline = document.getElementById('live-event-timeline');
     if (!timeline) return;
-    const events = mergeLiveEvents(liveState.events).filter(event => filter === 'all' || event.event_type === filter);
+    const events = mergeLiveEvents(liveState.events).filter(event => {
+        const category = eventCategory(event);
+        return filter === 'all' || category === filter || (filter === 'stats' && category === 'system');
+    });
     timeline.innerHTML = events.length
         ? events.slice().reverse().map(eventRow).join('')
         : '<p class="empty-hint">暂无符合条件的互动</p>';
@@ -630,7 +670,12 @@ function renderEvents() {
 function eventRow(event) {
     const data = event.data || {};
     const type = event.event_type;
-    const typeLabel = { danmaku: '弹幕', gift: '礼物', super_chat: 'SC', guard: '上舰', link_mic_pk: '连麦', interact: '进场' }[type] || '其他';
+    const category = eventCategory(event);
+    const typeLabel = {
+        danmaku: '弹幕', gift: '礼物', super_chat: 'SC', guard: '上舰',
+        link_mic_pk: '连麦 / PK', interact: '进场', watched: '看过人数',
+        like: '点赞', entry: '进场特效', stats: '统计', system: '系统', unknown: '未识别事件',
+    }[type] || ({ user: '用户互动', stats: '统计', system: '系统', unknown: '未识别事件' }[category] || '事件');
     const text = type === 'danmaku'
         ? data.text
         : type === 'gift'
@@ -641,15 +686,36 @@ function eventRow(event) {
                     ? `上舰 等级 ${data.guard_level || '-'}`
                     : type === 'interact'
                         ? '进入直播间'
-                        : event.cmd;
+                        : event.cmd === 'WATCHED_CHANGE'
+                            ? `看过人数：${data.count ?? '--'}`
+                            : event.cmd === 'ONLINE_RANK_V3' || event.cmd === 'ONLINE_RANK_COUNT'
+                                ? '在线榜数据更新'
+                                : event.cmd === 'LIKE_INFO_V3_CLICK'
+                                    ? (data.like_text || '点赞了')
+                                    : event.cmd === 'ENTRY_EFFECT'
+                                        ? String(data.copy_writing || '进场特效').replace(/<%([^%]*)%>/g, '$1')
+                                        : category === 'system'
+                                            ? '系统事件'
+                                            : category === 'unknown'
+                                                ? '未识别事件'
+                                                : '互动事件';
     return `
-        <div class="live-event-row live-event-${escapeHtml(type)}" data-time-ms="${event.media_time_ms || 0}">
+        <div class="live-event-row live-event-${escapeHtml(category)}" data-time-ms="${event.media_time_ms || 0}">
             <time>${formatMediaTime(event.media_time_ms)}</time>
             <span class="live-event-user">${escapeHtml(data.uname || '')}</span>
             <span class="live-event-text">${escapeHtml(String(text || ''))}</span>
             ${event.merged_count > 1 ? `<em title="合并了 ${event.merged_count} 个连续事件">×${event.merged_count}</em>` : `<span class="live-event-type">${typeLabel}</span>`}
         </div>
     `;
+}
+
+function eventCategory(event) {
+    if (event.event_category) return event.event_category;
+    if (['danmaku', 'gift', 'super_chat', 'guard', 'interact', 'link_mic_pk'].includes(event.event_type)) return 'user';
+    if (event.event_type === 'watched' || ['WATCHED_CHANGE', 'ONLINE_RANK_V3', 'ONLINE_RANK_COUNT', 'LIKE_INFO_V3_UPDATE'].includes(event.cmd)) return 'stats';
+    if (['INTERACT_WORD_V2', 'ENTRY_EFFECT', 'LIKE_INFO_V3_CLICK'].includes(event.cmd)) return 'user';
+    if (event.cmd === 'STOP_LIVE_ROOM_LIST') return 'system';
+    return 'unknown';
 }
 
 function renderHeatBar() {
@@ -670,7 +736,9 @@ function selectRoom(roomId, options = {}) {
     if (liveState.selectedRoom === roomId && !options.force) return;
     liveState.selectedRoom = roomId;
     liveState.afterSeq = 0;
+    liveState.recordingId = null;
     liveState.events = [];
+    liveState.eventRequestId++;
     liveState.eventFailedAt = 0;
     renderSidebar();
     renderDetail();
@@ -1068,9 +1136,17 @@ function initLiveTab() {
             selectRoom(roomId);
             document.getElementById('live-detail-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } else if (action === 'history-merge') {
-            apiPost(`/api/live/history/${button.dataset.recordingId}/merge`, {})
+            const recordingId = Number(button.dataset.recordingId);
+            if (liveState.mergePending.has(recordingId)) return;
+            liveState.mergePending.add(recordingId);
+            button.disabled = true;
+            apiPost(`/api/live/history/${recordingId}/merge`, {})
                 .then(() => refreshDashboard(true))
-                .catch(error => showToast(`合并任务创建失败：${error.message}`, 'error'));
+                .catch(error => showToast(`合并任务创建失败：${error.message}`, 'error'))
+                .finally(() => {
+                    liveState.mergePending.delete(recordingId);
+                    renderBoard();
+                });
         } else if (action === 'merge-cancel') {
             apiPost(`/api/live/merge/${button.dataset.jobId}/cancel`, {})
                 .then(() => refreshDashboard(true))

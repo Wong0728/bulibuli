@@ -10,16 +10,15 @@ import { openVideoDrawer } from './drawer.js';
 _state.currentBoardTab = 'completed';
 // 看板视频缓存：{ bvid: video }，供抽屉快速查找
 _state.currentBoardVideos = _state.currentBoardVideos || {};
-// 上次拉取时间（ms），用于 60s 自动刷新判定
-_state.lastBoardPullTs = 0;
 // 手动刷新防抖
 _state.lastManualRefreshTs = 0;
 // 上次拉取的 server_time（秒）
 _state.lastBoardServerTime = 0;
-// 看板轮询定时器
-_state.boardPullInterval = null;
 // 当前打开的抽屉对应的 bvid（用于双向同步）
 _state.currentDrawerBvid = null;
+_state.historyBoardRequestId = 0;
+_state.historyBoardController = null;
+_state.historyBoardInFlight = false;
 
 /// 切换看板子 tab。
 export function switchBoardTab(tab) {
@@ -34,6 +33,15 @@ export function switchBoardTab(tab) {
 export async function loadHistoryBoard(tab, { append = false } = {}) {
     const board = document.getElementById('history-board');
     if (!board) return;
+    if (append && _state.historyBoardInFlight) return;
+    if (!append && !_state.historyPagination) {
+        board.innerHTML = '<div class="history-skeleton" aria-label="正在加载历史列表"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line"></span></div>';
+    }
+    const requestId = ++_state.historyBoardRequestId;
+    _state.historyBoardController?.abort();
+    const controller = new AbortController();
+    _state.historyBoardController = controller;
+    _state.historyBoardInFlight = true;
     try {
         const previous = _state.historyPagination?.tab === tab
             ? _state.historyPagination
@@ -41,7 +49,9 @@ export async function loadHistoryBoard(tab, { append = false } = {}) {
         const page = append ? previous.page + 1 : 1;
         const result = await apiGet(
             `/api/history/list?tab=${encodeURIComponent(tab)}&page=${page}&page_size=50`,
+            { signal: controller.signal },
         );
+        if (requestId !== _state.historyBoardRequestId || _state.currentBoardTab !== tab) return;
         if (result.code !== 0) {
             // 网络错误：统一用右上角 toast + 顶栏横幅，不在看板内联渲染，保留原有内容
             if (result.offline) { showToast(_NETWORK_ERR_MSG, 'error'); return; }
@@ -51,7 +61,6 @@ export async function loadHistoryBoard(tab, { append = false } = {}) {
         const data = result.data || {};
         // 缓存 server_time + 更新"上次拉取"
         _state.lastBoardServerTime = data.server_time || 0;
-        _state.lastBoardPullTs = Date.now();
         updateLastPullTimeDisplay();
 
         // 计数：优先用后端返回的全局 counts（跨所有博主，随任意 tab 都是全量）；
@@ -117,8 +126,14 @@ export async function loadHistoryBoard(tab, { append = false } = {}) {
             board.appendChild(loadMore);
         }
     } catch (e) {
+        if (e?.name === 'AbortError') return;
         console.error('加载看板失败:', e);
         showToast('加载看板失败', 'error');
+    } finally {
+        if (requestId === _state.historyBoardRequestId) {
+            _state.historyBoardInFlight = false;
+            _state.historyBoardController = null;
+        }
     }
 }
 
@@ -239,8 +254,15 @@ export function renderBoardVideoCard(v) {
     // 重投提示
     const reuploadBadge = v.reupload_of ? `<span class="reupload-badge" title="可能是 ${escapeHtml(v.reupload_of)} 的重传">重投?</span>` : '';
 
-    // 文件路径（仅当设置开启时后端返回）
-    const filePath = v.file_path ? `<div class="board-card-path" title="${escapeHtml(v.file_path)}"><i class="fa-solid fa-file-video"></i> ${escapeHtml(v.file_path)}</div>` : '';
+    // 路径展示由后端统一决定；相对路径单独作为打开目录的安全标识。
+    const filePath = v.file_path || v.relative_path ? `
+        <div class="board-card-path" title="${escapeHtml(v.file_path || '路径已隐藏')}">
+            <i class="fa-solid fa-file-video"></i>
+            <span>${escapeHtml(v.file_path || '路径已隐藏')}</span>
+            ${v.file_path ? `<button class="btn btn-sm btn-ghost" data-copy-path="${escapeHtml(v.file_path)}" title="复制路径"><i class="fa-solid fa-copy"></i></button>` : ''}
+            ${v.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${bvid}" data-path="${escapeHtml(v.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
+        </div>
+    ` : '';
 
     const progressLabel = isPaused ? `已暂停 ${progress}%` : `${progress}%`;
     const progressHtml = isActive ? `
@@ -424,28 +446,6 @@ export async function manualRefreshBoard() {
             if (icon) icon.classList.remove('fa-spin');
         }
     }
-}
-
-/// 启动"上次拉取"轮询：每 5s 检查是否超过 60s 没拉取。
-export function startLastPullPolling() {
-    if (_state.boardPullInterval) clearInterval(_state.boardPullInterval);
-    _state.boardPullInterval = setInterval(async () => {
-        if (_state.boardPullInFlight) return;
-        // 仅当下载管理 tab 激活时才触发
-        const tab = document.getElementById('tab-history');
-        if (!tab || !tab.classList.contains('active')) return;
-        if (Date.now() - _state.lastBoardPullTs < 60000) return;
-        _state.boardPullInFlight = true;
-        // 超过 60s，触发后端刷新 + 重新拉取
-        try {
-            await apiPost('/api/refresh?kind=board', {});
-        } catch (e) { /* ignore */ }
-        try {
-            await loadHistoryBoard(_state.currentBoardTab);
-        } finally {
-            _state.boardPullInFlight = false;
-        }
-    }, 5000);
 }
 
 /// 更新 element 文本（安全）。

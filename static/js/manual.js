@@ -112,7 +112,7 @@ export async function doManualQuery() {
     document.getElementById('manual-load-more').hidden = true;
 
     try {
-        const limit = parseInt(document.getElementById('setting-manual-query-limit')?.value) || 20;
+        const limit = Math.min(parseInt(document.getElementById('setting-manual-query-limit')?.value) || 20, 50);
         _state.manualQueryLimit = limit;
         let result;
         if (_state.manualQueryMode === 'series') {
@@ -125,7 +125,8 @@ export async function doManualQuery() {
             const data = result.data || {};
             _state.manualQueryVideos = {};
             const videos = data.videos || [];
-            _state.manualQueryHasMore = data.has_more !== false && videos.length >= limit;
+            _state.manualQueryOffset = Number.isFinite(data.offset) ? data.offset : 0;
+            _state.manualQueryHasMore = data.has_more === true || (data.has_more !== false && videos.length >= limit);
             renderManualQueryResults(videos, true);
         } else if (result.offline) {
             showToast(_NETWORK_ERR_MSG, 'error');
@@ -162,8 +163,9 @@ export async function loadMoreManualQuery() {
         if (result.code === 0) {
             const data = result.data || {};
             const videos = data.videos || [];
-            _state.manualQueryOffset = nextOffset;
-            _state.manualQueryHasMore = data.has_more !== false && videos.length >= _state.manualQueryLimit;
+            _state.manualQueryOffset = Number.isFinite(data.offset) ? data.offset : nextOffset;
+            _state.manualQueryHasMore = data.has_more === true
+                || (data.has_more !== false && videos.length >= _state.manualQueryLimit);
             renderManualQueryResults(videos, false);
         } else {
             showToast(result.message || '加载更多失败', 'error');

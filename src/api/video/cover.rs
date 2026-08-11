@@ -156,7 +156,6 @@ pub(super) async fn download_cover(
     Ok(Json(ApiResponse::with_message(
         json!({
             "filename": filename,
-            "filepath": filepath.to_string_lossy(),
             "size": written,
         }),
         "封面下载成功",

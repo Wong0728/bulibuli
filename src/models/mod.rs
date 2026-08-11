@@ -1,4 +1,5 @@
 pub mod blogger;
+pub mod burn;
 pub mod download_task;
 pub mod history;
 pub mod live_recording;
