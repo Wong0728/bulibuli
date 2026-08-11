@@ -43,7 +43,7 @@ async function mockApi(page, { canOpenDirectory = false } = {}) {
         let status = 200;
 
         if (path === '/api/auth/state') {
-            body = envelope({ authenticated: true, csrf_token: 'playwright-csrf', role: 'viewer' });
+            body = envelope({ authenticated: true, csrf_token: 'playwright-csrf', role: 'operator' });
         } else if (path === '/api/blogger/list') {
             body = envelope({ bloggers: [], server_utc_offset: '+08:00' });
         } else if (path === '/api/download/status') {
