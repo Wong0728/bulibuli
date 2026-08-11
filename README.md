@@ -46,6 +46,10 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/v2.0.0-alpha.1/de
 
 Termux 首次运行会使用本机 Rust 编译，并通过 `pkg` 安装 aria2、FFmpeg 和 Termux 所需工具；开机自启还需要 Termux:Boot 应用。
 
+## Hero 页面
+
+项目的独立静态 Hero 展示页：[打开 Hero HTML](docs/hero/bulibuli_hero_fully_editable_v2.html)。该页面不参与主程序构建，也不进入二进制 Release；下载 HTML 后可直接用浏览器打开。
+
 ## 文档
 
 - [代码规范](代码规范.md)
