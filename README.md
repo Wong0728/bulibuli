@@ -30,7 +30,7 @@ npm run build
 
 ## 发布版本
 
-`v2.0.0-alpha.1` 是 Rust v2 Alpha 预发布版本，包含 4 个平台归档及其 `.sha256` 校验文件：Windows x86_64、Linux x86_64、macOS Intel 和 macOS Apple Silicon。Windows 便携包可直接解压运行，Linux 包包含一键安装脚本。Release 归档只包含运行所需文件，不包含仓库源码、测试、外部项目或本地数据。
+`v2.0.0-alpha.1` 是 Rust v2 Alpha 预发布版本，包含 4 个平台归档及其 `.sha256` 校验文件：Windows x86_64、Linux x86_64、macOS Intel 和 macOS Apple Silicon。Windows 便携包可直接解压运行，Linux 包包含一键安装脚本。二进制 Release 归档只包含运行所需文件，不包含测试、外部项目或本地数据；GitHub 自动生成的 Source archive 对应清理后的第一方主线。
 
 Linux 一键安装：
 
