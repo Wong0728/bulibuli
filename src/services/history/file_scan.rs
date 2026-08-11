@@ -3,6 +3,8 @@
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use crate::services::file_safety::validate_uid;
+
 use super::{FileEntry, HistoryService, SidecarStatus};
 
 impl HistoryService {
@@ -18,10 +20,7 @@ impl HistoryService {
         let base = video_path
             .and_then(|path| Path::new(path).parent())
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| match uid {
-                Some(u) if !u.is_empty() => self.paths.download_dir.join(u),
-                _ => self.paths.download_dir.clone(),
-            });
+            .unwrap_or_else(|| uid_download_dir(&self.paths.download_dir, uid));
 
         let video = if let Some(path) = video_path {
             Path::new(path).exists()
@@ -246,6 +245,12 @@ impl HistoryService {
     }
 }
 
+fn uid_download_dir(download_dir: &Path, uid: Option<&str>) -> PathBuf {
+    uid.and_then(|raw| validate_uid(raw).ok())
+        .map(|validated| download_dir.join(validated.as_str()))
+        .unwrap_or_else(|| download_dir.to_path_buf())
+}
+
 fn file_type_order(file_type: &str) -> u8 {
     match file_type {
         "video" | "danmaku_video" => 0,
@@ -304,7 +309,17 @@ fn file_location(relative: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_location, sidecar_version};
+    use super::{file_location, sidecar_version, uid_download_dir};
+    use std::path::Path;
+
+    #[test]
+    fn invalid_uid_never_changes_download_root() {
+        let root = Path::new("downloads");
+        assert_eq!(uid_download_dir(root, Some("12345")), root.join("12345"));
+        assert_eq!(uid_download_dir(root, Some("../outside")), root);
+        assert_eq!(uid_download_dir(root, Some(r"C:\outside")), root);
+        assert_eq!(uid_download_dir(root, None), root);
+    }
 
     #[test]
     fn parses_fixed_and_archived_sidecars() {

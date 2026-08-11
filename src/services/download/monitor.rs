@@ -8,7 +8,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::completion::CompleteOutcome;
 use super::{task_cache_key, DownloadManager, ProgressCache};
@@ -157,6 +157,14 @@ impl DownloadManager {
                     .cloned()
                     .collect::<Vec<_>>()
             };
+
+            debug!(
+                operation = "download_queue_poll",
+                queue_len = all_tasks.len(),
+                aria2_queue_len = tasks.len(),
+                idle_rounds,
+                "下载队列轮询"
+            );
 
             // 防泄漏：任务被外部删除时同步清掉 gid 缺失计时
             let current_ids: HashSet<i32> = tasks.iter().map(|t| t.id).collect();

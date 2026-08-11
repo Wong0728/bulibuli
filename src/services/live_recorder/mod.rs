@@ -1,6 +1,7 @@
 //! 直播录制服务：管理并发录制、FFmpeg 监督和流地址分段轮换。
 pub mod ffmpeg_session;
 mod interactions;
+mod state;
 pub mod stream_url;
 
 use crate::config::AppPaths;
@@ -24,6 +25,8 @@ use sea_orm::{
     QueryOrder, QueryResult, QuerySelect, Set, Statement,
 };
 use serde::Serialize;
+use state::{unexpected_exit_action, UnexpectedExitAction};
+pub use state::{RecordingStatus, RecordingTrigger};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -48,71 +51,6 @@ const STOP_REASON_OFFLINE_END: &str = "stream_ended_after_offline_confirmation";
 const STOP_REASON_UNRECOVERABLE_EXIT: &str = "ffmpeg_exit_while_live_or_unconfirmed";
 const STOP_REASON_FAILED: &str = "recording_failed";
 const STOP_REASON_COMPLETED: &str = "recording_completed";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UnexpectedExitAction {
-    CompleteAfterOfflineConfirmation,
-    Recover,
-    FailRecoverable,
-}
-
-fn unexpected_exit_action(
-    room_is_offline: Option<bool>,
-    restart_attempts: u32,
-) -> UnexpectedExitAction {
-    match room_is_offline {
-        Some(true) => UnexpectedExitAction::CompleteAfterOfflineConfirmation,
-        Some(false) | None if restart_attempts < MAX_UNEXPECTED_EXIT_RECOVERY_ATTEMPTS => {
-            UnexpectedExitAction::Recover
-        }
-        Some(false) | None => UnexpectedExitAction::FailRecoverable,
-    }
-}
-
-/// 录制状态。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RecordingStatus {
-    Starting,
-    Recording,
-    Stopping,
-    Finalizing,
-    Stopped,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RecordingTrigger {
-    Manual,
-    Auto,
-}
-
-impl RecordingTrigger {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Manual => "manual",
-            Self::Auto => "auto",
-        }
-    }
-}
-
-impl std::fmt::Display for RecordingStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Starting => write!(f, "starting"),
-            Self::Recording => write!(f, "recording"),
-            Self::Stopping => write!(f, "stopping"),
-            Self::Finalizing => write!(f, "finalizing"),
-            Self::Stopped => write!(f, "stopped"),
-            Self::Completed => write!(f, "completed"),
-            Self::Failed => write!(f, "failed"),
-            Self::Cancelled => write!(f, "cancelled"),
-        }
-    }
-}
 
 /// 对外暴露的录制信息。
 #[derive(Clone, Debug, Serialize)]
@@ -1227,10 +1165,15 @@ impl LiveRecorder {
                 .await
                 .len();
             if row.is_recoverable || count > 0 {
+                let has_output = row
+                    .output_path
+                    .as_deref()
+                    .is_some_and(|path| Path::new(path).exists());
                 result.push(serde_json::json!({
                     "recording_id": row.id, "room_id": row.room_id, "title": row.title,
                     "status": row.status, "segment_count": count,
-                    "has_output": row.output_path.as_deref().is_some_and(|path| Path::new(path).exists()),
+                    "has_output": has_output,
+                    "recovery_state": recovery_state(&row.status, has_output, count),
                     "is_recoverable": row.is_recoverable,
                     "error_msg": row.error_msg.as_deref().map(redact_diagnostics),
                 }));
@@ -1962,9 +1905,14 @@ impl RecordingWorker {
         self.persist_recording(&info, true).await;
         *self.snapshot.lock().await = info.clone();
         info!(
+            operation = "live_recording_finalize",
             room_id = self.room_id,
             ?final_status,
             duration_secs = duration,
+            bytes = file_size,
+            segment_count = self.segments.len(),
+            restart_attempts = self.restart_attempts,
+            recovery_state = recovery_state(&final_status.to_string(), true, self.segments.len()),
             "直播录制已完成收尾"
         );
         Ok(info)
@@ -2403,6 +2351,16 @@ async fn find_recording_segments(directory: &Path, output_path: Option<&str>) ->
     result
 }
 
+fn recovery_state(status: &str, has_output: bool, segment_count: usize) -> &'static str {
+    match (status, has_output, segment_count > 0) {
+        ("completed", true, _) => "complete",
+        ("completed", false, true) => "output_missing_recoverable",
+        (_, _, true) => "segments_pending",
+        (_, true, false) => "output_pending_db_commit",
+        _ => "artifacts_missing",
+    }
+}
+
 fn count_residual_segments(root: &Path) -> usize {
     if !root.is_dir() {
         return 0;
@@ -2473,6 +2431,45 @@ mod tests {
             STOP_REASON_UNRECOVERABLE_EXIT,
             "ffmpeg_exit_while_live_or_unconfirmed"
         );
+    }
+
+    #[tokio::test]
+    async fn crash_between_file_replace_and_db_commit_remains_recoverable() {
+        use crate::services::file_safety::atomic_replace;
+
+        let directory = tempfile::tempdir().expect("temp directory");
+        let output = directory.path().join("room_segment_0001.mp4");
+        let temp = directory.path().join(".room_segment_0001.mp4.downloading");
+        let segment = directory.path().join("room_segment_0001.flv");
+        tokio::fs::write(&temp, b"merged")
+            .await
+            .expect("temp output");
+
+        // Simulate the process stopping immediately after replacing the file,
+        // before the persisted status can move from finalizing to completed.
+        atomic_replace(&temp, &output)
+            .await
+            .expect("atomic replace");
+        tokio::fs::write(&segment, b"source")
+            .await
+            .expect("source segment");
+        let segments = find_recording_segments(
+            directory.path(),
+            Some(output.to_str().expect("utf8 output path")),
+        )
+        .await;
+
+        assert!(output.exists());
+        assert_eq!(segments, vec![segment]);
+        assert_eq!(
+            recovery_state("finalizing", true, segments.len()),
+            "segments_pending"
+        );
+        assert_eq!(
+            recovery_state("completed", false, segments.len()),
+            "output_missing_recoverable"
+        );
+        assert_eq!(recovery_state("completed", true, 0), "complete");
     }
 
     #[test]

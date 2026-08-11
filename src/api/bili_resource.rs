@@ -12,7 +12,7 @@ impl BiliResourceClient {
         url: &str,
         accept: &'static str,
         authenticated: bool,
-        max_content_length: Option<u64>,
+        max_content_length: u64,
     ) -> Result<reqwest::Response, AppError> {
         let initial = crate::services::bili_url_policy::validate(url).await?;
 
@@ -75,13 +75,25 @@ impl BiliResourceClient {
                 response.status()
             )));
         }
-        if max_content_length.is_some_and(|limit| {
-            response
-                .content_length()
-                .is_some_and(|length| length > limit)
-        }) {
+        if content_length_exceeds(response.content_length(), max_content_length) {
             return Err(AppError::BadRequest("B 站资源大小超过限制".to_string()));
         }
         Ok(response)
+    }
+}
+
+fn content_length_exceeds(content_length: Option<u64>, limit: u64) -> bool {
+    content_length.is_some_and(|length| length > limit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_length_exceeds;
+
+    #[test]
+    fn resource_size_limit_is_required_and_inclusive() {
+        assert!(!content_length_exceeds(None, 10));
+        assert!(!content_length_exceeds(Some(10), 10));
+        assert!(content_length_exceeds(Some(11), 10));
     }
 }

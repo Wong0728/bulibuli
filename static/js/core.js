@@ -37,7 +37,9 @@ import { switchBoardTab, loadHistoryBoard, updateDownloadProgressInList } from '
 import { startProgressUpdates, showToast, confirmDialog, closeConfirmDialog } from './download-status.js';
 import { addTimePoint, removeTimePoint, browseFFmpegPath, testFFmpeg, saveSettings, resetSettings, loadSettings, testDownload, restartAria2 } from './settings.js';
 import { openVideoDrawer, closeVideoDrawer, openVideoDrawerFromManual } from './drawer.js';
-import { burnMedia, deleteVideoRecord, refreshVideoInfo, loadBvidLogs, loadDrawerComments, loadDrawerDanmaku, selectQualityPill, startVideoDownload, retryVideoDownload, startVideoDownloadFromManual, toggleAllPages, openVideoPage, downloadCover, openHistoryDirectory, startSeasonDownload, toggleAllEpisodes } from './media-actions.js';
+import { burnMedia, deleteVideoRecord, refreshVideoInfo, loadBvidLogs, selectQualityPill, startVideoDownload, retryVideoDownload, startVideoDownloadFromManual, toggleAllPages, openVideoPage, downloadCover, startSeasonDownload, toggleAllEpisodes } from './media-actions.js';
+import { loadDrawerComments, loadDrawerDanmaku } from './drawer-sidecars.js';
+import { openHistoryDirectory } from './directory-actions.js';
 import './live.js';
 
 // B站视频监控助手 - feature modules

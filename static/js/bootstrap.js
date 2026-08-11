@@ -94,9 +94,14 @@ async function bootstrapApp() {
     document.querySelectorAll('.section-collapsible .section-header').forEach(header => {
         header.setAttribute('tabindex', '0');
         header.setAttribute('role', 'button');
+        const section = header.closest('.section-collapsible');
+        header.setAttribute('aria-expanded', String(!section?.classList.contains('collapsed')));
         const toggleSection = () => {
             const sec = header.closest('.section-collapsible');
-            if (sec) sec.classList.toggle('collapsed');
+            if (sec) {
+                sec.classList.toggle('collapsed');
+                header.setAttribute('aria-expanded', String(!sec.classList.contains('collapsed')));
+            }
         };
         header.addEventListener('click', toggleSection);
         header.addEventListener('keydown', (e) => {

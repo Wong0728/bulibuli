@@ -41,9 +41,13 @@ jobs:
         working-directory: static/js
       - run: npm run build
         working-directory: static/js
+      - run: npx playwright install --with-deps chromium
+        working-directory: static/js
       - shell: bash
         run: find static/js -maxdepth 1 -type f -name '*.js' ! -name '*.min.js' -print0 | xargs -0 -n1 node --check
-      - run: node --test tests/*.mjs
+      - run: node --test tests/frontend_live_drawer.mjs
+      - run: npm run test:smoke
+        working-directory: static/js
       - run: python build.py --check
       - shell: bash
         run: bash -n deploy/linux/install.sh deploy/termux/install.sh

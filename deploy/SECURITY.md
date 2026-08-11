@@ -48,3 +48,9 @@ bilibili-uid-buildownloader ctl trust ffmpeg /absolute/path/ffmpeg
 
 Cloudflare 应设为 DNS-only（灰云）。这种模式不会提供 Cloudflare WAF/DDoS 代理保护；若源站有 IPv6 DNS 记录，源 IPv6 也会公开。应同时配置主机防火墙，只开放 Caddy 的 HTTPS 端口。
 如确需在受控部署中跳过会话认证，只配置 `security.toml` 的 `auth_bypass_ips` 明确单个客户端 IP。该字段不接受 CIDR，默认为空；不要填入 `0.0.0.0`、`::` 等未指定地址，也不要把它理解为可信网络。服务启动时会对非空配置打印高风险告警；反向代理场景还必须确认 `X-Forwarded-For` 的来源可信。
+
+### 升级、备份与恢复
+
+升级前停止服务并完整备份 `data/`。迁移失败时保留原数据库、迁移日志和下载目录，先恢复备份再重试，不要手工删除迁移表。回滚必须同时恢复程序版本和数据库备份，避免新旧 schema 混用。
+
+服务重启后检查下载队列、直播恢复列表和直播合并任务；`recovery_state` 为 `segments_pending` 或 `output_missing_recoverable` 时，先通过应用提供的恢复/重试入口处理，确认最终文件和数据库状态一致后再清理分段。资源替换必须同步更新 `resources/README.md` 的来源、许可证和 SHA-256，并重新运行构建检查。

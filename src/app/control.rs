@@ -13,6 +13,9 @@
 //! AI 模式门控（P3）：未启用时仅放行 `status` / `help` / `quit` / `ai on`。
 //! 门控在 `execute()` 入口检查 `ai_skill_enabled` 标志，拒绝时返回 `AI_SKILL_DISABLED`。
 
+#[path = "control_origin.rs"]
+mod control_origin;
+
 use crate::app::onboarding::StartupState;
 use crate::error::{AppError, AppResult};
 use crate::models::operation_log::{OperationOutcome, OperationSource, OperationTarget};
@@ -81,14 +84,7 @@ struct CommandSpec {
     example: &'static str,
 }
 
-/// Commands can enter through the local human console or through the AI-only
-/// `ctl` IPC.  Keeping this explicit prevents a human recovery action from
-/// accidentally inheriting AI capability checks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CommandOrigin {
-    HumanTerminal,
-    AiCtl,
-}
+pub(crate) use control_origin::CommandOrigin;
 
 const COMMAND_REGISTRY: &[CommandSpec] = &[
     // 策略

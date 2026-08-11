@@ -4,7 +4,7 @@ use crate::models::download_task;
 use chrono::Local;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::time::{Duration, Instant};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::{backoff_key, task_cache_key, DownloadManager, RetryBackoff};
 
@@ -117,6 +117,12 @@ impl DownloadManager {
                     attempts,
                     next_retry_at: Instant::now() + Duration::from_secs(delay_secs),
                 },
+            );
+            debug!(
+                operation = "download_backoff",
+                retry_count = attempts,
+                retry_delay_secs = delay_secs,
+                "下载任务进入重试退避"
             );
         }
     }
