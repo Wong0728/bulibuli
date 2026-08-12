@@ -121,7 +121,6 @@ python build.py --portable
 ## 文档与贡献
 
 - [文档索引](docs/README.md)
-- [代码规范](代码规范.md)
 - [贡献指南](CONTRIBUTING.md)
 - [行为准则](CODE_OF_CONDUCT.md)
 - [安全策略](SECURITY.md)
@@ -134,4 +133,4 @@ python build.py --portable
 
 ## 项目状态
 
-`v2.0.0-alpha.*` 是预发布版本，接口和数据结构仍可能变化。升级或迁移前请备份 `data/`，不要让新旧版本同时写同一数据库。旧 Python v1 仅保留在 `v1-python` 分支和历史标签中，不属于当前 Rust v2 产品。
+`v2.0.0-alpha.*` 是预发布版本，接口和数据结构仍可能变化。升级前请备份 `data/`，不要让新旧版本同时写同一数据库。当前公开主线为 Rust v2。
