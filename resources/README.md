@@ -1,6 +1,6 @@
 # 运行时资源
 
-Windows 的 `aria2c.exe` 和 `ffmpeg.exe` 作为已审计资源存放在仓库中。Linux 和 macOS 的 Release 构建会从对应 CI runner 的官方包管理器复制 `aria2c` 与 `ffmpeg` 及必要的非系统动态库到发布目录，并为每个文件写入独立 `.sha256` 文件；Termux 仍使用 `pkg` 安装。
+Windows 的 `aria2c.exe` 和 `ffmpeg.exe` 作为已审计资源存放在仓库中。完整 Release 构建会复制对应平台的 `aria2c`、`ffmpeg` 及必要的非系统动态库到发布目录，并为每个文件写入独立 `.sha256` 文件；若 CI runner 有 `ffprobe`，也会作为可选探测工具随包提供。Termux 仍使用 `pkg` 安装。Linux 的 `core` 命令包不包含这些媒体运行时，交给本机环境提供。
 `geo/` 子目录下的 GeoIP 数据库为跨平台数据文件，所有平台共用。`geo/GeoLite2-Country.mmdb` 在所有平台下都会被程序自动发现并使用。
 
 ## 清单
@@ -10,6 +10,7 @@ Windows 的 `aria2c.exe` 和 `ffmpeg.exe` 作为已审计资源存放在仓库�
 | `aria2c.exe` | aria2 1.37.0 | 多线程下载引擎（RPC 模式） | https://github.com/aria2/aria2/releases |
 | `ffmpeg.exe` | ffmpeg 5.1.6 | 音视频合并 / 字幕烧录 | https://www.gyan.dev/ffmpeg/builds/ 或 https://ffmpeg.org/download.html |
 | `aria2c` / `ffmpeg` | 按 Release 平台构建 | Linux/macOS 便携包运行时 | https://aria2.github.io/ / https://ffmpeg.org/ |
+| `ffprobe` | CI runner 可选 | 媒体流校验与时长探测；缺失时由 FFmpeg 回退 | https://ffmpeg.org/ |
 | `geo/GeoLite2-Country.mmdb` | dbip-country-lite 2026-07 | GeoIP 国家库（用于 `geo cn on` 大陆 IP 配对限制） | https://db-ip.com/db/download/ip-to-country-lite （CC BY 4.0） |
 
 ## 校验和（SHA-256）
@@ -36,7 +37,7 @@ sha256sum resources/aria2c resources/ffmpeg resources/geo/GeoLite2-Country.mmdb
 
 ```
 
-源码仓库没有 `resources/aria2c` 和 `resources/ffmpeg` 这两个 Unix 文件；它们只在对应 Release 归档内生成。
+源码仓库没有 `resources/aria2c`、`resources/ffmpeg` 和 `resources/ffprobe` 这三个 Unix 文件；前两个只在完整 Release 归档内生成，`ffprobe` 是否随 CI 产物提供取决于 runner，`core` 归档不包含媒体运行时。
 
 ## 更新与安全说明
 

@@ -4,7 +4,8 @@
 
 用法:
     python build.py              # 编译并直接启动程序（测试模式）
-    python build.py --portable   # 构建当前平台便携版
+    python build.py --portable   # 构建当前平台完整便携版
+    python build.py --core       # 构建不含媒体运行时的轻量命令包
     python build.py --portable --platform linux --target x86_64-unknown-linux-gnu
 
 产物:
@@ -70,8 +71,8 @@ def release_binary_path(platform_name, target=None):
     return release_dir / executable_name(platform_name)
 
 
-def package_stem(platform_name, target=None):
-    return f"{APP_SLUG}-{platform_name}-{architecture_name(target)}-portable-v{APP_VERSION}"
+def package_stem(platform_name, target=None, variant="portable"):
+    return f"{APP_SLUG}-{platform_name}-{architecture_name(target)}-{variant}-v{APP_VERSION}"
 
 
 def run(cmd, cwd=None, check=True):
@@ -335,34 +336,41 @@ def bundle_unix_runtime(source, name, resources_dst, platform_name):
     return wrapper
 
 
-def validate_portable_tree(portable_dir, platform_name):
+def validate_package_tree(package_dir, platform_name, variant):
     """Fail packaging if the archive would miss a direct-run contract file."""
-    binary = portable_dir / executable_name(platform_name)
-    required = [binary, portable_dir / "README.md", portable_dir / "static" / "index.html"]
+    binary = package_dir / executable_name(platform_name)
+    required = [binary, package_dir / "README.md", package_dir / "static" / "index.html"]
     if platform_name == "linux":
-        required.append(portable_dir / "install.sh")
+        required.append(package_dir / "install.sh")
     runtime_names = ("aria2c.exe", "ffmpeg.exe") if platform_name == "windows" else ("aria2c", "ffmpeg")
-    for name in runtime_names:
-        runtime = portable_dir / "resources" / name
-        required.extend((runtime, runtime.with_name(f"{runtime.name}.sha256")))
-    missing = [str(path.relative_to(portable_dir)) for path in required if not path.is_file()]
+    if variant == "portable":
+        for name in runtime_names:
+            runtime = package_dir / "resources" / name
+            required.extend((runtime, runtime.with_name(f"{runtime.name}.sha256")))
+    else:
+        bundled = [package_dir / "resources" / name for name in runtime_names]
+        bundled.append(package_dir / "resources" / "lib")
+        unexpected = [str(path.relative_to(package_dir)) for path in bundled if path.exists()]
+        if unexpected:
+            raise RuntimeError(f"轻量包不应包含媒体运行时：{', '.join(unexpected)}")
+    missing = [str(path.relative_to(package_dir)) for path in required if not path.is_file()]
     if missing:
-        raise RuntimeError(f"便携包契约不完整（{platform_name}）：{', '.join(missing)}")
+        raise RuntimeError(f"包契约不完整（{platform_name}）：{', '.join(missing)}")
 
 
-def assemble_portable(exe_path, platform_name, target=None):
-    """组装当前平台便携版目录和归档。"""
-    print(f"[3/5] 组装便携版目录 ({platform_name})...")
+def assemble_package(exe_path, platform_name, target=None, variant="portable"):
+    """组装完整 portable 或不含媒体运行时的 core 归档。"""
+    print(f"[3/5] 组装 {variant} 包目录 ({platform_name})...")
     dist_dir = ROOT / "dist"
-    stem = package_stem(platform_name, target)
-    portable_dir = dist_dir / stem
+    stem = package_stem(platform_name, target, variant)
+    package_dir = dist_dir / stem
 
-    if portable_dir.exists():
-        shutil.rmtree(portable_dir)
-    portable_dir.mkdir(parents=True)
+    if package_dir.exists():
+        shutil.rmtree(package_dir)
+    package_dir.mkdir(parents=True)
 
     binary_name = executable_name(platform_name)
-    shutil.copy2(exe_path, portable_dir / binary_name)
+    shutil.copy2(exe_path, package_dir / binary_name)
     print(f"  已复制: {binary_name}")
 
     for document_name in (
@@ -375,38 +383,49 @@ def assemble_portable(exe_path, platform_name, target=None):
     ):
         document = ROOT / document_name
         if document.is_file():
-            shutil.copy2(document, portable_dir / document_name)
+            shutil.copy2(document, package_dir / document_name)
 
     resources_src = ROOT / "resources"
     if resources_src.exists():
-        resources_dst = portable_dir / "resources"
+        resources_dst = package_dir / "resources"
         resources_dst.mkdir()
         copied_resources = []
-        resource_files = ("aria2c.exe", "ffmpeg.exe") if platform_name == "windows" else ()
-        for name in (*resource_files, "README.md"):
+        for name in ("README.md",):
             source = resources_src / name
             if source.is_file():
                 destination = resources_dst / name
                 shutil.copy2(source, destination)
                 copied_resources.append(name)
 
-        if platform_name == "windows":
-            for name in ("aria2c.exe", "ffmpeg.exe"):
-                destination = resources_dst / name
-                if not destination.is_file():
-                    raise RuntimeError(f"Windows Release 缺少已审计运行时：resources/{name}")
-                write_file_checksum(destination)
-                copied_resources.append(f"{name} (+ sha256)")
-        else:
-            for name in ("aria2c", "ffmpeg"):
-                source = Path(shutil.which(name) or "")
-                if not source.is_file():
-                    raise RuntimeError(
-                        f"无法组装可运行的 {platform_name} Release：找不到 {name}。"
-                        "请先安装运行时工具后重试。"
-                    )
-                bundle_unix_runtime(source, name, resources_dst, platform_name)
-                copied_resources.append(f"{name} (+ bundled libraries and sha256)")
+        if variant == "portable":
+            runtime_names = (
+                ("aria2c.exe", "ffmpeg.exe")
+                if platform_name == "windows"
+                else ("aria2c", "ffmpeg", "ffprobe")
+            )
+            if platform_name == "windows":
+                for name in runtime_names:
+                    source = resources_src / name
+                    if not source.is_file():
+                        source = Path(shutil.which(name) or "")
+                    if not source.is_file():
+                        raise RuntimeError(f"Windows Release 缺少可运行时：{name}")
+                    destination = resources_dst / name
+                    shutil.copy2(source, destination)
+                    write_file_checksum(destination)
+                    copied_resources.append(f"{name} (+ sha256)")
+            else:
+                for name in (*runtime_names, "ffprobe"):
+                    source = Path(shutil.which(name) or "")
+                    if not source.is_file():
+                        if name == "ffprobe":
+                            continue
+                        raise RuntimeError(
+                            f"无法组装可运行的 {platform_name} Release：找不到 {name}。"
+                            "请先安装运行时工具后重试。"
+                        )
+                    bundle_unix_runtime(source, name, resources_dst, platform_name)
+                    copied_resources.append(f"{name} (+ bundled libraries and sha256)")
         for name in PORTABLE_RESOURCE_DIRS:
             source = resources_src / name
             if source.is_dir():
@@ -420,11 +439,11 @@ def assemble_portable(exe_path, platform_name, target=None):
     if static_src.exists():
         shutil.copytree(
             static_src,
-            portable_dir / "static",
+            package_dir / "static",
             ignore=shutil.ignore_patterns("node_modules"),
         )
-        portable_index = portable_dir / "static" / "index.html"
-        if (portable_dir / "static" / "dist" / "app.bundle.js").is_file() and portable_index.is_file():
+        portable_index = package_dir / "static" / "index.html"
+        if (package_dir / "static" / "dist" / "app.bundle.js").is_file() and portable_index.is_file():
             index_text = portable_index.read_text(encoding="utf-8")
             portable_index.write_text(
                 index_text.replace("js/app.js", "dist/app.bundle.js"), encoding="utf-8"
@@ -435,21 +454,21 @@ def assemble_portable(exe_path, platform_name, target=None):
 
     ico_src = ROOT / "static" / "bulibuli.ico"
     if ico_src.exists():
-        shutil.copy2(ico_src, portable_dir / "bulibuli.ico")
+        shutil.copy2(ico_src, package_dir / "bulibuli.ico")
         print("  已复制: bulibuli.ico")
 
-    (portable_dir / "data").mkdir(exist_ok=True)
+    (package_dir / "data").mkdir(exist_ok=True)
     print("  已创建: data/")
 
     if platform_name == "linux":
         installer_src = ROOT / "deploy" / "linux" / "install.sh"
         if installer_src.is_file():
-            installer_dst = portable_dir / "install.sh"
+            installer_dst = package_dir / "install.sh"
             shutil.copy2(installer_src, installer_dst)
             installer_dst.chmod(installer_dst.stat().st_mode | 0o111)
             print("  已复制: install.sh")
 
-    validate_portable_tree(portable_dir, platform_name)
+    validate_package_tree(package_dir, platform_name, variant)
 
     archive_format = "zip" if platform_name == "windows" else "gztar"
     archive_path = Path(
@@ -457,14 +476,14 @@ def assemble_portable(exe_path, platform_name, target=None):
             str(dist_dir / stem),
             archive_format,
             root_dir=str(dist_dir),
-            base_dir=portable_dir.name,
+            base_dir=package_dir.name,
         )
     )
     checksum_path = write_checksum(archive_path)
-    print(f"\n  便携版目录: {portable_dir}")
+    print(f"\n  {variant} 包目录: {package_dir}")
     print(f"  发布归档: {archive_path}")
     print(f"  校验文件: {checksum_path}")
-    return portable_dir, archive_path, checksum_path
+    return package_dir, archive_path, checksum_path
 
 
 def run_test(platform_name):
@@ -702,7 +721,10 @@ def run_quality_checks():
 def main():
     parser = argparse.ArgumentParser(description="补哩补哩 bulibuli 构建脚本")
     parser.add_argument("--check", action="store_true", help="运行全部规范门禁")
-    parser.add_argument("--portable", action="store_true", help="构建当前平台便携版")
+    parser.add_argument("--portable", action="store_true", help="构建当前平台完整便携版")
+    parser.add_argument("--core", action="store_true", help="构建不含媒体运行时的轻量包")
+    parser.add_argument("--skip-frontend", action="store_true", help="复用已有 static/dist/app.bundle.js")
+    parser.add_argument("--skip-rust-build", action="store_true", help="复用已有 release 二进制")
     parser.add_argument(
         "--platform",
         choices=("auto", "windows", "linux", "macos"),
@@ -723,7 +745,10 @@ def main():
 
     print(f"=== {APP_DISPLAY_NAME} {APP_SLUG} v{APP_VERSION} 构建脚本 ===\n")
 
-    if not args.portable:
+    if args.portable and args.core:
+        parser.error("--portable 与 --core 不能同时使用")
+
+    if not args.portable and not args.core:
         run_test(platform_name)
         return
 
@@ -731,14 +756,25 @@ def main():
     dist_dir.mkdir(exist_ok=True)
 
     check_cargo()
-    build_frontend_bundle()
-    exe_path = build_release(platform_name, args.target)
-    portable_dir, archive_path, checksum_path = assemble_portable(
-        exe_path, platform_name, args.target
+    if args.skip_frontend:
+        bundle = ROOT / "static" / "dist" / "app.bundle.js"
+        if not bundle.is_file():
+            parser.error("--skip-frontend 要求已有 static/dist/app.bundle.js")
+    else:
+        build_frontend_bundle()
+    if args.skip_rust_build:
+        exe_path = release_binary_path(platform_name, args.target)
+        if not exe_path.is_file():
+            parser.error(f"--skip-rust-build 要求已有 release 二进制：{exe_path}")
+    else:
+        exe_path = build_release(platform_name, args.target)
+    variant = "portable" if args.portable else "core"
+    package_dir, archive_path, checksum_path = assemble_package(
+        exe_path, platform_name, args.target, variant
     )
 
     print("\n构建完成!")
-    print(f"  便携版: {portable_dir}")
+    print(f"  {variant}: {package_dir}")
     print(f"  归档: {archive_path}")
     print(f"  SHA-256: {checksum_path}")
     print()

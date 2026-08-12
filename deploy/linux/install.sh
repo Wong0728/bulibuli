@@ -4,7 +4,7 @@
 # 远程安装：
 #   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | bash
 #   # 固定版本（可复现）：
-#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | BULIBULI_VERSION=v2.0.0-alpha.2 bash
+#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | BULIBULI_VERSION=v2.0.0-alpha.3 bash
 #
 # 本地发布包：
 #   ./install.sh [install|run|service|unservice|status]
@@ -31,6 +31,7 @@ BIN_PATH=""
 MODE=""
 REMOTE_BOOTSTRAP=0
 TEMP_DIR=""
+REMOTE_VARIANT="portable"
 
 log()  { printf '\033[32m[bulibuli]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[warn]\033[0m %s\n' "$*"; }
@@ -92,6 +93,120 @@ verify_checksum() {
     die "系统没有 sha256sum 或 shasum，拒绝安装未校验的归档"
 }
 
+resolve_env_binary() {
+    local variable="$1" name="$2" value candidate
+    value="${!variable:-}"
+    [ -n "${value}" ] || return 1
+    if [ -x "${value}" ]; then
+        printf '%s\n' "${value}"
+        return 0
+    fi
+    candidate="${value}/${name}"
+    [ -x "${candidate}" ] || return 1
+    printf '%s\n' "${candidate}"
+}
+
+external_aria2_path() {
+    resolve_env_binary ARIA2C_PATH aria2c || command -v aria2c 2>/dev/null || true
+}
+
+external_ffmpeg_path() {
+    local value candidate
+    for variable in FFMPEG_PATH FFMPEG FF_PATH FFMPEG_HOME FFMPEG_DIR; do
+        value="${!variable:-}"
+        [ -n "${value}" ] || continue
+        if [ -x "${value}" ]; then
+            printf '%s\n' "${value}"
+            return 0
+        fi
+        candidate="${value}/ffmpeg"
+        if [ -x "${candidate}" ]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+    command -v ffmpeg 2>/dev/null || true
+}
+
+external_ffprobe_path() {
+    local ffmpeg_path="${1:-}" value candidate
+    value="${FFPROBE_PATH:-}"
+    if [ -x "${value}" ]; then
+        printf '%s\n' "${value}"
+        return 0
+    fi
+    if [ -n "${value}" ] && [ -x "${value}/ffprobe" ]; then
+        printf '%s\n' "${value}/ffprobe"
+        return 0
+    fi
+    if [ -n "${ffmpeg_path}" ]; then
+        candidate="$(dirname "${ffmpeg_path}")/ffprobe"
+        if [ -x "${candidate}" ]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    fi
+    command -v ffprobe 2>/dev/null || true
+}
+
+runtime_available() {
+    local aria2_path ffmpeg_path ffprobe_path
+    aria2_path="$(external_aria2_path)"
+    ffmpeg_path="$(external_ffmpeg_path)"
+    ffprobe_path="$(external_ffprobe_path "${ffmpeg_path}")"
+    [ -n "${aria2_path}" ] && [ -n "${ffmpeg_path}" ] || return 1
+    "${aria2_path}" -v >/dev/null 2>&1 || return 1
+    "${ffmpeg_path}" -version >/dev/null 2>&1 || return 1
+}
+
+missing_runtime_packages() {
+    local missing=()
+    [ -n "$(external_aria2_path)" ] || missing+=(aria2)
+    if [ -z "$(external_ffmpeg_path)" ]; then
+        missing+=(ffmpeg)
+    fi
+    printf '%s\n' "${missing[@]}"
+}
+
+install_system_deps_if_possible() {
+    local missing=()
+    mapfile -t missing < <(missing_runtime_packages)
+    [ ${#missing[@]} -gt 0 ] || return 0
+    local -a sudo_cmd=()
+    [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1 && sudo_cmd=(sudo)
+    if command -v apt-get >/dev/null 2>&1; then
+        if ! "${sudo_cmd[@]}" apt-get update || ! "${sudo_cmd[@]}" apt-get install -y "${missing[@]}"; then return 1; fi
+    elif command -v dnf >/dev/null 2>&1; then
+        if ! "${sudo_cmd[@]}" dnf install -y "${missing[@]}"; then return 1; fi
+    elif command -v yum >/dev/null 2>&1; then
+        if ! "${sudo_cmd[@]}" yum install -y "${missing[@]}"; then return 1; fi
+    elif command -v pacman >/dev/null 2>&1; then
+        if ! "${sudo_cmd[@]}" pacman -Sy --noconfirm "${missing[@]}"; then return 1; fi
+    elif command -v zypper >/dev/null 2>&1; then
+        if ! "${sudo_cmd[@]}" zypper install -y "${missing[@]}"; then return 1; fi
+    elif command -v apk >/dev/null 2>&1; then
+        if ! "${sudo_cmd[@]}" apk add "${missing[@]}"; then return 1; fi
+    else
+        return 1
+    fi
+    runtime_available
+}
+
+choose_remote_variant() {
+    if runtime_available; then
+        REMOTE_VARIANT="core"
+        log "检测到本机 aria2c 和 FFmpeg，将下载轻量 core 包"
+        return
+    fi
+    if install_system_deps_if_possible; then
+        REMOTE_VARIANT="core"
+        log "系统依赖已就绪，将下载轻量 core 包"
+    else
+        REMOTE_VARIANT="portable"
+        warn "本机缺少运行时或系统包管理器安装失败，将回退完整 portable 包"
+    fi
+}
+
 download_release() {
     local arch archive_name archive_url checksum_url extracted
     if [ "${APP_VERSION}" = "latest" ]; then
@@ -102,12 +217,22 @@ download_release() {
         x86_64|amd64) arch="x86_64" ;;
         *) die "当前 Linux 架构暂不支持：$(uname -m)，目前提供 x86_64 包" ;;
     esac
-    archive_name="${APP_SLUG}-linux-${arch}-portable-${APP_VERSION}.tar.gz"
+    TEMP_DIR="$(mktemp -d)"
+    archive_name="${APP_SLUG}-linux-${arch}-${REMOTE_VARIANT}-${APP_VERSION}.tar.gz"
     archive_url="https://github.com/${REPO}/releases/download/${APP_VERSION}/${archive_name}"
     checksum_url="${archive_url}.sha256"
-    TEMP_DIR="$(mktemp -d)"
     log "下载 ${archive_name}"
-    download_file "${archive_url}" "${TEMP_DIR}/${archive_name}"
+    if ! download_file "${archive_url}" "${TEMP_DIR}/${archive_name}"; then
+        if [ "${REMOTE_VARIANT}" != "core" ]; then
+            die "无法下载 ${archive_name}"
+        fi
+        REMOTE_VARIANT="portable"
+        archive_name="${APP_SLUG}-linux-${arch}-portable-${APP_VERSION}.tar.gz"
+        archive_url="https://github.com/${REPO}/releases/download/${APP_VERSION}/${archive_name}"
+        checksum_url="${archive_url}.sha256"
+        warn "该 Release 没有 core 包，回退下载完整 portable 包"
+        download_file "${archive_url}" "${TEMP_DIR}/${archive_name}"
+    fi
     download_file "${checksum_url}" "${TEMP_DIR}/${archive_name}.sha256"
     verify_checksum "${TEMP_DIR}/${archive_name}" "${TEMP_DIR}/${archive_name}.sha256"
     extracted="${TEMP_DIR}/${archive_name%.tar.gz}"
@@ -131,9 +256,11 @@ verify_runtime_checksums() {
         [ -f "${binary}" ] || die "Release 校验清单缺少对应文件：${binary}"
         verify_checksum "${binary}" "${manifest}"
     done < <(find "${resources_dir}" -type f -name '*.sha256' -print0)
-    for name in aria2c ffmpeg; do
-        [ -x "${resources_dir}/${name}" ] || die "Release 缺少可执行运行时：resources/${name}"
-    done
+    if [ "${REMOTE_VARIANT}" = "portable" ]; then
+        for name in aria2c ffmpeg; do
+            [ -x "${resources_dir}/${name}" ] || die "Release 缺少可执行运行时：resources/${name}"
+        done
+    fi
 }
 
 detect_layout() {
@@ -153,43 +280,21 @@ detect_layout() {
         return
     fi
 
+    choose_remote_variant
     download_release
 }
 
 install_deps() {
-    local missing=()
     local bundled_aria2="${APP_DIR}/resources/aria2c"
     local bundled_ffmpeg="${APP_DIR}/resources/ffmpeg"
     if [ -f "${bundled_aria2}" ]; then chmod +x "${bundled_aria2}"; fi
     if [ -f "${bundled_ffmpeg}" ]; then chmod +x "${bundled_ffmpeg}"; fi
-    [ -x "${bundled_aria2}" ] || command -v aria2c >/dev/null 2>&1 || missing+=(aria2)
-    [ -x "${bundled_ffmpeg}" ] || command -v ffmpeg >/dev/null 2>&1 || missing+=(ffmpeg)
-    if [ ${#missing[@]} -eq 0 ]; then
-        log "运行时依赖已就绪：aria2c、ffmpeg（优先使用 Release 包内置版本）"
+    if [ -x "${bundled_aria2}" ] && [ -x "${bundled_ffmpeg}" ]; then
+        log "运行时依赖已就绪：优先使用 Release 包内置版本"
         return
     fi
-
-    local -a sudo_cmd=()
-    [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1 && sudo_cmd=(sudo)
-    log "需要安装：${missing[*]}"
-    if command -v apt-get >/dev/null 2>&1; then
-        "${sudo_cmd[@]}" apt-get update
-        "${sudo_cmd[@]}" apt-get install -y "${missing[@]}"
-    elif command -v dnf >/dev/null 2>&1; then
-        "${sudo_cmd[@]}" dnf install -y "${missing[@]}"
-    elif command -v yum >/dev/null 2>&1; then
-        "${sudo_cmd[@]}" yum install -y "${missing[@]}"
-    elif command -v pacman >/dev/null 2>&1; then
-        "${sudo_cmd[@]}" pacman -Sy --noconfirm "${missing[@]}"
-    elif command -v zypper >/dev/null 2>&1; then
-        "${sudo_cmd[@]}" zypper install -y "${missing[@]}"
-    elif command -v apk >/dev/null 2>&1; then
-        "${sudo_cmd[@]}" apk add "${missing[@]}"
-    else
-        warn "未识别的包管理器，请手动安装：${missing[*]}"
-    fi
-    [ -x "${bundled_aria2}" ] || command -v aria2c >/dev/null 2>&1 || die "aria2c 仍不可用；请使用包含 resources/aria2c 的 Release 包或安装 aria2"
-    [ -x "${bundled_ffmpeg}" ] || command -v ffmpeg >/dev/null 2>&1 || die "FFmpeg 仍不可用；请使用包含 resources/ffmpeg 的 Release 包或安装 ffmpeg"
+    runtime_available || die "aria2c 或 FFmpeg 不可用；请安装系统依赖，或重新使用完整 portable 包"
+    log "运行时依赖已就绪：使用环境变量路径或系统 PATH"
 }
 
 ensure_binary() {

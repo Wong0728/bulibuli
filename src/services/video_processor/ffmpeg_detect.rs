@@ -32,16 +32,19 @@ impl VideoProcessor {
             "custom" => {
                 if let Some(p) = custom_path {
                     let pb = PathBuf::from(p);
-                    if pb.exists() {
+                    if pb.is_file() {
                         return (Some(pb), "custom".to_string());
                     }
                 }
             }
             _ => {
-                // auto: custom > env > system > embedded（与 Python get_ffmpeg_path 优先级一致）
+                // auto: embedded > custom > env > system；完整包优先使用包内版本。
+                if let Some(p) = self.embedded_ffmpeg() {
+                    return (Some(p), "embedded".to_string());
+                }
                 if let Some(p) = custom_path {
                     let pb = PathBuf::from(p);
-                    if pb.exists() {
+                    if pb.is_file() {
                         return (Some(pb), "custom".to_string());
                     }
                 }
@@ -50,10 +53,6 @@ impl VideoProcessor {
                 }
                 if let Ok(p) = which::which("ffmpeg") {
                     return (Some(p), "system".to_string());
-                }
-                // 内置回退不限平台：Linux 便携包同样可携带 resources/ffmpeg
-                if let Some(p) = self.embedded_ffmpeg() {
-                    return (Some(p), "embedded".to_string());
                 }
             }
         }
@@ -79,7 +78,7 @@ impl VideoProcessor {
                     "ffmpeg"
                 };
                 let candidate = p.join(exe_name);
-                if candidate.exists() {
+                if candidate.is_file() {
                     return Some(candidate);
                 }
             }
@@ -95,7 +94,7 @@ impl VideoProcessor {
             "ffmpeg"
         };
         let p = self.paths.app_root.join("resources").join(binary_name);
-        if p.exists() {
+        if p.is_file() {
             return Some(p);
         }
         if let Ok(exe) = std::env::current_exe() {

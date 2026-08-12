@@ -148,7 +148,10 @@ jobs:
           npm ci --ignore-scripts
           npm run build
       - name: Build portable archive
-        run: python build.py --portable --platform ${{ matrix.platform }} --target ${{ matrix.target }}
+        run: python build.py --portable --skip-frontend --platform ${{ matrix.platform }} --target ${{ matrix.target }}
+      - name: Build Linux core archive
+        if: matrix.platform == 'linux'
+        run: python build.py --core --skip-frontend --skip-rust-build --platform linux --target ${{ matrix.target }}
       - name: Upload archive and checksum
         uses: actions/upload-artifact@v4
         with:
@@ -178,8 +181,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find dist -maxdepth 1 -type f -name 'bulibuli-*' | wc -l)" -ge 4
-          test "$(find dist -maxdepth 1 -type f -name '*.sha256' | wc -l)" -ge 4
+          test "$(find dist -maxdepth 1 -type f \( -name '*portable*.zip' -o -name '*portable*.tar.gz' \) | wc -l)" -eq 4
+          test "$(find dist -maxdepth 1 -type f -name '*portable*.sha256' | wc -l)" -eq 4
+          test "$(find dist -maxdepth 1 -type f -name '*linux*x86_64*core*.tar.gz' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*linux*x86_64*core*.sha256' | wc -l)" -eq 1
           for file in dist/bulibuli-*portable-*; do
             case "${file}" in
               *"${GITHUB_REF_NAME}"*) ;;

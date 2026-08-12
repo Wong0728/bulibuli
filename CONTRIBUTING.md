@@ -22,7 +22,7 @@ npm run build
 npm run test:smoke
 ```
 
-For a release-affecting change, build the local platform package with `python build.py --portable` and confirm that the archive contains the executable, `static/`, `resources/aria2c*`, `resources/ffmpeg*`, any bundled Unix `resources/lib/` files, and the matching checksums. Do not push a tag unless the release assets are ready.
+For a release-affecting change, build the local platform package with `python build.py --portable` and confirm that the archive contains the executable, `static/`, `resources/aria2c*`, `resources/ffmpeg*`, any bundled Unix `resources/lib/` files, and the matching checksums. `ffprobe` is optional because the program falls back to FFmpeg for probing. Linux CI also builds a `core` archive without media runtimes for the dependency-aware installer. Do not push a tag unless the release assets are ready.
 
 ## Commit and review expectations
 
