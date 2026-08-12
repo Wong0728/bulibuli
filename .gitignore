@@ -7,5 +7,14 @@
 *.py[cod]
 clippy_output*.txt
 .codex_*
-# 外部参考项目不属于 bulibuli 主线
+
+# External reference material is local-only and must never enter the public repo.
 【EXAMPLE】*/
+
+# Local review, migration, and release-analysis notes.
+AUDIT_REPORT.md
+bulibuli-linux-report.md
+代码规范.md
+docs/问题归因与优化方案.md
+docs/release-security-status-*.md
+docs/v2-main-migration-status.md
