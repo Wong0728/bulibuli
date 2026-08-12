@@ -4,7 +4,7 @@
 # 远程安装：
 #   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | bash
 #   # 固定版本（可复现）：
-#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | BULIBULI_VERSION=v2.0.0-alpha.2 bash
+#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | BULIBULI_VERSION=v2.0.0-alpha.3 bash
 #
 # 用法：
 #   bash install.sh            安装依赖 + 本机编译

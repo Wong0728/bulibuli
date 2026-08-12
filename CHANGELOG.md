@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.0-alpha.3
+
+- GitHub Release 的 `portable` 包继续提供完整自包含的 aria2c、FFmpeg 和必要动态库；ffprobe 可选，缺失时由 FFmpeg 回退探测。
+- Linux 一键安装优先复用本机运行时，依赖齐全时下载更小的 `core` 包；缺少依赖时回退完整包。
+- 完善包内运行时优先级和 `ffprobe` 可选探测回退。
+
 ## v2.0.0-alpha.2
 
 - Linux/macOS portable packages carry platform-native aria2c and FFmpeg binaries plus SHA-256 manifests.

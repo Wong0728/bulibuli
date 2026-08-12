@@ -353,16 +353,25 @@ async fn probe_media(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .output()
-        .await
-        .with_context(|| format!("启动 ffprobe 校验失败: {}", probe.display()))?;
-    if !result.status.success() {
-        return Err(anyhow!(
+        .await;
+    match result {
+        Ok(result) if result.status.success() => parse_probe_json(&result.stdout),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            probe_media_with_ffmpeg(ffmpeg_path, input).await
+        }
+        Ok(result) => Err(anyhow!(
             "ffprobe 校验失败: {}",
             String::from_utf8_lossy(&result.stderr).trim()
-        ));
+        )),
+        Err(error) => {
+            Err(error).with_context(|| format!("启动 ffprobe 校验失败: {}", probe.display()))
+        }
     }
+}
+
+fn parse_probe_json(stdout: &[u8]) -> Result<MediaProbe> {
     let value: serde_json::Value =
-        serde_json::from_slice(&result.stdout).context("解析 ffprobe 校验结果失败")?;
+        serde_json::from_slice(stdout).context("解析 ffprobe 校验结果失败")?;
     let streams = value
         .get("streams")
         .and_then(serde_json::Value::as_array)
@@ -386,17 +395,77 @@ async fn probe_media(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
     })
 }
 
+async fn probe_media_with_ffmpeg(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
+    let result = Command::new(ffmpeg_path)
+        .args(["-hide_banner", "-i"])
+        .arg(input)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .with_context(|| format!("使用 FFmpeg 读取媒体信息失败: {}", ffmpeg_path.display()))?;
+    let text = String::from_utf8_lossy(&result.stderr);
+    let duration_secs = text
+        .lines()
+        .find_map(|line| line.split("Duration: ").nth(1))
+        .and_then(|value| value.split(',').next())
+        .and_then(parse_timestamp)
+        .ok_or_else(|| anyhow!("FFmpeg 未返回有效媒体时长"))?;
+    let has_video = text.lines().any(|line| line.contains(" Video:"));
+    let has_audio = text.lines().any(|line| line.contains(" Audio:"));
+    if !result.status.success() && !has_video && !has_audio {
+        return Err(anyhow!("FFmpeg 媒体探测失败: {}", text.trim()));
+    }
+    Ok(MediaProbe {
+        duration_secs,
+        has_video,
+        has_audio,
+    })
+}
+
+fn parse_timestamp(value: &str) -> Option<f64> {
+    let mut parts = value.trim().split(':');
+    let hours = parts.next()?.parse::<f64>().ok()?;
+    let minutes = parts.next()?.parse::<f64>().ok()?;
+    let seconds = parts.next()?.parse::<f64>().ok()?;
+    Some(hours * 3600.0 + minutes * 60.0 + seconds)
+}
+
 fn ffprobe_path(ffmpeg_path: &Path) -> PathBuf {
     let probe_name = if cfg!(windows) {
         "ffprobe.exe"
     } else {
         "ffprobe"
     };
-    ffmpeg_path
+    if let Some(candidate) = ffmpeg_path
         .parent()
         .map(|parent| parent.join(probe_name))
         .filter(|path| path.is_file())
-        .unwrap_or_else(|| PathBuf::from(probe_name))
+    {
+        return candidate;
+    }
+    for variable in [
+        "FFPROBE_PATH",
+        "FFPROBE",
+        "FFMPEG_PATH",
+        "FFMPEG_HOME",
+        "FFMPEG_DIR",
+    ] {
+        if let Ok(value) = std::env::var(variable) {
+            let configured = PathBuf::from(value);
+            let candidate = if configured.is_file() {
+                configured
+            } else {
+                configured.join(probe_name)
+            };
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    which::which(probe_name).unwrap_or_else(|_| PathBuf::from(probe_name))
 }
 
 async fn run_merge_command_timed(

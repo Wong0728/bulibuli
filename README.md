@@ -19,7 +19,7 @@
 | macOS Intel | `bulibuli-macos-x86_64-portable-*.tar.gz` | 解压后运行 `./bulibuli` |
 | macOS Apple Silicon | `bulibuli-macos-arm64-portable-*.tar.gz` | 解压后运行 `./bulibuli` |
 
-便携包包含程序、前端、GeoIP 数据、对应平台的 aria2c/FFmpeg 运行时及其必要的非系统动态库，不要求用户另行安装 Rust、Node.js、aria2 或 FFmpeg。Linux/macOS 如果系统阻止执行新文件，请先执行：
+GitHub 页面上的 `portable` 包是完整自包含包：包含程序、前端、GeoIP 数据、对应平台的 aria2c、FFmpeg 及必要的非系统动态库，不要求用户另行安装 Rust、Node.js、aria2 或 FFmpeg。若系统另有可用的 `ffprobe`，程序也会优先使用它；没有时会用包内 FFmpeg 完成媒体探测。Linux/macOS 如果系统阻止执行新文件，请先执行：
 
 ```bash
 chmod +x bulibuli resources/aria2c resources/ffmpeg
@@ -29,7 +29,7 @@ chmod +x bulibuli resources/aria2c resources/ffmpeg
 
 ### Linux 一键安装
 
-安装器默认查询最新 GitHub Release，并校验归档和包内 aria2c/FFmpeg 的 SHA-256：
+一键安装器会先检查包内运行时（完整包优先），再检查 `ARIA2C_PATH`、`FFMPEG_PATH`/`FFMPEG`/`FFMPEG_HOME`/`FFMPEG_DIR`、`FFPROBE_PATH` 和系统 `PATH`。依赖齐全时下载体积更小的 `core` 包；缺少 aria2c 或 FFmpeg 时才尝试系统包管理器，仍不可用才回退完整 `portable` 包。两种归档都会校验 SHA-256：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | bash
@@ -45,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh \
-  | BULIBULI_VERSION=v2.0.0-alpha.2 bash
+  | BULIBULI_VERSION=v2.0.0-alpha.3 bash
 ```
 
 安装器支持 `install`、`run`、`service`、`unservice` 和 `status`。`service` 会优先使用用户级 systemd；root 安装会创建独立服务用户。自定义数据目录时使用绝对路径，例如：
@@ -71,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termu
 1. 启动程序并打开终端打印的本地 URL。
 2. 首次设备配对码会同时显示在终端，并写入 `data/pair-code.txt`；文件权限为当前用户可读，配对成功后自动删除。
 3. 在网页中完成设备配对和安全设置，再按需扫码登录 B 站。
-4. 下载任务使用内置 aria2c，视频合并、字幕烧录和直播录制使用内置 FFmpeg。
+4. 完整包优先使用包内 aria2c 和 FFmpeg；轻量 `core` 包没有包内运行时时，按环境变量再到系统 `PATH` 查找，媒体探测会继续寻找 ffprobe 或回退 FFmpeg。
 
 常用本机控制命令：
 
@@ -115,7 +115,7 @@ python build.py --check
 python build.py --portable
 ```
 
-`python build.py --portable` 会拒绝组装缺少 aria2c、FFmpeg 或必要动态库的 Unix 包，避免生成用户下载后无法完成核心任务的 Release。每个 Release 由 tag 触发 GitHub Actions 自动生成，归档与校验文件会一起上传。
+`python build.py --portable` 会生成完整自包含包，拒绝组装缺少 aria2c、FFmpeg 或必要动态库的 Unix 包；`python build.py --core` 生成不含媒体运行时的轻量命令包。每个 Release 由 tag 触发 GitHub Actions，GitHub 页面上传完整 `portable` 包，Linux 另上传供一键安装器使用的 `core` 包。
 
 ## 文档与贡献
 

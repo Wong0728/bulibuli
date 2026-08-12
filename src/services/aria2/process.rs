@@ -248,22 +248,26 @@ impl Aria2Manager {
     }
 
     fn find_aria2c(&self) -> Result<PathBuf> {
-        // 1. 环境变量 ARIA2C_PATH
-        if let Ok(val) = std::env::var("ARIA2C_PATH") {
-            let p = PathBuf::from(&val);
-            if p.exists() {
-                return Ok(p);
-            }
-        }
-        // 2. resources 目录（按平台选择可执行文件名，Linux/Termux 下无 .exe 后缀）
+        // 1. resources 目录（完整包优先使用包内版本）
         let binary_name = if cfg!(windows) {
             "aria2c.exe"
         } else {
             "aria2c"
         };
         let embedded = self.paths.app_root.join("resources").join(binary_name);
-        if embedded.exists() {
+        if embedded.is_file() {
             return Ok(embedded);
+        }
+        // 2. 环境变量 ARIA2C_PATH
+        if let Ok(val) = std::env::var("ARIA2C_PATH") {
+            let p = PathBuf::from(&val);
+            if p.is_file() {
+                return Ok(p);
+            }
+            let candidate = p.join(binary_name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
         }
         // 3. PATH
         if let Ok(path) = which::which("aria2c") {
