@@ -7,7 +7,7 @@ use super::DanmakuService;
 
 /// 评论 HTML 的内嵌样式（简洁，贴近下载助手配色）。
 const COMMENT_HTML_STYLE: &str = r#"<style>
-:root { --brand:#00a1d6; --text:#18191c; --muted:#9499a0; --border:#e3e5e7; --bg:#f6f7f8; --vip:#fb7299; }
+ :root { --brand:#00a1d6; --text:#18191c; --muted:#9499a0; --border:#e3e5e7; --bg:#f6f7f8; --vip:#fb7299; --green:#67c23a; --orange:#f39800; --purple:#9b59b6; --pink:#fb7299; }
 * { box-sizing:border-box; }
 body { margin:0; padding:20px; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; font-size:14px; line-height:1.6; }
 .wrap { max-width:820px; margin:0 auto; }
@@ -17,7 +17,12 @@ body { margin:0; padding:20px; background:var(--bg); color:var(--text); font-fam
 .cmt { padding:14px 16px; background:#fff; border:1px solid var(--border); border-radius:12px; margin-bottom:12px; }
 .cmt-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:8px; }
 .cmt-idx { color:var(--muted); font-size:12px; }
-.cmt-user { font-weight:600; color:var(--brand); }
+ .cmt-user { font-weight:600; color:var(--brand); }
+ .cmt-user-cyan { color:var(--brand); }
+ .cmt-user-green { color:var(--green); }
+ .cmt-user-orange { color:var(--orange); }
+ .cmt-user-purple { color:var(--purple); }
+ .cmt-user-pink { color:var(--pink); }
 .cmt-lv { font-size:11px; color:var(--muted); border:1px solid var(--border); border-radius:4px; padding:0 5px; }
 .cmt-vip { color:#fff; background:var(--vip); border-radius:999px; padding:0 6px; font-size:11px; font-weight:600; }
 .cmt-meta { color:var(--muted); font-size:12px; margin-left:auto; }
@@ -44,10 +49,21 @@ impl DanmakuService {
 
     fn user_badges(comment: &Value) -> String {
         let name_color = comment["name_color"].as_str().unwrap_or("");
-        let color = if name_color.starts_with('#') && name_color.len() == 7 {
-            format!(" style=\"color:{}\"", Self::html_escape(name_color))
-        } else {
-            String::new()
+        let color_class = match () {
+            _ if name_color.eq_ignore_ascii_case("#00a1d6")
+                || name_color.eq_ignore_ascii_case("#00aeec") =>
+            {
+                " cmt-user-cyan"
+            }
+            _ if name_color.eq_ignore_ascii_case("#67c23a") => " cmt-user-green",
+            _ if name_color.eq_ignore_ascii_case("#9b59b6") => " cmt-user-purple",
+            _ if name_color.eq_ignore_ascii_case("#f39800") => " cmt-user-orange",
+            _ if name_color.eq_ignore_ascii_case("#fb7299")
+                || name_color.eq_ignore_ascii_case("#ff6699") =>
+            {
+                " cmt-user-pink"
+            }
+            _ => "",
         };
         let vip = if comment["vip_status"].as_i64().unwrap_or(0) > 0 {
             let label = comment["vip_label"]
@@ -62,8 +78,8 @@ impl DanmakuService {
             String::new()
         };
         format!(
-            "<span class=\"cmt-user\"{}>{}</span>{}",
-            color,
+            "<span class=\"cmt-user{}\">{}</span>{}",
+            color_class,
             Self::html_escape(comment["uname"].as_str().unwrap_or("")),
             vip
         )
@@ -148,6 +164,8 @@ mod tests {
         }));
         assert!(badges.contains("年度大会员"));
         assert!(badges.contains("&lt;用户&gt;"));
+        assert!(badges.contains("cmt-user-pink"));
+        assert!(!badges.contains("style="));
         assert!(!badges.contains('👍'));
     }
 }

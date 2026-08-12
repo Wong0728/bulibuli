@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../static/js/node_modules/@playwright/test/index.mjs';
 
 const bvid = 'BV1smoke00001';
 

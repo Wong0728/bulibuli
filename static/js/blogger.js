@@ -150,7 +150,7 @@ export function renderBloggerSidebar() {
 
     if (_state.bloggers.length === 0) {
         sidebar.innerHTML = `
-            <div class="empty-state" data-js-style="4">
+            <div class="empty-state empty-state-spacious">
                 <i class="fa-solid fa-users-slash"></i>
                 <p>暂无监控博主</p>
                 <button class="btn btn-primary" data-action="show-add-blogger-modal">
@@ -386,7 +386,7 @@ export function renderBloggerLogs(bloggerId) {
     const state = _state.bloggerStates[bloggerId];
     if (!state || !state.logs || state.logs.length === 0) {
         logsContainer.innerHTML = `
-            <div class="empty-state" data-js-style="5">
+            <div class="empty-state empty-state-padded">
                 <i class="fa-solid fa-info-circle"></i>
                 <p>暂无日志</p>
             </div>

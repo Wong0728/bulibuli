@@ -131,7 +131,7 @@ export async function refreshVideoInfo(bvid) {
                 showToast(_NETWORK_ERR_MSG, 'error');
                 container.innerHTML = `<div class="drawer-live-stats-hint">实时数据暂不可用</div>`;
             } else {
-                container.innerHTML = `<div class="drawer-live-stats-hint" data-js-style="1"><i class="fa-solid fa-exclamation-circle"></i> ${escapeHtml(result.message || '获取失败')}</div>`;
+                container.innerHTML = `<div class="drawer-live-stats-hint status-error"><i class="fa-solid fa-exclamation-circle"></i> ${escapeHtml(result.message || '获取失败')}</div>`;
             }
             return;
         }
@@ -195,7 +195,7 @@ export async function loadBvidLogs(bvid) {
                 showToast(_NETWORK_ERR_MSG, 'error');
                 container.innerHTML = `<div class="drawer-logs-hint">暂不可用</div>`;
             } else {
-                container.innerHTML = `<div class="drawer-logs-hint" data-js-style="1">${escapeHtml(result.message || '加载失败')}</div>`;
+                container.innerHTML = `<div class="drawer-logs-hint status-error">${escapeHtml(result.message || '加载失败')}</div>`;
             }
             return;
         }
@@ -261,7 +261,7 @@ export function renderDrawerContentForManualQuery(video, bvid) {
             </div>
             <div class="drawer-info-item">
                 <span class="drawer-info-label">状态</span>
-                <span class="drawer-info-value" data-js-style="19">未下载</span>
+                <span class="drawer-info-value drawer-info-muted">未下载</span>
             </div>
         </div>
 
@@ -376,7 +376,7 @@ export function renderSeasonResolveResult(result, mediaType) {
             ? '该番剧可能需要大会员专享或存在区域限制'
             : '该课程可能需要购买后才能下载';
         resultDiv.innerHTML = `
-            <div class="card empty-state" data-js-style="1">
+            <div class="card empty-state status-error">
                 <i class="fa-solid fa-lock fa-2x mb-md"></i>
                 <p>${escapeHtml(result.message || '当前账号无权限访问该内容')}</p>
                 <p class="empty-hint">${escapeHtml(hint)}</p>

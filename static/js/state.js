@@ -21,6 +21,8 @@ const stateTarget = {
     statusPollingInFlight: false,
     qrcodePollInFlight: false,
     sessionRole: 'owner',
+    sessionAuthenticated: null,
+    backendAvailable: true,
     currentTab: 'search',
     activeTabPollTimer: null,
     boardRefreshInFlight: false,

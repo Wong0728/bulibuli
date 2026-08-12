@@ -16,7 +16,7 @@ export async function loadDrawerComments(bvid, path = '') {
                 showToast(_NETWORK_ERR_MSG, 'error');
                 container.innerHTML = '<div class="drawer-comments-hint">暂不可用</div>';
             } else {
-                container.innerHTML = `<div class="drawer-comments-hint" data-js-style="1">${escapeHtml(result.message || '加载失败')}</div>`;
+                container.innerHTML = `<div class="drawer-comments-hint status-error">${escapeHtml(result.message || '加载失败')}</div>`;
             }
             return;
         }
@@ -104,14 +104,27 @@ export function renderDrawerCommentCard(c) {
     };
     const uname = escapeHtml(c.uname || '');
     const vip = Number(c.vip_status || 0) > 0 ? `<span class="cmt-vip">${escapeHtml(c.vip_label || '大会员')}</span>` : '';
-    const userStyle = /^#[0-9a-f]{6}$/i.test(c.name_color || '') ? ` style="color:${escapeHtml(c.name_color)}"` : '';
+    const userTone = commentUserTone(c.name_color);
     const replies = Array.isArray(c.replies) ? c.replies : [];
     const repliesHtml = replies.length
         ? `<div class="cmt-replies"><div class="cmt-replies-title">回复 · 显示 ${replies.length}/${c.total_replies || 0} 条</div>${replies.map(reply => {
-            const replyStyle = /^#[0-9a-f]{6}$/i.test(reply.name_color || '') ? ` style="color:${escapeHtml(reply.name_color)}"` : '';
+            const replyTone = commentUserTone(reply.name_color);
             const replyVip = Number(reply.vip_status || 0) > 0 ? `<span class="cmt-vip">${escapeHtml(reply.vip_label || '大会员')}</span>` : '';
-            return `<div class="cmt-reply"><div class="cmt-line"><span class="cmt-user"${replyStyle}>${escapeHtml(reply.uname || '')}</span>${replyVip}<span class="cmt-lv">Lv${reply.level || 0}</span><span class="cmt-meta"><i class="fa-solid fa-thumbs-up"></i> ${reply.like || 0} · ${fmtTime(reply.ctime)}</span></div><div class="cmt-text">${escapeHtml(reply.message || '')}</div></div>`;
+            return `<div class="cmt-reply"><div class="cmt-line"><span class="cmt-user${replyTone}">${escapeHtml(reply.uname || '')}</span>${replyVip}<span class="cmt-lv">Lv${reply.level || 0}</span><span class="cmt-meta"><i class="fa-solid fa-thumbs-up"></i> ${reply.like || 0} · ${fmtTime(reply.ctime)}</span></div><div class="cmt-text">${escapeHtml(reply.message || '')}</div></div>`;
         }).join('')}</div>`
         : '';
-    return `<div class="cmt-card"><div class="cmt-line"><span class="cmt-user"${userStyle}>${uname}</span>${vip}<span class="cmt-lv">Lv${c.level || 0}</span><span class="cmt-meta"><i class="fa-solid fa-thumbs-up"></i> ${c.like || 0} · <i class="fa-solid fa-comment"></i> ${c.total_replies || 0} · ${fmtTime(c.ctime)}</span></div><div class="cmt-text">${escapeHtml(c.message || '')}</div>${repliesHtml}</div>`;
+    return `<div class="cmt-card"><div class="cmt-line"><span class="cmt-user${userTone}">${uname}</span>${vip}<span class="cmt-lv">Lv${c.level || 0}</span><span class="cmt-meta"><i class="fa-solid fa-thumbs-up"></i> ${c.like || 0} · <i class="fa-solid fa-comment"></i> ${c.total_replies || 0} · ${fmtTime(c.ctime)}</span></div><div class="cmt-text">${escapeHtml(c.message || '')}</div>${repliesHtml}</div>`;
+}
+
+function commentUserTone(value) {
+    const tones = {
+        '#00a1d6': ' cmt-user-cyan',
+        '#00aeec': ' cmt-user-cyan',
+        '#67c23a': ' cmt-user-green',
+        '#9b59b6': ' cmt-user-purple',
+        '#f39800': ' cmt-user-orange',
+        '#fb7299': ' cmt-user-pink',
+        '#ff6699': ' cmt-user-pink',
+    };
+    return tones[String(value || '').trim().toLowerCase()] || '';
 }

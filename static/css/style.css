@@ -3725,6 +3725,11 @@ tr:hover {
     border-radius: var(--size-4);
     padding: 0 var(--size-4);
 }
+.cmt-user-cyan { color: var(--color-token-1); }
+.cmt-user-green { color: var(--color-token-3); }
+.cmt-user-orange { color: var(--warning); }
+.cmt-user-purple { color: var(--color-token-13); }
+.cmt-user-pink { color: var(--brand); }
 .cmt-vip {
     display: inline-flex;
     align-items: center;
@@ -5071,41 +5076,35 @@ tr:hover {
 /* 全局兼容：JS 统一用 el.hidden 控制显隐，确保 hidden 属性不被任何 class 的 display 规则覆盖。 */
 [hidden] { display: none !important; }
 
-/* 由原 HTML style 属性生成的类。 */
-.html-style-3 { margin-right: var(--radius-md); }
-.html-style-4 { padding: var(--size-30) var(--size-20); }
-.html-style-5 { margin-top: var(--size-16); }
-.html-style-6 { margin-left:auto }
-.html-style-7 { margin-left:auto; }
-.html-style-8 { flex:2; min-width:var(--size-200); }
-.html-style-9 { font-size:var(--size-11);opacity:.55;margin-left:var(--radius-md); }
-.html-style-10 { margin-top:var(--size-12); }
-.html-style-11 { margin-top:var(--size-12); }
-.html-style-12 { margin-top:var(--radius-lg); }
-.html-style-13 { max-width: var(--size-400); }
-.html-style-14 { padding: var(--radius-sm) 0 var(--radius-lg); font-size: var(--size-14); line-height: 1.6; color: var(--text-secondary); }
-
-
-/* JS 生成模板使用的样式令牌。 */
-[data-js-style="1"] { color:var(--error); }
-[data-js-style="2"] { color: var(--color-token-11); }
-[data-js-style="3"] { color: var(--color-token-11); margin-left: var(--size-10); }
-[data-js-style="4"] { padding: var(--size-30) var(--size-20); }
-[data-js-style="5"] { padding: var(--size-20); }
-[data-js-style="6"] { display:none }
-[data-js-style="7"] { color:var(--text-muted); }
-[data-js-style="8"] { color:var(--brand); }
-[data-js-style="9"] { color:var(--success); }
-[data-js-style="10"] { color: var(--success); }
-[data-js-style="11"] { color: var(--error); }
-[data-js-style="12"] { color: var(--text-muted); font-size: var(--size-12); }
-[data-js-style="13"] { display:flex;align-items:center;gap:var(--size-8); }
-[data-js-style="14"] { padding:var(--size-20); }
-[data-js-style="15"] { margin: var(--size-20) auto; }
-[data-js-style="16"] { padding:var(--size-40) var(--size-20); }
-[data-js-style="17"] { color:var(--error);font-size:var(--size-32); }
-[data-js-style="18"] { margin-top:var(--size-12); }
-[data-js-style="19"] { color: var(--text-muted) }
+/* 语义化页面与模板样式。 */
+.network-banner-icon { margin-right: var(--radius-md); }
+.blogger-search-empty-state { padding: var(--size-30) var(--size-20); }
+.known-bloggers-card { margin-top: var(--size-16); }
+.known-bloggers-clear { margin-left: auto; }
+.manual-mode-switch-aligned { margin-left: auto; }
+.manual-series-select-group { flex: 2; min-width: var(--size-200); }
+.blogger-edit-icon { font-size: var(--size-11); opacity: .55; margin-left: var(--radius-md); }
+.account-action-group,
+.manual-cookie-panel { margin-top: var(--size-12); }
+.manual-cookie-actions { margin-top: var(--radius-lg); }
+.confirm-modal-container { max-width: var(--size-400); }
+.confirm-modal-message { padding: var(--radius-sm) 0 var(--radius-lg); font-size: var(--size-14); line-height: 1.6; color: var(--text-secondary); }
+.status-error { color: var(--error); }
+.premium-required { color: var(--color-token-11); }
+.premium-required-inline { color: var(--color-token-11); margin-left: var(--size-10); }
+.empty-state-spacious { padding: var(--size-30) var(--size-20); }
+.empty-state-padded { padding: var(--size-20); }
+.status-pending { color: var(--text-muted); }
+.status-progress { color: var(--brand); }
+.status-success { color: var(--success); }
+.status-source { color: var(--text-muted); font-size: var(--size-12); }
+.mobile-sidebar-label { display: flex; align-items: center; gap: var(--size-8); }
+.notice-empty { padding: var(--size-20); }
+.search-loading { margin: var(--size-20) auto; }
+.drawer-empty-state { padding: var(--size-40) var(--size-20); }
+.drawer-error-icon { color: var(--error); font-size: var(--size-32); }
+.drawer-empty-message { margin-top: var(--size-12); }
+.drawer-info-muted { color: var(--text-muted); }
 
 .tone-brand { color: var(--surface); background: var(--brand); }
 .tone-success { color: var(--surface); background: var(--success); }
@@ -5224,6 +5223,21 @@ progress.download-item-progress-fill {
 .startup-error-content p {
     margin-bottom: 1.25rem;
     color: var(--text-secondary);
+}
+
+.startup-notice-panel {
+    inset: var(--size-16) var(--size-16) auto;
+    display: block;
+    padding: 0;
+    background: transparent;
+    pointer-events: none;
+}
+
+.startup-notice-panel .startup-error-content {
+    margin: 0 auto;
+    padding: var(--size-16);
+    text-align: left;
+    pointer-events: auto;
 }
 
 .sr-only {

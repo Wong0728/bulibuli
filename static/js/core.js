@@ -6,9 +6,10 @@ import {
     checkNetworkBeforeAction,
     onNetworkRecovered,
     dismissNetworkToast,
+    setBackendAvailability,
 } from './network.js';
 import { checkCookiesStatus, dismissCookieWarning, updateLoginCard, refreshLoginInfo } from './auth-card.js';
-export { updateNetworkBanner, updateNetworkDisabledButtons, checkNetworkBeforeAction, onNetworkRecovered, dismissNetworkToast } from './network.js';
+export { updateNetworkBanner, updateNetworkDisabledButtons, checkNetworkBeforeAction, onNetworkRecovered, dismissNetworkToast, setBackendAvailability } from './network.js';
 export { checkCookiesStatus, dismissCookieWarning, updateLoginCard, refreshLoginInfo } from './auth-card.js';
 import { switchTab, showQRCodeLogin, refreshQRCode, closeQRCodeModal, toggleManualCookie, saveManualCookie, logoutAccount } from './bootstrap.js';
 import { loadMoreManualQuery, doManualResolve } from './manual.js';
@@ -162,6 +163,11 @@ document.addEventListener('click', event => {
     if (!target) return;
     const handler = _declarativeActions[target.dataset.action];
     if (!handler) return;
+    if (target.dataset.networkDisabled === 'true') {
+        event.preventDefault();
+        checkNetworkBeforeAction();
+        return;
+    }
     event.preventDefault();
     handler(target);
 });
@@ -491,7 +497,11 @@ export async function apiRequest(url, options = {}) {
         // 调用方必须显式读取 response.data，避免同名字段覆盖信封元数据。
         return envelope;
     } catch (error) {
-        if (error.name === 'AbortError' || error instanceof ApiError) throw error;
+        if (error.name === 'AbortError') throw error;
+        if (error instanceof ApiError) {
+            if (error.code === 502 || error.message === '响应格式异常') setBackendAvailability(false);
+            throw error;
+        }
         _state.networkFailCount++;
         _state.isNetworkOnline = false;
         updateNetworkBanner();

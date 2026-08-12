@@ -220,18 +220,18 @@ export async function refreshFFmpegDetectedPath() {
             }
 
             const isAvailable = data.available;
-            const statusIcon = isAvailable ? '<i class="fa-solid fa-check-circle" data-js-style="10"></i>' : '<i class="fa-solid fa-exclamation-triangle" data-js-style="11"></i>';
+            const statusIcon = isAvailable ? '<i class="fa-solid fa-check-circle status-success"></i>' : '<i class="fa-solid fa-exclamation-triangle status-error"></i>';
             
             detectedPathEl.innerHTML = `
-                ${statusIcon} <i class="fa-solid ${icon}"></i> ${escapeHtml(path)} ${sourceText ? `<span data-js-style="12">${escapeHtml(sourceText)}</span>` : ''}
+                ${statusIcon} <i class="fa-solid ${icon}"></i> ${escapeHtml(path)} ${sourceText ? `<span class="status-source">${escapeHtml(sourceText)}</span>` : ''}
             `;
             // ponytail: 首次检测可能后端尚未探完，补一次延迟重试
             if (!data.path) setTimeout(refreshFFmpegDetectedPath, 2000);
         } else {
-            detectedPathEl.innerHTML = '<i class="fa-solid fa-exclamation-circle" data-js-style="11"></i> 检测失败';
+            detectedPathEl.innerHTML = '<i class="fa-solid fa-exclamation-circle status-error"></i> 检测失败';
         }
     } catch (e) {
-        detectedPathEl.innerHTML = '<i class="fa-solid fa-exclamation-circle" data-js-style="11"></i> 检测失败';
+        detectedPathEl.innerHTML = '<i class="fa-solid fa-exclamation-circle status-error"></i> 检测失败';
     }
 }
 
@@ -281,12 +281,12 @@ export async function testFFmpeg() {
                 case 'embedded': sourceText = ' [内置]'; break;
                 case 'custom': sourceText = ' [自定义]'; break;
             }
-            resultEl.innerHTML = `<span data-js-style="10"><i class="fa-solid fa-check-circle"></i> FFmpeg 可用${sourceText} ${data.version ? '(' + escapeHtml(data.version) + ')' : ''}</span>`;
+            resultEl.innerHTML = `<span class="status-success"><i class="fa-solid fa-check-circle"></i> FFmpeg 可用${sourceText} ${data.version ? '(' + escapeHtml(data.version) + ')' : ''}</span>`;
         } else {
-            resultEl.innerHTML = `<span data-js-style="11"><i class="fa-solid fa-times-circle"></i> ${escapeHtml(result.message || 'FFmpeg 不可用')}</span>`;
+            resultEl.innerHTML = `<span class="status-error"><i class="fa-solid fa-times-circle"></i> ${escapeHtml(result.message || 'FFmpeg 不可用')}</span>`;
         }
     } catch (e) {
-        resultEl.innerHTML = `<span data-js-style="11"><i class="fa-solid fa-times-circle"></i> 测试失败</span>`;
+        resultEl.innerHTML = `<span class="status-error"><i class="fa-solid fa-times-circle"></i> 测试失败</span>`;
     }
 }
 
@@ -729,7 +729,7 @@ export function initMobileSidebar() {
     // 创建切换按钮
     const toggleBtn = document.createElement('div');
     toggleBtn.className = 'sidebar-toggle-btn';
-    toggleBtn.innerHTML = '<div data-js-style="13"><i class="fa-solid fa-bars"></i> <span>博主列表</span></div><i class="fa-solid fa-chevron-right"></i>';
+    toggleBtn.innerHTML = '<div class="mobile-sidebar-label"><i class="fa-solid fa-bars"></i> <span>博主列表</span></div><i class="fa-solid fa-chevron-right"></i>';
     
     // 插入到 dashboard 前面
     dashboard.parentNode.insertBefore(toggleBtn, dashboard);

@@ -117,7 +117,7 @@ export async function renderKnownBloggers() {
     const list = await loadKnownBloggers();
     if (list.length === 0) {
         container.innerHTML = `
-            <div class="empty-state" data-js-style="5">
+            <div class="empty-state empty-state-padded">
                 <p>暂无已添加博主</p>
                 <p class="empty-hint">使用上方搜索添加博主</p>
             </div>
@@ -186,7 +186,7 @@ export function showBloggerNoticeModal() {
     const container = document.getElementById('blogger-notice-list');
     if (!container) return;
     if (list.length === 0) {
-        container.innerHTML = `<div class="empty-state" data-js-style="14"><p>暂无资料变更通知</p></div>`;
+        container.innerHTML = `<div class="empty-state notice-empty"><p>暂无资料变更通知</p></div>`;
     } else {
         container.innerHTML = list.map(b => {
             const time = b.last_seen_at ? new Date(b.last_seen_at).toLocaleString() : '';
@@ -293,7 +293,7 @@ export async function searchBloggers() {
     }
     _state.searchBloggersLock = true;
     if (searchBtn) { searchBtn.disabled = true; searchBtn.innerHTML = '<span class="loading"></span> 搜索中'; }
-    resultsEl.innerHTML = '<div class="loading" data-js-style="15"></div>';
+    resultsEl.innerHTML = '<div class="loading search-loading"></div>';
 
     const isAllDigits = /^\d+$/.test(q);
     let uidCardHtml = '';
@@ -336,9 +336,9 @@ export async function searchBloggers() {
             if (result.offline) {
                 // 网络错误：统一右上角 toast + 顶栏横幅，不在结果区内联渲染网络错误
                 showToast(_NETWORK_ERR_MSG, 'error');
-                resultsEl.innerHTML = uidCardHtml || `<div class="empty-state" data-js-style="5"><i class="fa-solid fa-magnifying-glass"></i><p>暂无结果，请稍后重试</p></div>`;
+                resultsEl.innerHTML = uidCardHtml || `<div class="empty-state empty-state-padded"><i class="fa-solid fa-magnifying-glass"></i><p>暂无结果，请稍后重试</p></div>`;
             } else if (!uidCardHtml) {
-                resultsEl.innerHTML = `<div class="empty-state" data-js-style="5"><p data-js-style="11"><i class="fa-solid fa-exclamation-circle"></i> ${escapeHtml(result.message || '搜索失败')}</p></div>`;
+                resultsEl.innerHTML = `<div class="empty-state empty-state-padded"><p class="status-error"><i class="fa-solid fa-exclamation-circle"></i> ${escapeHtml(result.message || '搜索失败')}</p></div>`;
             } else {
                 resultsEl.innerHTML = uidCardHtml;
                 showToast(result.message || '名称搜索失败', 'warning');
@@ -349,7 +349,7 @@ export async function searchBloggers() {
         const users = result.data?.users || [];
 
         if (!uidCardHtml && users.length === 0) {
-            resultsEl.innerHTML = '<div class="empty-state" data-js-style="5"><p>未找到匹配的博主</p></div>';
+            resultsEl.innerHTML = '<div class="empty-state empty-state-padded"><p>未找到匹配的博主</p></div>';
             return;
         }
 
@@ -401,7 +401,7 @@ export async function searchBloggers() {
         if (uidCardHtml) {
             resultsEl.innerHTML = uidCardHtml;
         } else {
-            resultsEl.innerHTML = '<div class="empty-state" data-js-style="5"><p>搜索请求失败</p></div>';
+            resultsEl.innerHTML = '<div class="empty-state empty-state-padded"><p>搜索请求失败</p></div>';
         }
     } finally {
         _state.searchBloggersLock = false;

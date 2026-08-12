@@ -41,7 +41,7 @@ function ensureUrlExpiryTicker() {
                     const storedTitle = (_state.videoTitles[bvid] || '').replace(/[^\w\u4e00-\u9fff\-_. ]/g, '');
                     if (expiryContainer) {
                         expiryContainer.innerHTML = `
-                            <span data-js-style="1"><i class="fa-solid fa-exclamation-triangle"></i> 已过期</span>
+                            <span class="status-error"><i class="fa-solid fa-exclamation-triangle"></i> 已过期</span>
                             <button class="btn btn-sm btn-ghost" data-action="get-download-links" data-bvid="${bvid}" data-title="${escapeHtml(storedTitle)}">
                                 <i class="fa-solid fa-sync-alt"></i> 重新获取
                             </button>
@@ -116,7 +116,7 @@ export async function getDownloadLinks(bvid, title) {
                         html += `<option value="${opt.originalIndex}"${selected}>${escapeHtml(opt.quality.quality_name)} ${opt.quality.width}x${opt.quality.height}</option>`;
                     } else {
                         // 灰色标记，禁用选项
-                        html += `<option value="${opt.originalIndex}" disabled data-js-style="2">${escapeHtml(opt.quality.quality_name)} ${opt.quality.width}x${opt.quality.height} (需要大会员)</option>`;
+                        html += `<option value="${opt.originalIndex}" disabled class="premium-required">${escapeHtml(opt.quality.quality_name)} ${opt.quality.width}x${opt.quality.height} (需要大会员)</option>`;
                     }
                 });
                 
@@ -127,7 +127,7 @@ export async function getDownloadLinks(bvid, title) {
                     html += `<button class="btn btn-sm btn-primary manual-download-btn" title="适合小文件，大文件建议使用下载器" data-action="download-video" data-bvid="${bvid}" data-title="${safeTitle}" data-mode="browser"><i class="fa-solid fa-desktop"></i> 浏览器下载</button>`;
                     html += `<button class="btn btn-sm btn-primary manual-download-btn" data-role="manual-video-download" data-action="download-video" data-bvid="${bvid}" data-title="${safeTitle}" data-mode="server"><i class="fa-solid fa-server"></i> 下载器下载</button>`;
                 } else {
-                    html += `<span data-js-style="3">无可用视频流（需要登录或大会员）</span>`;
+                    html += `<span class="premium-required-inline">无可用视频流（需要登录或大会员）</span>`;
                 }
                 
                 html += '</div>';
@@ -179,10 +179,10 @@ export async function getDownloadLinks(bvid, title) {
             startUrlExpiryTimer(bvid, title, 1800);
         } else {
             const errorMsg = videoResult.message || audioResult.message || '获取链接失败';
-            actionsDiv.innerHTML = `<p data-js-style="1"><i class="fa-solid fa-exclamation-circle"></i> ${escapeHtml(errorMsg)}</p>`;
+            actionsDiv.innerHTML = `<p class="status-error"><i class="fa-solid fa-exclamation-circle"></i> ${escapeHtml(errorMsg)}</p>`;
         }
     } catch (e) {
-        actionsDiv.innerHTML = `<p data-js-style="1"><i class="fa-solid fa-exclamation-circle"></i> 获取链接失败: ${escapeHtml(e.message)}</p>`;
+        actionsDiv.innerHTML = `<p class="status-error"><i class="fa-solid fa-exclamation-circle"></i> 获取链接失败: ${escapeHtml(e.message)}</p>`;
     }
 }
 
