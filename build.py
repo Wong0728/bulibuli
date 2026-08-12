@@ -286,6 +286,10 @@ def bundle_unix_runtime(source, name, resources_dst, platform_name):
             destination = library_dir / dependency.name
             if dependency in copied:
                 continue
+            if destination.exists():
+                # macOS install_name_tool may leave a previously bundled dylib
+                # read-only; make it replaceable when aria2 and FFmpeg share it.
+                destination.chmod(destination.stat().st_mode | 0o200)
             shutil.copy2(dependency, destination)
             copied.add(dependency)
             destination.chmod(destination.stat().st_mode | 0o111)

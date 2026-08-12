@@ -161,8 +161,7 @@ pub fn open_browser_safe(url: &str) {
 fn browser_available() -> bool {
     #[cfg(target_os = "linux")]
     {
-        return std::env::var_os("DISPLAY").is_some()
-            || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
     }
     #[cfg(not(target_os = "linux"))]
     {
