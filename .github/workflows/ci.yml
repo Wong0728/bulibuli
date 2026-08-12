@@ -199,10 +199,13 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
+          notes_file="${RUNNER_TEMP}/bulibuli-release-notes.md"
+          sed "s|__TAG__|${tag}|g" .github/release-body.md > "${notes_file}"
           if gh release view "${tag}" >/dev/null 2>&1; then
             gh release upload "${tag}" dist/* --clobber
+            gh release edit "${tag}" --title "bulibuli ${tag}" --notes-file "${notes_file}"
           else
             prerelease_flag=()
             [[ "${tag}" == *-alpha* || "${tag}" == *-beta* || "${tag}" == *-rc* ]] && prerelease_flag+=(--prerelease)
-            gh release create "${tag}" dist/* --title "bulibuli ${tag}" --generate-notes "${prerelease_flag[@]}"
+            gh release create "${tag}" dist/* --title "bulibuli ${tag}" --notes-file "${notes_file}" "${prerelease_flag[@]}"
           fi
