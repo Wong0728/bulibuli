@@ -1,10 +1,7 @@
 # 运行时资源
 
-`aria2c.exe` 和 `ffmpeg.exe` 是 Windows 便携版打包所需的第三方运行时依赖，直接随 Windows 包分发。
-`geo/` 子目录下的 GeoIP 数据库为跨平台数据文件，所有平台共用。
-
-Linux、macOS 和 Termux 通过系统/Homebrew/Termux 包管理器安装 aria2 与 FFmpeg，不使用本目录中的 Windows 可执行文件（见 `deploy/` 安装脚本）。
-`geo/GeoLite2-Country.mmdb` 在所有平台下都会被程序自动发现并使用。
+Windows 的 `aria2c.exe` 和 `ffmpeg.exe` 作为已审计资源存放在仓库中。Linux 和 macOS 的 Release 构建会从对应 CI runner 的官方包管理器复制 `aria2c` 与 `ffmpeg` 及必要的非系统动态库到发布目录，并为每个文件写入独立 `.sha256` 文件；Termux 仍使用 `pkg` 安装。
+`geo/` 子目录下的 GeoIP 数据库为跨平台数据文件，所有平台共用。`geo/GeoLite2-Country.mmdb` 在所有平台下都会被程序自动发现并使用。
 
 ## 清单
 
@@ -12,6 +9,7 @@ Linux、macOS 和 Termux 通过系统/Homebrew/Termux 包管理器安装 aria2 �
 | --- | --- | --- | --- |
 | `aria2c.exe` | aria2 1.37.0 | 多线程下载引擎（RPC 模式） | https://github.com/aria2/aria2/releases |
 | `ffmpeg.exe` | ffmpeg 5.1.6 | 音视频合并 / 字幕烧录 | https://www.gyan.dev/ffmpeg/builds/ 或 https://ffmpeg.org/download.html |
+| `aria2c` / `ffmpeg` | 按 Release 平台构建 | Linux/macOS 便携包运行时 | https://aria2.github.io/ / https://ffmpeg.org/ |
 | `geo/GeoLite2-Country.mmdb` | dbip-country-lite 2026-07 | GeoIP 国家库（用于 `geo cn on` 大陆 IP 配对限制） | https://db-ip.com/db/download/ip-to-country-lite （CC BY 4.0） |
 
 ## 校验和（SHA-256）
@@ -34,14 +32,17 @@ Get-FileHash -Algorithm SHA256 resources\aria2c.exe, resources\ffmpeg.exe, resou
 ### 在 Linux / macOS 上核对
 
 ```bash
-sha256sum resources/aria2c.exe resources/ffmpeg.exe resources/geo/GeoLite2-Country.mmdb
+sha256sum resources/aria2c resources/ffmpeg resources/geo/GeoLite2-Country.mmdb
+
 ```
+
+源码仓库没有 `resources/aria2c` 和 `resources/ffmpeg` 这两个 Unix 文件；它们只在对应 Release 归档内生成。
 
 ## 更新与安全说明
 
 - ffmpeg 属高频出 CVE 组件，建议定期跟进官方发布版本；每次更新务必从上述官方来源下载，
   核对上游发布页公布的校验和后再替换，并更新本文件的版本与 SHA-256。
-- 二进制无法通过代码审查（diff）核实，校验和是唯一的完整性凭据。请勿从非官方镜像获取。
+- 二进制无法通过代码审查（diff）核实，校验和是完整性凭据。Release 安装器会先校验归档，再校验包内 Unix 运行时；请勿从非官方镜像获取。
 - `geo/GeoLite2-Country.mmdb` 来源于 DB-IP 官方免费版（IP to Country Lite，CC BY 4.0），
   每月更新。如需更准确或更新的数据，可从 https://db-ip.com/db/download/ip-to-country-lite
   下载最新 `dbip-country-lite-YYYY-MM.mmdb.gz`，解压后替换本文件并同步更新上面的 SHA-256。

@@ -148,10 +148,54 @@ fn print_first_launch(port: u16) {
     println!("═══════════════════════════════════════════════════════");
 }
 
-/// 自动打开浏览器，失败时静默降级（终端仍显示 URL）。
+/// 自动打开浏览器；无图形桌面或打开失败时静默降级（终端仍显示 URL）。
 pub fn open_browser_safe(url: &str) {
+    if !browser_available() {
+        return;
+    }
     if let Err(error) = open::that(url) {
         tracing::debug!(%error, "自动打开浏览器失败，用户需手动复制 URL");
+    }
+}
+
+fn browser_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        return std::env::var_os("DISPLAY").is_some()
+            || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+/// 把首次启动配对码写入仅当前用户可读的文件，方便 nohup、容器和 systemd 用户查看。
+pub fn write_pairing_code(data_dir: &std::path::Path, code: &str) -> anyhow::Result<()> {
+    let path = data_dir.join("pair-code.txt");
+    let temp = data_dir.join(format!(".pair-code.{}.tmp", uuid::Uuid::new_v4().simple()));
+    let content = format!(
+        "首次设备配对码：{}-{}\n有效期：10 分钟，且仅可使用一次。\n配对成功后本文件会自动删除。\n",
+        &code[..4],
+        &code[4..]
+    );
+    std::fs::write(&temp, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    let _ = std::fs::remove_file(&path);
+    std::fs::rename(&temp, &path)?;
+    Ok(())
+}
+
+/// 配对成功或配对窗口关闭后清理一次性配对码文件。
+pub fn clear_pairing_code(data_dir: &std::path::Path) {
+    match std::fs::remove_file(data_dir.join("pair-code.txt")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!(%error, "清理 pair-code.txt 失败"),
     }
 }
 

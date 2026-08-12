@@ -35,6 +35,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+
 const MAX_COMMAND_BYTES: usize = 8 * 1024;
 #[cfg(windows)]
 const PIPE_NAME: &str = r"\\.\pipe\bulibuli";
@@ -330,7 +333,7 @@ pub async fn run_client(data_dir: &Path, args: &[String]) -> AppResult<String> {
     }
     #[cfg(unix)]
     {
-        let mut stream = tokio::net::UnixStream::connect(data_dir.join("control.sock")).await?;
+        let mut stream = connect_unix_control(data_dir).await?;
         stream.write_all(&request).await?;
         stream.shutdown().await?;
         let mut response = Vec::new();
@@ -353,6 +356,64 @@ pub async fn run_client(data_dir: &Path, args: &[String]) -> AppResult<String> {
         let _unused = data_dir;
         Err(AppError::Config("当前平台不支持本机控制通道".to_string()))
     }
+}
+
+#[cfg(unix)]
+// 采用 macOS 更严格的 104 字节上限（含结尾 NUL），Linux 也可安全使用。
+const UNIX_SOCKET_MAX_PATH_BYTES: usize = 103;
+
+#[cfg(unix)]
+fn unix_control_socket_candidates(data_dir: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        let runtime_dir = PathBuf::from(runtime_dir);
+        if runtime_dir.is_absolute() {
+            candidates.push(runtime_dir.join("bulibuli").join("control.sock"));
+        }
+    }
+    candidates.push(data_dir.join("control.sock"));
+
+    // 长数据目录在没有 XDG_RUNTIME_DIR 的最小容器中仍然需要一个稳定的短路径。
+    // 用户名只用于隔离临时目录名，不参与任何权限判断。
+    let username = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "user".to_string());
+    let safe_username: String = username
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        .take(32)
+        .collect();
+    let safe_username = if safe_username.is_empty() {
+        "user"
+    } else {
+        safe_username.as_str()
+    };
+    candidates.push(
+        std::env::temp_dir()
+            .join(format!("bulibuli-{safe_username}"))
+            .join("control.sock"),
+    );
+
+    candidates.retain(|path| path.as_os_str().as_bytes().len() <= UNIX_SOCKET_MAX_PATH_BYTES);
+    candidates.dedup();
+    candidates
+}
+
+#[cfg(unix)]
+async fn connect_unix_control(data_dir: &Path) -> std::io::Result<tokio::net::UnixStream> {
+    let mut last_error = None;
+    for path in unix_control_socket_candidates(data_dir) {
+        match tokio::net::UnixStream::connect(&path).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "没有可用的 bulibuli Unix 控制通道路径",
+        )
+    }))
 }
 
 // --- 命令分发 ---
@@ -430,6 +491,7 @@ async fn pair_command(
     let auth = state.bili.auth.clone();
     let result: AppResult<Value> = if is_close {
         auth.close_pairing().await;
+        crate::app::onboarding::clear_pairing_code(&state.infra.paths.data_dir);
         Ok(json!({"pairing_open": false}))
     } else {
         // `ctl` 是仅供 AI 使用的 IPC，因此需要人工授予短时权限。
@@ -1238,16 +1300,15 @@ async fn sys_ffmpeg_test(state: &SharedState) -> AppResult<Value> {
     let (ok, version) = state.media.video_processor.check_ffmpeg(&path).await;
     Ok(json!({
         "available": ok,
-        "path": path.to_string_lossy(),
+        "path": path.file_name().and_then(|name| name.to_str()).unwrap_or("ffmpeg"),
         "source": source,
         "version": version,
     }))
 }
 
-fn sys_logs_value(state: &SharedState) -> Value {
-    let logs_dir = state.infra.paths.data_dir.join("logs");
+fn sys_logs_value(_state: &SharedState) -> Value {
     json!({
-        "logs_dir": logs_dir.to_string_lossy(),
+        "logs_dir": "data/logs",
         "hint": "日志按天滚动，文件名形如 app.log.YYYY-MM-DD",
     })
 }
@@ -2472,13 +2533,61 @@ where
 
 #[cfg(unix)]
 async fn serve_ipc(state: SharedState) -> AppResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let path = state.infra.paths.data_dir.join("control.sock");
-    if path.exists() {
-        std::fs::remove_file(&path)?;
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+
+    let mut listener = None;
+    let mut bind_errors = Vec::new();
+    for (index, path) in unix_control_socket_candidates(&state.infra.paths.data_dir)
+        .into_iter()
+        .enumerate()
+    {
+        let label = match index {
+            0 => "XDG_RUNTIME_DIR/control.sock",
+            1 => "data/control.sock",
+            _ => "temporary/control.sock",
+        };
+        if let Some(parent) = path.parent() {
+            if let Err(error) = std::fs::create_dir_all(parent) {
+                bind_errors.push(format!("{label}: {error}"));
+                continue;
+            }
+            // 控制通道只允许当前用户访问。运行时目录通常已经是 0700，
+            // 这里对我们创建的后备目录也明确设置权限。
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_socket() => {
+                if let Err(error) = std::fs::remove_file(&path) {
+                    bind_errors.push(format!("{label}: {error}"));
+                    continue;
+                }
+            }
+            Ok(_) => {
+                bind_errors.push(format!("{label}: path exists and is not a Unix socket"));
+                continue;
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                bind_errors.push(format!("{label}: {error}"));
+                continue;
+            }
+            Err(_) => {}
+        }
+        match tokio::net::UnixListener::bind(&path) {
+            Ok(value) => {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+                tracing::info!("本机控制通道已启用：{label}");
+                listener = Some(value);
+                break;
+            }
+            Err(error) => bind_errors.push(format!("{label}: {error}")),
+        }
     }
-    let listener = tokio::net::UnixListener::bind(&path)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    let listener = listener.ok_or_else(|| {
+        AppError::Config(format!(
+            "无法创建本机 Unix 控制通道；已尝试 XDG_RUNTIME_DIR、数据目录和临时目录：{}",
+            bind_errors.join("; ")
+        ))
+    })?;
     loop {
         let (stream, _) = listener.accept().await?;
         let client_state = state.clone();
@@ -2637,5 +2746,20 @@ mod tests {
     fn ai_ctl_pair_with_active_grant_is_allowed_by_policy() {
         assert!(pair_requires_foundation_authorization(CommandOrigin::AiCtl));
         assert!(foundation_authorization_is_active(101, 100));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_control_socket_candidates_respect_kernel_path_limit() {
+        let deep_data_dir = PathBuf::from("/").join("x".repeat(180));
+        let candidates = unix_control_socket_candidates(&deep_data_dir);
+        assert!(!candidates.is_empty());
+        assert!(candidates
+            .iter()
+            .all(|path| path.as_os_str().as_bytes().len() <= UNIX_SOCKET_MAX_PATH_BYTES));
+        assert!(candidates.iter().any(|path| {
+            path.file_name().is_some_and(|name| name == "control.sock")
+                && path.to_string_lossy().contains("bulibuli-")
+        }));
     }
 }

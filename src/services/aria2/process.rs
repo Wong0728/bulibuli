@@ -148,11 +148,8 @@ impl Aria2Manager {
             .arg("--continue=true")
             .arg("--auto-file-renaming=false")
             .arg("--allow-overwrite=true")
-            // IPv6/DNS 优化：避免 IPv6 解析延迟，使用可靠 DNS
-            .arg("--disable-ipv6=true")
+            // 使用系统 DNS，避免硬编码公共 DNS 在中国网络、企业网络或离线环境中失效。
             .arg("--async-dns=true")
-            .arg("--async-dns-server=8.8.8.8,1.1.1.1,223.5.5.5,114.114.114.114")
-            .arg("--enable-async-dns6=false")
             // 分片策略优化
             .arg("--stream-piece-selector=geom")
             .arg(format!("--split={}", basic.split))
@@ -174,6 +171,8 @@ impl Aria2Manager {
         cmd.stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+
+        configure_child_lifetime(&mut cmd);
 
         #[cfg(windows)]
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -224,11 +223,13 @@ impl Aria2Manager {
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
-        // 轮询超时：包含 aria2 日志路径便于排查（启动失败最常见原因是端口冲突或参数错误）
+        // 轮询超时：只提示相对日志位置，避免把用户机器绝对路径写入日志/API。
         let message = format!(
-            "Aria2 启动超时（{} 次轮询未就绪），日志文件: {}",
+            "Aria2 启动超时（{} 次轮询未就绪），请检查 data/{}",
             MAX_POLL_ATTEMPTS,
-            log.to_string_lossy()
+            log.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("aria2.log")
         );
         let child = {
             let mut inner = self.inner.lock().await;
@@ -311,3 +312,27 @@ impl Aria2Manager {
         Ok(())
     }
 }
+
+/// Linux 上设置父进程死亡信号。这样即使服务被 SIGKILL，aria2 也会收到 SIGTERM，
+/// 不会在手工运行、nohup 或容器场景中长期遗留为孤儿进程。
+#[cfg(target_os = "linux")]
+fn configure_child_lifetime(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    unsafe {
+        command.as_std_mut().pre_exec(|| {
+            unsafe extern "C" {
+                fn prctl(option: i32, ...) -> i32;
+            }
+            const PR_SET_PDEATHSIG: i32 = 1;
+            const SIGTERM: i32 = 15;
+            if prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_child_lifetime(_command: &mut Command) {}

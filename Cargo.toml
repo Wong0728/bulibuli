@@ -1,9 +1,13 @@
 [package]
 name = "bulibuli"
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 edition = "2021"
 authors = ["Wong0728"]
 description = "补哩补哩（bulibuli）——下架之前，先下为敬。"
+license = "MIT"
+repository = "https://github.com/Wong0728/bulibuli"
+keywords = ["bilibili", "downloader", "live-recording", "rust"]
+categories = ["multimedia", "web-programming::http-server"]
 publish = false
 rust-version = "1.85"
 

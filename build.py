@@ -206,6 +206,146 @@ def write_checksum(archive_path):
     return checksum_path
 
 
+def write_file_checksum(file_path):
+    """Write a sha256 manifest next to a bundled runtime binary."""
+    digest = hashlib.sha256()
+    with file_path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    manifest = file_path.with_name(f"{file_path.name}.sha256")
+    manifest.write_text(f"{digest.hexdigest()}  {file_path.name}\n", encoding="utf-8")
+    return manifest
+
+
+def _unix_runtime_dependencies(binary, platform_name):
+    """Return non-system shared libraries needed by a Unix runtime binary."""
+    if platform_name == "linux":
+        tool = shutil.which("ldd")
+        if tool is None:
+            raise RuntimeError("Linux Release 组装需要 ldd 来收集 aria2c/FFmpeg 运行库")
+        output = subprocess.run(
+            [tool, str(binary)], capture_output=True, text=True, encoding="utf-8", check=False
+        )
+        if output.returncode != 0:
+            raise RuntimeError(f"无法分析 Unix 运行时依赖：{output.stderr.strip()}")
+        if "not found" in output.stdout:
+            raise RuntimeError(f"Unix 运行时缺少动态库：{binary}")
+        dependencies = []
+        for line in output.stdout.splitlines():
+            match = re.search(r"=>\s+(/\S+)|^\s+(/\S+)\s+\(", line)
+            candidate = next((value for value in match.groups() if value), None) if match else None
+            if candidate:
+                dependencies.append(Path(candidate))
+        # glibc 与动态加载器由用户系统提供；其它发行版库随 Release 携带。
+        system_names = (
+            "ld-linux",
+            "libc.so",
+            "libm.so",
+            "libpthread.so",
+            "libdl.so",
+            "librt.so",
+            "libresolv.so",
+        )
+        return [
+            path
+            for path in dependencies
+            if path.is_file() and not path.name.startswith(system_names)
+        ]
+
+    tool = shutil.which("otool")
+    if tool is None:
+        raise RuntimeError("macOS Release 组装需要 otool 来收集 aria2c/FFmpeg 运行库")
+    output = subprocess.run(
+        [tool, "-L", str(binary)], capture_output=True, text=True, encoding="utf-8", check=False
+    )
+    if output.returncode != 0:
+        raise RuntimeError(f"无法分析 macOS 运行时依赖：{output.stderr.strip()}")
+    dependencies = []
+    for line in output.stdout.splitlines()[1:]:
+        candidate = line.strip().split(" ", 1)[0]
+        if candidate.startswith("/") and not candidate.startswith(("/usr/lib/", "/System/")):
+            path = Path(candidate)
+            if path.is_file():
+                dependencies.append(path)
+    return dependencies
+
+
+def bundle_unix_runtime(source, name, resources_dst, platform_name):
+    """Bundle a Unix runtime plus loadable non-system libraries behind a stable wrapper."""
+    actual = resources_dst / f"{name}.bin"
+    shutil.copy2(source, actual)
+    actual.chmod(actual.stat().st_mode | 0o111)
+    library_dir = resources_dst / "lib"
+    library_dir.mkdir(exist_ok=True)
+
+    pending = [actual]
+    copied = set()
+    while pending:
+        current = pending.pop()
+        for dependency in _unix_runtime_dependencies(current, platform_name):
+            destination = library_dir / dependency.name
+            if dependency in copied:
+                continue
+            shutil.copy2(dependency, destination)
+            copied.add(dependency)
+            destination.chmod(destination.stat().st_mode | 0o111)
+            pending.append(destination)
+
+            if platform_name == "macos":
+                install_name_tool = shutil.which("install_name_tool")
+                if install_name_tool is None:
+                    raise RuntimeError("macOS Release 组装需要 install_name_tool")
+                subprocess.run(
+                    [install_name_tool, "-id", f"@loader_path/{destination.name}", str(destination)],
+                    check=True,
+                )
+                replacement = (
+                    f"@loader_path/lib/{destination.name}"
+                    if current == actual
+                    else f"@loader_path/{destination.name}"
+                )
+                subprocess.run(
+                    [install_name_tool, "-change", str(dependency), replacement, str(current)],
+                    check=True,
+                )
+
+    wrapper = resources_dst / name
+    if platform_name == "linux":
+        wrapper_text = (
+            "#!/bin/sh\n"
+            'HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\n'
+            'exec env LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" '
+            '"$HERE/' + actual.name + '" "$@"\n'
+        )
+    else:
+        wrapper_text = (
+            "#!/bin/sh\n"
+            'HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\n'
+            'exec env DYLD_LIBRARY_PATH="$HERE/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" '
+            '"$HERE/' + actual.name + '" "$@"\n'
+        )
+    wrapper.write_text(wrapper_text, encoding="utf-8", newline="\n")
+    wrapper.chmod(wrapper.stat().st_mode | 0o111)
+    for path in [wrapper, actual, *library_dir.iterdir()]:
+        write_file_checksum(path)
+    return wrapper
+
+
+def validate_portable_tree(portable_dir, platform_name):
+    """Fail packaging if the archive would miss a direct-run contract file."""
+    binary = portable_dir / executable_name(platform_name)
+    required = [binary, portable_dir / "README.md", portable_dir / "static" / "index.html"]
+    if platform_name == "linux":
+        required.append(portable_dir / "install.sh")
+    runtime_names = ("aria2c.exe", "ffmpeg.exe") if platform_name == "windows" else ("aria2c", "ffmpeg")
+    for name in runtime_names:
+        runtime = portable_dir / "resources" / name
+        required.extend((runtime, runtime.with_name(f"{runtime.name}.sha256")))
+    missing = [str(path.relative_to(portable_dir)) for path in required if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"便携包契约不完整（{platform_name}）：{', '.join(missing)}")
+
+
 def assemble_portable(exe_path, platform_name, target=None):
     """组装当前平台便携版目录和归档。"""
     print(f"[3/5] 组装便携版目录 ({platform_name})...")
@@ -221,9 +361,17 @@ def assemble_portable(exe_path, platform_name, target=None):
     shutil.copy2(exe_path, portable_dir / binary_name)
     print(f"  已复制: {binary_name}")
 
-    readme_src = ROOT / "README.md"
-    if readme_src.is_file():
-        shutil.copy2(readme_src, portable_dir / "README.md")
+    for document_name in (
+        "README.md",
+        "LICENSE",
+        "NOTICE.md",
+        "CHANGELOG.md",
+        "CODE_OF_CONDUCT.md",
+        "SECURITY.md",
+    ):
+        document = ROOT / document_name
+        if document.is_file():
+            shutil.copy2(document, portable_dir / document_name)
 
     resources_src = ROOT / "resources"
     if resources_src.exists():
@@ -234,8 +382,27 @@ def assemble_portable(exe_path, platform_name, target=None):
         for name in (*resource_files, "README.md"):
             source = resources_src / name
             if source.is_file():
-                shutil.copy2(source, resources_dst / name)
+                destination = resources_dst / name
+                shutil.copy2(source, destination)
                 copied_resources.append(name)
+
+        if platform_name == "windows":
+            for name in ("aria2c.exe", "ffmpeg.exe"):
+                destination = resources_dst / name
+                if not destination.is_file():
+                    raise RuntimeError(f"Windows Release 缺少已审计运行时：resources/{name}")
+                write_file_checksum(destination)
+                copied_resources.append(f"{name} (+ sha256)")
+        else:
+            for name in ("aria2c", "ffmpeg"):
+                source = Path(shutil.which(name) or "")
+                if not source.is_file():
+                    raise RuntimeError(
+                        f"无法组装可运行的 {platform_name} Release：找不到 {name}。"
+                        "请先安装运行时工具后重试。"
+                    )
+                bundle_unix_runtime(source, name, resources_dst, platform_name)
+                copied_resources.append(f"{name} (+ bundled libraries and sha256)")
         for name in PORTABLE_RESOURCE_DIRS:
             source = resources_src / name
             if source.is_dir():
@@ -243,7 +410,7 @@ def assemble_portable(exe_path, platform_name, target=None):
                 copied_resources.append(f"{name}/")
         print(f"  已复制: resources/ ({', '.join(copied_resources) or '空'})")
     else:
-        print("  [警告] resources/ 目录不存在，aria2c/ffmpeg 将缺失")
+        raise RuntimeError("resources/ 目录不存在，无法组装包含 aria2c/FFmpeg 的可运行 Release")
 
     static_src = ROOT / "static"
     if static_src.exists():
@@ -273,8 +440,12 @@ def assemble_portable(exe_path, platform_name, target=None):
     if platform_name == "linux":
         installer_src = ROOT / "deploy" / "linux" / "install.sh"
         if installer_src.is_file():
-            shutil.copy2(installer_src, portable_dir / "install.sh")
+            installer_dst = portable_dir / "install.sh"
+            shutil.copy2(installer_src, installer_dst)
+            installer_dst.chmod(installer_dst.stat().st_mode | 0o111)
             print("  已复制: install.sh")
+
+    validate_portable_tree(portable_dir, platform_name)
 
     archive_format = "zip" if platform_name == "windows" else "gztar"
     archive_path = Path(

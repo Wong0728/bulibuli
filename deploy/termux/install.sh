@@ -2,7 +2,9 @@
 # 补哩补哩 bulibuli Termux 一键部署脚本。
 #
 # 远程安装：
-#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/v2.0.0-alpha.1/deploy/termux/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | bash
+#   # 固定版本（可复现）：
+#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | BULIBULI_VERSION=v2.0.0-alpha.2 bash
 #
 # 用法：
 #   bash install.sh            安装依赖 + 本机编译
@@ -17,8 +19,10 @@ set -euo pipefail
 [ -n "${PREFIX:-}" ] || { printf '[error] 需要在 Termux 中运行\n' >&2; exit 1; }
 
 APP_SLUG="bulibuli"
-APP_VERSION="${BULIBULI_VERSION:-v2.0.0-alpha.1}"
-[[ "${APP_VERSION}" == v* ]] || APP_VERSION="v${APP_VERSION}"
+APP_VERSION="${BULIBULI_VERSION:-latest}"
+if [ "${APP_VERSION}" != "latest" ]; then
+    [[ "${APP_VERSION}" == v* ]] || APP_VERSION="v${APP_VERSION}"
+fi
 REPO="${BULIBULI_REPO:-Wong0728/bulibuli}"
 BIN_NAME="${APP_SLUG}"
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
@@ -40,6 +44,24 @@ MODE=""
 log()  { printf '\033[32m[termux]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
+
+download_text() {
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 3 --connect-timeout 15 -H 'Accept: application/vnd.github+json' "${url}"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "${url}"
+    else
+        die "需要 curl 或 wget 才能查询 Release"
+    fi
+}
+
+resolve_latest_version() {
+    local tag
+    tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || die "无法解析最新 Release 版本"
+    printf '%s\n' "${tag}"
+}
 
 detect_layout() {
     if [ -x "${SCRIPT_DIR}/${BIN_NAME}" ] && [ -f "${SCRIPT_DIR}/static/index.html" ]; then
@@ -73,6 +95,10 @@ ensure_source() {
     [ "${MODE}" = "remote-source" ] || return
     if [ -f "${APP_DIR}/Cargo.toml" ]; then
         return
+    fi
+    if [ "${APP_VERSION}" = "latest" ]; then
+        APP_VERSION="$(resolve_latest_version)"
+        log "已解析最新 Release：${APP_VERSION}"
     fi
     rm -rf -- "${APP_DIR}"
     mkdir -p "$(dirname "${APP_DIR}")"

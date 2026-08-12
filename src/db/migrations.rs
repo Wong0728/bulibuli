@@ -8,10 +8,17 @@ use sea_orm_migration::MigratorTrait;
 use tracing::info;
 
 pub(super) async fn run_migrations(db: &DatabaseConnection) -> Result<()> {
-    info!("执行 SeaORM 数据库迁移");
+    let started = std::time::Instant::now();
+    let total = Migrator::migrations().len();
+    info!(total, "开始执行 SeaORM 数据库迁移");
     Migrator::up(db, None)
         .await
         .context("执行 SeaORM migration 失败")?;
+    info!(
+        total,
+        elapsed_ms = started.elapsed().as_millis(),
+        "SeaORM 数据库迁移完成"
+    );
     Ok(())
 }
 

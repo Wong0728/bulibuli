@@ -119,7 +119,8 @@ impl LogBuffer {
                 summary.push('\n');
             }
         }
-        summary.push_str(&format!("完整日志目录: {}\n", log_dir.display()));
+        let _ = log_dir;
+        summary.push_str("完整日志目录: data/logs\n");
         summary
     }
 

@@ -45,12 +45,22 @@ impl BiliState {
         let auth = Arc::new(auth_service);
 
         if let Some(code) = initial_pair_code {
-            // 仅面向控制台（终端界面日志区或 stdout），不落盘日志文件
+            // 终端日志可能被 nohup/systemd 丢弃，因此额外写入仅当前用户可读的文件。
+            if let Err(error) =
+                crate::app::onboarding::write_pairing_code(&infra.paths.data_dir, &code)
+            {
+                tracing::warn!(%error, "首次配对码写入 data/pair-code.txt 失败");
+            }
             crate::app::tui::console_line(format!(
                 "首次设备配对码：{}-{}（10 分钟内有效，仅可使用一次）",
                 &code[..4],
                 &code[4..]
             ));
+            let data_dir = infra.paths.data_dir.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(10 * 60)).await;
+                crate::app::onboarding::clear_pairing_code(&data_dir);
+            });
         }
 
         let cookie_manager = Arc::new(
