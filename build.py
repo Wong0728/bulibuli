@@ -415,7 +415,7 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
                     write_file_checksum(destination)
                     copied_resources.append(f"{name} (+ sha256)")
             else:
-                for name in (*runtime_names, "ffprobe"):
+                for name in runtime_names:
                     source = Path(shutil.which(name) or "")
                     if not source.is_file():
                         if name == "ffprobe":
