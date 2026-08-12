@@ -185,8 +185,7 @@ impl SecurityConfigService {
             let config = SecurityConfig::default();
             write_config(&path, &config)?;
             tracing::warn!(
-                "未找到 security.toml，已自动生成默认安全配置文件（{}）。所有安全特性已启用。",
-                path.display()
+                "未找到 security.toml，已在 data/security.toml 自动生成默认安全配置文件。所有安全特性已启用。"
             );
             config
         };
@@ -200,8 +199,8 @@ impl SecurityConfigService {
         let builtin_geo_db = locate_builtin_geo_db(app_root);
         if let Some(builtin) = builtin_geo_db.as_ref() {
             tracing::info!(
-                "已发现内置 GeoIP 数据库：{}（geo cn on 时无需再执行 geo db 即可直接使用）",
-                builtin.display()
+                "已发现内置 GeoIP 数据库 resources/geo/{}（geo cn on 时无需再执行 geo db 即可直接使用）",
+                builtin.file_name().and_then(|name| name.to_str()).unwrap_or("database.mmdb")
             );
         }
         Ok(Self {

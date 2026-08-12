@@ -2,15 +2,19 @@
 # 补哩补哩 bulibuli Linux 一键安装脚本。
 #
 # 远程安装：
-#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/v2.0.0-alpha.1/deploy/linux/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | bash
+#   # 固定版本（可复现）：
+#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | BULIBULI_VERSION=v2.0.0-alpha.2 bash
 #
 # 本地发布包：
 #   ./install.sh [install|run|service|unservice|status]
 set -euo pipefail
 
 APP_SLUG="bulibuli"
-APP_VERSION="${BULIBULI_VERSION:-v2.0.0-alpha.1}"
-[[ "${APP_VERSION}" == v* ]] || APP_VERSION="v${APP_VERSION}"
+APP_VERSION="${BULIBULI_VERSION:-latest}"
+if [ "${APP_VERSION}" != "latest" ]; then
+    [[ "${APP_VERSION}" == v* ]] || APP_VERSION="v${APP_VERSION}"
+fi
 REPO="${BULIBULI_REPO:-Wong0728/bulibuli}"
 BIN_NAME="${APP_SLUG}"
 SERVICE_NAME="${APP_SLUG}"
@@ -51,6 +55,26 @@ download_file() {
     fi
 }
 
+download_text() {
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 3 --connect-timeout 15 -H 'Accept: application/vnd.github+json' "${url}"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "${url}"
+    else
+        die "需要 curl 或 wget 才能查询 Release"
+    fi
+}
+
+resolve_latest_version() {
+    local api_url="https://api.github.com/repos/${REPO}/releases?per_page=20"
+    local tag
+    tag="$(download_text "${api_url}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || \
+        die "无法从 GitHub Releases 解析最新版本；请用 BULIBULI_VERSION=vX.Y.Z 固定版本重试"
+    printf '%s\n' "${tag}"
+}
+
 verify_checksum() {
     local archive="$1"
     local manifest="$2"
@@ -70,6 +94,10 @@ verify_checksum() {
 
 download_release() {
     local arch archive_name archive_url checksum_url extracted
+    if [ "${APP_VERSION}" = "latest" ]; then
+        APP_VERSION="$(resolve_latest_version)"
+        log "已解析最新 Release：${APP_VERSION}"
+    fi
     case "$(uname -m)" in
         x86_64|amd64) arch="x86_64" ;;
         *) die "当前 Linux 架构暂不支持：$(uname -m)，目前提供 x86_64 包" ;;
@@ -87,9 +115,25 @@ download_release() {
     tar -xzf "${TEMP_DIR}/${archive_name}" -C "${TEMP_DIR}/unpacked"
     APP_DIR="${TEMP_DIR}/unpacked/$(basename "${extracted}")"
     [ -f "${APP_DIR}/${BIN_NAME}" ] || die "Release 归档缺少 ${BIN_NAME}"
+    verify_runtime_checksums "${APP_DIR}"
     BIN_PATH="${APP_DIR}/${BIN_NAME}"
     MODE="release-package"
     REMOTE_BOOTSTRAP=1
+}
+
+verify_runtime_checksums() {
+    local package_dir="$1"
+    local resources_dir="${package_dir}/resources"
+    [ -d "${resources_dir}" ] || return 0
+    local manifest binary
+    while IFS= read -r -d '' manifest; do
+        binary="${manifest%.sha256}"
+        [ -f "${binary}" ] || die "Release 校验清单缺少对应文件：${binary}"
+        verify_checksum "${binary}" "${manifest}"
+    done < <(find "${resources_dir}" -type f -name '*.sha256' -print0)
+    for name in aria2c ffmpeg; do
+        [ -x "${resources_dir}/${name}" ] || die "Release 缺少可执行运行时：resources/${name}"
+    done
 }
 
 detect_layout() {
@@ -114,10 +158,14 @@ detect_layout() {
 
 install_deps() {
     local missing=()
-    command -v aria2c >/dev/null 2>&1 || missing+=(aria2)
-    command -v ffmpeg >/dev/null 2>&1 || missing+=(ffmpeg)
+    local bundled_aria2="${APP_DIR}/resources/aria2c"
+    local bundled_ffmpeg="${APP_DIR}/resources/ffmpeg"
+    if [ -f "${bundled_aria2}" ]; then chmod +x "${bundled_aria2}"; fi
+    if [ -f "${bundled_ffmpeg}" ]; then chmod +x "${bundled_ffmpeg}"; fi
+    [ -x "${bundled_aria2}" ] || command -v aria2c >/dev/null 2>&1 || missing+=(aria2)
+    [ -x "${bundled_ffmpeg}" ] || command -v ffmpeg >/dev/null 2>&1 || missing+=(ffmpeg)
     if [ ${#missing[@]} -eq 0 ]; then
-        log "运行时依赖已就绪：aria2c、ffmpeg"
+        log "运行时依赖已就绪：aria2c、ffmpeg（优先使用 Release 包内置版本）"
         return
     fi
 
@@ -140,6 +188,8 @@ install_deps() {
     else
         warn "未识别的包管理器，请手动安装：${missing[*]}"
     fi
+    [ -x "${bundled_aria2}" ] || command -v aria2c >/dev/null 2>&1 || die "aria2c 仍不可用；请使用包含 resources/aria2c 的 Release 包或安装 aria2"
+    [ -x "${bundled_ffmpeg}" ] || command -v ffmpeg >/dev/null 2>&1 || die "FFmpeg 仍不可用；请使用包含 resources/ffmpeg 的 Release 包或安装 ffmpeg"
 }
 
 ensure_binary() {
@@ -185,6 +235,10 @@ install_service() {
     local service_identity=""
     local service_data=""
     local hardening=""
+    local configured_data="${BULIBULI_DATA_DIR:-${BILI__DATA_DIR:-}}"
+    if [ -n "${configured_data}" ] && [[ "${configured_data}" != /* ]]; then
+        die "BULIBULI_DATA_DIR/BILI__DATA_DIR 必须是绝对路径"
+    fi
     if [ "$(id -u)" -eq 0 ]; then
         local service_user="${APP_SLUG}"
         id "${service_user}" >/dev/null 2>&1 || useradd \
@@ -197,16 +251,29 @@ install_service() {
         cp -a "${APP_DIR}/static/." "${runtime_dir}/static/"
         install -d -o root -g root -m 0755 "${runtime_dir}/resources"
         [ -d "${APP_DIR}/resources" ] && cp -a "${APP_DIR}/resources/." "${runtime_dir}/resources/"
-        install -d -o "${service_user}" -g "${service_user}" -m 0700 "/var/lib/${SERVICE_NAME}"
+        if [ -z "${configured_data}" ]; then
+            configured_data="/var/lib/${SERVICE_NAME}"
+        fi
+        install -d -o "${service_user}" -g "${service_user}" -m 0700 "${configured_data}"
+        chown "${service_user}:${service_user}" "${configured_data}"
         BIN_PATH="${runtime_dir}/${BIN_NAME}"
         service_identity="User=${service_user}
 Group=${service_user}"
-        service_data="Environment=BILI__DATA_DIR=/var/lib/${SERVICE_NAME}
-ReadWritePaths=/var/lib/${SERVICE_NAME}"
+        service_data="Environment=BILI__DATA_DIR=${configured_data}
+ReadWritePaths=${configured_data}"
         hardening="ProtectHome=true
 PrivateDevices=true"
+        case "${configured_data}" in
+            /home/*|/root/*) hardening="PrivateDevices=true" ;;
+        esac
     else
-        service_data="ReadWritePaths=${APP_DIR}/data"
+        if [ -z "${configured_data}" ]; then
+            configured_data="${APP_DIR}/data"
+        fi
+        mkdir -p "${configured_data}"
+        chmod 700 "${configured_data}"
+        service_data="Environment=BILI__DATA_DIR=${configured_data}
+ReadWritePaths=${configured_data}"
     fi
 
     cat > "${UNIT_FILE}" <<EOF
@@ -222,6 +289,8 @@ WorkingDirectory=${runtime_dir}
 ExecStart=${BIN_PATH}
 Restart=always
 RestartSec=5
+KillMode=control-group
+SendSIGKILL=yes
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true

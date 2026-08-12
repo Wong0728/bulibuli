@@ -51,10 +51,7 @@ async fn run() -> anyhow::Result<()> {
         let port = read_actual_port(&paths).unwrap_or(config.port);
         let url = format!("http://127.0.0.1:{port}");
         println!("正在打开浏览器: {url}");
-        if let Err(e) = open::that(&url) {
-            eprintln!("打开浏览器失败: {e}");
-            eprintln!("请手动复制上面的地址到浏览器");
-        }
+        app::onboarding::open_browser_safe(&url);
         return Ok(());
     }
 
