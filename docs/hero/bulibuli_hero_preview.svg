@@ -34,6 +34,14 @@
       <stop offset=".8" stop-color="#2bb0ef"/>
       <stop offset="1" stop-color="#65c9f6"/>
     </linearGradient>
+    <linearGradient id="ribbonBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#75d5fb"/>
+      <stop offset="1" stop-color="#159fe9"/>
+    </linearGradient>
+    <linearGradient id="ribbonPink" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffb2cd"/>
+      <stop offset="1" stop-color="#f85d93"/>
+    </linearGradient>
     <pattern id="grid" width="92" height="92" patternUnits="userSpaceOnUse">
       <path d="M92 0H0V92" fill="none" stroke="#27a6ea" stroke-opacity=".055"/>
     </pattern>
@@ -95,6 +103,17 @@
     <path d="M0 985c180-35 270-7 385 40 215 50 395 57 575 51 180-6 390-21 630-60 130-51 210-66 330-38" fill="none" stroke="#fff" stroke-width="2" opacity=".78"/>
   </g>
 
+  <!-- Small side ribbons fill the card gaps without competing with the title or panels. -->
+  <g id="side-ribbons" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M478 572c22 5 42 18 58 39-22-10-43-8-62 7" stroke="url(#ribbonPink)" stroke-width="8" opacity=".78"/>
+    <path d="M488 628c18-5 35 2 51 21-18-5-34-2-48 12" stroke="url(#ribbonBlue)" stroke-width="6" opacity=".72"/>
+    <path d="M509 566l13 7-7 13-13-7z" fill="#19a9ef" fill-opacity=".8" stroke="none"/>
+    <path d="M1339 558c17 11 31 25 40 43-18-7-34-5-49 6" stroke="url(#ribbonBlue)" stroke-width="7" opacity=".76"/>
+    <path d="M1331 742c18-8 35-7 52 6-18 2-31 11-42 27" stroke="url(#ribbonPink)" stroke-width="7" opacity=".72"/>
+    <path d="M1356 548l12 8-8 12-12-8z" fill="#f85d93" fill-opacity=".78" stroke="none"/>
+    <path d="M1342 789l10 6-6 10-10-6z" fill="#19a9ef" fill-opacity=".72" stroke="none"/>
+  </g>
+
   <!-- Connectors sit above the waves but below cards and labels. -->
   <g fill="none" stroke-width="2.2" stroke-dasharray="7 7" opacity=".9">
     <path d="M431 171C503 171 540 170 612 178" stroke="#52baf0"/><circle cx="431" cy="171" r="5" fill="#52baf0" stroke="none"/><circle cx="612" cy="178" r="5" fill="#52baf0" stroke="none"/>
@@ -126,7 +145,7 @@
       <rect width="392" height="323" rx="30" fill="url(#pinkCard)" stroke="#ff92b8" stroke-width="2" filter="url(#shadow)"/>
       <circle cx="28" cy="28" r="8.5" fill="#f85d93"/><text x="58" y="37" fill="#112b59" font-size="26" font-weight="700">视频补档下载</text>
       <rect x="36" y="80" width="205" height="125" rx="11" fill="#d6dce9"/><path d="M131 117l39 26-39 26z" fill="#f85d93"/>
-      <circle cx="351" cy="137" r="52.5" fill="url(#pinkButton)" stroke="#ffe0ec" stroke-width="13"/><path d="M351 108v34m-13-12 13 13 13-13m-21 15v11h42v-11" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="332" cy="142" r="48" fill="url(#pinkButton)" stroke="#ffe0ec" stroke-width="12"/><path d="M332 114v31m-12-11 12 12 12-12m-20 14v10h40v-10" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
       <rect x="36" y="243" width="294" height="18" rx="10" fill="#e3eaf2"/><rect x="36" y="243" width="270" height="18" rx="10" fill="#f65a92"/><text x="337" y="257" fill="#0a2c60" font-size="18" font-weight="700">92%</text><text x="36" y="294" fill="#6785ac" font-size="16">28.6 MB/s · 1.2 GB / 1.3 GB</text>
     </g>
 
@@ -139,7 +158,7 @@
       <path transform="translate(32 133)" d="M0 47C9 47 13 37 19 33S30 58 39 55 50 24 60 26 74 56 86 50 95 41 104 42 112 51 120 44 128 25 138 27 152 61 165 51 174 29 184 30 197 57 209 51 221 33 231 36 241 55 252 52 263 35 275 37 283 48 290 44" fill="none" stroke="#fb5a94" stroke-width="2.6"/>
       <rect x="32" y="217" width="290" height="38" fill="#5b6680"/><text x="46" y="242" fill="#fff" font-size="18">00:42:18</text><circle cx="131" cy="235" r="5" fill="#fa6a9c"/>
       <rect x="52" y="260" width="5" height="22" rx="2" fill="#687a9b"/><rect x="62" y="260" width="5" height="22" rx="2" fill="#687a9b"/><rect x="114" y="261" width="19" height="19" rx="2" fill="#687a9b"/><circle cx="191" cy="271" r="15" fill="none" stroke="#fa669a" stroke-width="4"/><circle cx="191" cy="271" r="7" fill="#fa669a"/>
-      <circle cx="335" cy="59" r="34" fill="url(#pinkButton)" stroke="#ffdceb" stroke-width="10"/><rect x="319" y="48" width="27" height="24" rx="5" fill="#fff"/><path d="M346 55l10-6v22l-10-6z" fill="#fff"/><path d="M330 55l9 5-9 5z" fill="#f65c94"/>
+      <circle cx="317" cy="59" r="34" fill="url(#pinkButton)" stroke="#ffdceb" stroke-width="10"/><rect x="301" y="47" width="27" height="24" rx="5" fill="#fff"/><path d="M328 54l10-6v22l-10-6z" fill="#fff"/><path d="M312 54l9 5-9 5z" fill="#f65c94"/>
     </g>
 
     <g transform="translate(1396 505)">
@@ -147,13 +166,13 @@
       <circle cx="28" cy="28" r="8.5" fill="#19a9ef"/><text x="58" y="37" fill="#112b59" font-size="26" font-weight="700">弹幕字幕</text>
       <g font-size="18" font-weight="600" text-anchor="middle">
         <rect x="28" y="86" width="118" height="36" rx="13" fill="#e6f0f7"/><text x="87" y="110" fill="#365d85">前方高能！</text>
-        <rect x="142" y="85" width="100" height="36" rx="13" fill="#ffd6e6"/><text x="192" y="109" fill="#b94971">太强了！</text>
-        <rect x="28" y="139" width="82" height="36" rx="13" fill="#bfe4ff"/><text x="69" y="163" fill="#178ed9">爷青回</text>
-        <rect x="126" y="139" width="136" height="36" rx="13" fill="#edf2f8"/><text x="194" y="163" fill="#48698c">233333</text>
-        <rect x="38" y="191" width="118" height="36" rx="13" fill="#cceaff"/><text x="97" y="215" fill="#238bd0">妙啊妙啊～</text>
-        <rect x="88" y="237" width="100" height="36" rx="13" fill="#eaf1f8"/><text x="138" y="261" fill="#5f7796">(ﾟ∀ﾟ)ﾉ</text>
+        <rect x="158" y="84" width="100" height="36" rx="13" fill="#ffd6e6"/><text x="208" y="108" fill="#b94971">太强了！</text>
+        <rect x="28" y="143" width="82" height="36" rx="13" fill="#bfe4ff"/><text x="69" y="167" fill="#178ed9">爷青回</text>
+        <rect x="132" y="143" width="128" height="36" rx="13" fill="#edf2f8"/><text x="196" y="167" fill="#48698c">233333</text>
+        <rect x="48" y="197" width="118" height="36" rx="13" fill="#cceaff"/><text x="107" y="221" fill="#238bd0">妙啊妙啊～</text>
+        <rect x="108" y="247" width="100" height="36" rx="13" fill="#eaf1f8"/><text x="158" y="271" fill="#5f7796">(ﾟ∀ﾟ)ﾉ</text>
       </g>
-      <path d="M251 174h48m-9-10 10 10-10 10" fill="none" stroke="#159fe9" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M268 186h32m-9-10 10 10-10 10" fill="none" stroke="#159fe9" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
       <g transform="translate(303 104) scale(.9565 .9545)"><path d="M8 4h53l23 23v97H8Z" fill="#fff" stroke="#159fe9" stroke-width="3"/><path d="M61 4v24h23" fill="none" stroke="#159fe9" stroke-width="3"/><rect x="20" y="78" width="58" height="36" rx="8" fill="#159fe9"/><text x="49" y="103" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">.srt</text></g>
     </g>
 
