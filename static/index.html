@@ -51,25 +51,25 @@
 
     <!-- 网络异常横幅。 -->
     <div id="network-error-banner" class="network-error-banner">
-        <i class="fa-solid fa-wifi html-style-3"></i>
+        <i class="fa-solid fa-wifi network-banner-icon"></i>
         <span>网络连接异常，部分功能不可用，请检查网络或后端服务状态</span>
     </div>
 
-    <nav class="nav-tabs">
-        <button type="button" class="nav-tab active" data-tab="search" role="tab" aria-selected="true"><i class="fa-solid fa-user-plus"></i> 博主搜索</button>
-        <button type="button" class="nav-tab" data-tab="manual" role="tab" aria-selected="false"><i class="fa-solid fa-search"></i> 手动查询</button>
-        <button type="button" class="nav-tab" data-tab="auto" role="tab" aria-selected="false"><i class="fa-solid fa-bolt"></i> 自动任务</button>
-        <button type="button" class="nav-tab" data-tab="history" role="tab" aria-selected="false">
+    <nav class="nav-tabs" role="tablist" aria-label="主要功能">
+        <button type="button" class="nav-tab active" id="tab-search-label" data-tab="search" role="tab" aria-selected="true" aria-controls="tab-search" tabindex="0"><i class="fa-solid fa-user-plus"></i> 博主搜索</button>
+        <button type="button" class="nav-tab" id="tab-manual-label" data-tab="manual" role="tab" aria-selected="false" aria-controls="tab-manual" tabindex="-1"><i class="fa-solid fa-search"></i> 手动查询</button>
+        <button type="button" class="nav-tab" id="tab-auto-label" data-tab="auto" role="tab" aria-selected="false" aria-controls="tab-auto" tabindex="-1"><i class="fa-solid fa-bolt"></i> 自动任务</button>
+        <button type="button" class="nav-tab" id="tab-history-label" data-tab="history" role="tab" aria-selected="false" aria-controls="tab-history" tabindex="-1">
             <i class="fa-solid fa-history"></i> 下载管理
             <span id="aria2-status-dot" class="aria2-dot disconnected" title="正在检测 Aria2 状态..."></span>
         </button>
-        <button type="button" class="nav-tab" data-tab="live" role="tab" aria-selected="false"><i class="fa-solid fa-tower-broadcast"></i> 直播</button>
-        <button type="button" class="nav-tab" data-tab="settings" role="tab" aria-selected="false"><i class="fa-solid fa-cog"></i> 设置</button>
+        <button type="button" class="nav-tab" id="tab-live-label" data-tab="live" role="tab" aria-selected="false" aria-controls="tab-live" tabindex="-1"><i class="fa-solid fa-tower-broadcast"></i> 直播</button>
+        <button type="button" class="nav-tab" id="tab-settings-label" data-tab="settings" role="tab" aria-selected="false" aria-controls="tab-settings" tabindex="-1"><i class="fa-solid fa-cog"></i> 设置</button>
     </nav>
 
     <!-- 博主搜索 Tab。 -->
     <main id="main-content">
-    <section id="tab-search" class="tab-panel active">
+    <section id="tab-search" class="tab-panel active" role="tabpanel" aria-labelledby="tab-search-label">
         <div class="card">
             <div class="card-title">
                 <i class="fa-solid fa-user-plus"></i>
@@ -87,18 +87,18 @@
                 </button>
             </div>
             <div id="blogger-search-results" class="blogger-search-results">
-                <div class="empty-state html-style-4">
+                <div class="empty-state blogger-search-empty-state">
                     <i class="fa-solid fa-magnifying-glass"></i>
                     <p>输入博主名称开始搜索</p>
                 </div>
             </div>
         </div>
 
-        <div class="card html-style-5">
+        <div class="card known-bloggers-card">
             <div class="card-title">
                 <i class="fa-solid fa-bookmark"></i>
                 <span>已添加博主（可在其他标签页下拉选择）</span>
-                <button class="btn btn-sm btn-ghost html-style-6" id="clear-known-bloggers-btn" data-action="clear-known-bloggers">
+                <button class="btn btn-sm btn-ghost known-bloggers-clear" id="clear-known-bloggers-btn" data-action="clear-known-bloggers">
                     <i class="fa-solid fa-trash"></i> 清空
                 </button>
             </div>
@@ -107,12 +107,12 @@
     </section>
 
     <!-- 手动查询 Tab。 -->
-    <section id="tab-manual" class="tab-panel">
+    <section id="tab-manual" class="tab-panel" role="tabpanel" aria-labelledby="tab-manual-label" hidden>
         <div class="card">
             <div class="card-title">
                 <i class="fa-solid fa-search"></i>
                 <span>手动查询</span>
-                <div class="manual-mode-switch html-style-7">
+                <div class="manual-mode-switch manual-mode-switch-aligned">
                     <button class="mode-btn active" data-mode="submission">
                         <i class="fa-solid fa-video"></i> 按投稿
                     </button>
@@ -131,7 +131,7 @@
                         <option value="">-- 从已添加博主中选择 --</option>
                     </select>
                 </div>
-                <div class="form-group html-style-8" id="manual-series-select-group" hidden>
+                <div class="form-group manual-series-select-group" id="manual-series-select-group" hidden>
                     <label for="manual-series-select">选择合集</label>
                     <select id="manual-series-select" class="blogger-select">
                         <option value="">-- 请先选择博主 --</option>
@@ -157,7 +157,7 @@
     </section>
 
     <!-- 自动任务 Tab。 -->
-    <section id="tab-auto" class="tab-panel">
+    <section id="tab-auto" class="tab-panel" role="tabpanel" aria-labelledby="tab-auto-label" hidden>
         <!-- 博主看板。 -->
         <div class="card">
             <div class="card-title">
@@ -195,7 +195,7 @@
                             <div class="blogger-detail-title" title="点击编辑博主配置">
                                 <i class="fa-solid fa-user-circle"></i>
                                 <span id="detail-blogger-name">博主名称</span>
-                                <i class="fa-solid fa-pen html-style-9"></i>
+                                <i class="fa-solid fa-pen blogger-edit-icon"></i>
                             </div>
                             <div class="btn-row">
                                 <button class="btn btn-primary" id="detail-start-btn">
@@ -237,7 +237,7 @@
     </section>
 
     <!-- 下载管理 Tab。 -->
-    <section id="tab-history" class="tab-panel">
+    <section id="tab-history" class="tab-panel" role="tabpanel" aria-labelledby="tab-history-label" hidden>
         <div class="card">
             <div class="board-top-bar">
                 <div class="board-top-bar-left">
@@ -294,7 +294,7 @@
     </div>
 
     <!-- 直播录制 Tab。 -->
-    <section id="tab-live" class="tab-panel">
+    <section id="tab-live" class="tab-panel" role="tabpanel" aria-labelledby="tab-live-label" hidden>
         <!-- 直播看板：布局对齐博主监控看板（侧边栏 + 详情）。 -->
         <div class="card">
             <div class="card-title">
@@ -303,7 +303,7 @@
                     <span class="live-sync-item" id="live-sync-page" data-state="ok" title="本地页面与服务的连接状态"><span class="aria2-dot connected"></span>页面已连接</span>
                     <span class="live-sync-item" id="live-sync-monitor" data-state="ok" title="后端开播监控 worker 的运行状态"><span class="aria2-dot connected"></span>监控运行中</span>
                     <span class="live-sync-item" id="live-sync-bili" data-state="ok" title="最近一次成功向 B 站检查开播状态的时间"><span class="aria2-dot connected"></span>B站状态：等待检查</span>
-                    <button class="btn btn-sm btn-ghost" id="live-refresh-btn" title="手动刷新直播状态">
+                    <button class="btn btn-sm btn-ghost" id="live-refresh-btn" data-network-required="true" title="手动刷新直播状态">
                         <i class="fa-solid fa-arrows-rotate"></i> 刷新
                     </button>
                 </div>
@@ -314,7 +314,7 @@
                 <aside class="live-sidebar">
                     <div class="live-sidebar-title">
                         <span><i class="fa-solid fa-list"></i> 关注房间（<span id="live-source-count">0</span>）</span>
-                        <button class="btn btn-sm btn-ghost" id="live-show-add-btn">
+                        <button class="btn btn-sm btn-ghost" id="live-show-add-btn" data-network-required="true">
                             <i class="fa-solid fa-plus"></i> 添加
                         </button>
                     </div>
@@ -322,7 +322,7 @@
                         <!-- 动态生成房间列表。 -->
                     </div>
                     <div class="live-sidebar-actions">
-                        <button class="btn btn-primary btn-block" id="live-refresh-list-btn">
+                    <button class="btn btn-primary btn-block" id="live-refresh-list-btn" data-network-required="true">
                             <i class="fa-solid fa-rotate"></i> 刷新列表
                         </button>
                     </div>
@@ -432,7 +432,7 @@
                 <button class="btn" id="live-settings-cancel-btn">
                     <i class="fa-solid fa-times"></i> 取消
                 </button>
-                <button class="btn btn-primary" id="live-source-save">
+                <button class="btn btn-primary" id="live-source-save" data-network-required="true">
                     <i class="fa-solid fa-check"></i> 保存设置
                 </button>
             </div>
@@ -460,7 +460,7 @@
                 <button class="btn" id="live-add-cancel-btn">
                     <i class="fa-solid fa-times"></i> 取消
                 </button>
-                <button class="btn btn-primary" id="live-add-confirm-btn">
+                <button class="btn btn-primary" id="live-add-confirm-btn" data-network-required="true">
                     <i class="fa-solid fa-check"></i> 查询并添加
                 </button>
             </div>
@@ -468,8 +468,9 @@
     </div>
 
     <!-- 系统设置 Tab。 -->
-    <section id="tab-settings" class="tab-panel" role="tabpanel" aria-label="设置">
+    <section id="tab-settings" class="tab-panel" role="tabpanel" aria-labelledby="tab-settings-label" hidden>
         <div id="settings-fragment-mount"></div>
+    </section>
     </main>
 </div>
 
@@ -573,7 +574,7 @@
     <div class="modal-container">
         <div class="modal-header">
             <i class="fa-solid fa-bell"></i>
-            <span>博主资料变更</span>
+            <span id="blogger-notice-title">博主资料变更</span>
         </div>
         <div class="form-section">
             <div id="blogger-notice-list"></div>
@@ -594,7 +595,7 @@
     <div class="modal-container qrcode">
         <div class="modal-header">
             <i class="fa-solid fa-bilibili text-brand"></i>
-            <span>B站扫码登录</span>
+            <span id="qrcode-modal-title">B站扫码登录</span>
         </div>
         <div id="qrcode-container" class="qrcode-container">
             <div id="qrcode-canvas"></div>
@@ -616,12 +617,12 @@
 
 <!-- 通用确认对话框。 -->
 <div id="confirm-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
-    <div class="modal-container html-style-13">
+    <div class="modal-container confirm-modal-container">
         <div class="modal-header">
             <i class="fa-solid fa-circle-question"></i>
             <span id="confirm-modal-title">请确认</span>
         </div>
-        <div class="html-style-14">
+        <div class="confirm-modal-message">
             <div id="confirm-modal-message"></div>
         </div>
         <div class="modal-footer">

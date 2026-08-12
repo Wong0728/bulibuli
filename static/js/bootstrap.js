@@ -1,5 +1,5 @@
 import { _state, subscribeState } from './state.js';
-import { setTone, initWebSocket, updateNetworkBanner, updateNetworkDisabledButtons, apiPost, apiGet, checkCookiesStatus, dismissCookieWarning, refreshLoginInfo } from './core.js';
+import { setTone, initWebSocket, updateNetworkBanner, updateNetworkDisabledButtons, setBackendAvailability, apiPost, apiGet, checkCookiesStatus, dismissCookieWarning, refreshLoginInfo } from './core.js';
 import { setManualQueryMode, doManualQuery, doManualResolve } from './manual.js';
 import { showAddBloggerModal, closeBloggerModal, showEditBloggerModal } from './modal.js';
 import { loadBloggersFromServer, renderBloggerSidebar, startSelectedBlogger, stopSelectedBlogger, startStatusPolling } from './blogger.js';
@@ -20,132 +20,80 @@ window.addEventListener('DOMContentLoaded', () => {
 async function bootstrapApp() {
     document.getElementById('blogger-notice-modal')?.querySelector('.modal-header span')?.setAttribute('id', 'blogger-notice-title');
     document.getElementById('qrcode-modal')?.querySelector('.modal-header span')?.setAttribute('id', 'qrcode-modal-title');
-    const authResponse = await fetch('/api/auth/state', {
-        credentials: 'same-origin',
-        cache: 'no-store',
-    });
-    const authEnvelope = await authResponse.json();
-    if (!authResponse.ok || !authEnvelope.data?.authenticated) {
-        throw new Error(authEnvelope.message || '登录状态已失效，请刷新页面或重新配对。');
-    }
-    _state.csrfToken = authEnvelope.data.csrf_token;
-    _state.sessionRole = authEnvelope.data.role || 'owner';
-    await loadSettingsFragment();
-    applySessionRole(_state.sessionRole);
     initTabSwitching();
-    const parallelInputs = [
-        document.getElementById('setting-max-parallel'),
-        document.getElementById('setting-max-concurrent-downloads'),
-    ].filter(Boolean);
-    parallelInputs.forEach(input => {
-        input.addEventListener('input', () => {
-            parallelInputs.forEach(other => {
-                if (other !== input) other.value = input.value;
-            });
-        });
-    });
-
-    // 先恢复页面依赖的服务端状态，再启动实时连接和轮询。
-    await loadBloggersFromServer();
-    await loadDownloadStatus();
-
-    // 初始化 WebSocket 连接；“任务状态已恢复”提示在 connect 回调中弹出，确保后端可用。
-    initWebSocket();
-
-    // 启动状态轮询
-    startStatusPolling();
-    startProgressUpdates();
-
-    // 根据活动 tab 统一调度需要的 HTTP 刷新。
-    startPollingScheduler();
-
-    // 初始化移动端侧边栏
-    initMobileSidebar();
-
-    // 初始化智能下载设置的事件监听
-    const smartDownloadToggle = document.getElementById('setting-enable-smart-download');
-    if (smartDownloadToggle) {
-        smartDownloadToggle.addEventListener('change', (e) => {
-            toggleSmartDownloadSettings(e.target.checked);
-        });
-    }
-
-    // 初始化 MD5 校验模式切换。
-    onVerifyModeChange();
-
-    // Cookie、基础配置和可执行路径只对 Owner 可见/可请求。
-    if (_state.sessionRole === 'owner') checkCookiesStatus();
-
-    // FFmpeg 路径属于基础配置，Operator / Viewer 不请求该接口。
-    if (_state.sessionRole === 'owner') refreshFFmpegDetectedPath();
-
-    // 异步加载并渲染已添加博主列表（博主搜索标签页）。
-    renderKnownBloggers();
-
-    // 异步加载并初始化手动查询页的博主快捷选择下拉。
-    renderUidHistorySelect();
-
-    // 检查博主资料变更通知（黄点）
-    checkBloggerProfileNotices();
-
-    if (_state.sessionRole === 'owner') loadSettingsFromServer();
-
-    // 设置分区可折叠：点击标题栏收起 / 展开（含键盘支持）
-    document.querySelectorAll('.section-collapsible .section-header').forEach(header => {
-        header.setAttribute('tabindex', '0');
-        header.setAttribute('role', 'button');
-        const section = header.closest('.section-collapsible');
-        header.setAttribute('aria-expanded', String(!section?.classList.contains('collapsed')));
-        const toggleSection = () => {
-            const sec = header.closest('.section-collapsible');
-            if (sec) {
-                sec.classList.toggle('collapsed');
-                header.setAttribute('aria-expanded', String(!sec.classList.contains('collapsed')));
-            }
-        };
-        header.addEventListener('click', toggleSection);
-        header.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection(); }
-        });
-    });
-
-    // 全局 ESC 关闭抽屉 / 弹窗
-    document.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape') return;
-        const drawer = document.getElementById('video-drawer');
-        if (drawer && drawer.classList.contains('active')) { closeVideoDrawer(); return; }
-        const openModal = document.querySelector('.modal-overlay.active');
-        if (!openModal || openModal.id === 'confirm-modal') return; // confirm-modal 自行处理 ESC
-        if (openModal.id === 'qrcode-modal') closeQRCodeModal();
-        else if (openModal.id === 'blogger-modal') closeBloggerModal();
-        else if (openModal.id === 'blogger-notice-modal') closeBloggerNoticeModal();
-        else openModal.classList.remove('active');
-    });
-
-    // 网络在线/离线事件
-    window.addEventListener('offline', () => {
-        _state.isNetworkOnline = false;
-        updateNetworkBanner();
-        updateNetworkDisabledButtons();
-        showToast('网络已断开，部分功能已禁用', 'warning');
-    });
-    window.addEventListener('online', () => {
-        _state.networkFailCount = 0;
-        _state.isNetworkOnline = true;
-        updateNetworkBanner();
-        updateNetworkDisabledButtons();
-        showToast('网络已恢复', 'success');
-        // 刷新看板与下载状态
-        loadHistoryBoard(_state.currentBoardTab);
-        updateDownloadLists();
-        // 只重试最近五分钟内可能因离线失败的任务。
-        const offlineSince = Math.floor((Date.now() - 5 * 60 * 1000) / 1000);
-        apiPost('/api/download/retry-all', { since: offlineSince }).catch(error => {
-            showToast(`恢复离线下载任务失败: ${error.message || '未知错误'}`, 'error');
-        });
-    });
+    bindNetworkListeners();
+    bindGlobalKeyboardInteractions();
+    bindPageEventListeners();
     updateNetworkDisabledButtons();
 
+    let authError = null;
+    try {
+        const authResponse = await fetch('/api/auth/state', {
+            credentials: 'same-origin',
+            cache: 'no-store',
+        });
+        let authEnvelope;
+        try {
+            authEnvelope = await authResponse.json();
+        } catch {
+            throw new Error('服务响应格式异常，请确认后端服务地址正确。');
+        }
+        if (!authResponse.ok) {
+            throw new Error(authEnvelope.message || `后端服务返回错误（${authResponse.status}）。`);
+        }
+        const authData = authEnvelope.data || {};
+        _state.sessionAuthenticated = authData.authenticated === true;
+        _state.csrfToken = authData.csrf_token || null;
+        _state.sessionRole = authData.role || 'viewer';
+        if (!_state.sessionAuthenticated) _state.sessionRole = 'viewer';
+    } catch (error) {
+        authError = error;
+        _state.sessionAuthenticated = false;
+        _state.sessionRole = 'viewer';
+        setBackendAvailability(false);
+    }
+
+    try {
+        await loadSettingsFragment();
+    } catch (error) {
+        if (!authError) authError = error;
+        setBackendAvailability(false);
+    }
+
+    applySessionRole(_state.sessionRole);
+    bindSettingsInteractions();
+    bindCollapsibleSections();
+    initMobileSidebar();
+    onVerifyModeChange();
+    updateNetworkDisabledButtons();
+
+    if (authError) {
+        showStartupNotice(formatStartupError(authError));
+        return;
+    }
+    if (!_state.sessionAuthenticated) {
+        showStartupNotice('当前设备尚未完成配对，请先在配对页完成设置。');
+        return;
+    }
+
+    // 各项服务端状态彼此独立，单项失败不阻断其他页面能力。
+    await Promise.allSettled([loadBloggersFromServer(), loadDownloadStatus()]);
+    initWebSocket();
+    startStatusPolling();
+    startProgressUpdates();
+    startPollingScheduler();
+
+    if (_state.sessionRole === 'owner') {
+        checkCookiesStatus();
+        refreshFFmpegDetectedPath();
+        loadSettingsFromServer();
+    }
+    renderKnownBloggers();
+    renderUidHistorySelect();
+    checkBloggerProfileNotices();
+}
+
+function bindPageEventListeners() {
     // --- 页面事件绑定 ---
     document.getElementById('login-prompt-btn')?.addEventListener('click', () => showQRCodeLogin());
     document.getElementById('cookie-warning-settings-link')?.addEventListener('click', () => switchTab('settings'));
@@ -170,6 +118,23 @@ async function bootstrapApp() {
     document.getElementById('detail-start-btn')?.addEventListener('click', () => startSelectedBlogger());
     document.getElementById('detail-stop-btn')?.addEventListener('click', () => stopSelectedBlogger());
     document.getElementById('board-refresh-btn')?.addEventListener('click', () => manualRefreshBoard());
+}
+
+function bindSettingsInteractions() {
+    const parallelInputs = [
+        document.getElementById('setting-max-parallel'),
+        document.getElementById('setting-max-concurrent-downloads'),
+    ].filter(Boolean);
+    parallelInputs.forEach(input => {
+        input.addEventListener('input', () => {
+            parallelInputs.forEach(other => {
+                if (other !== input) other.value = input.value;
+            });
+        });
+    });
+    document.getElementById('setting-enable-smart-download')?.addEventListener('change', event => {
+        toggleSmartDownloadSettings(event.target.checked);
+    });
     document.getElementById('setting-comments-reply-mode')?.addEventListener('change', onCommentsReplyModeChange);
     document.getElementById('setting-sidecar-archive-mode')?.addEventListener('change', onSidecarArchiveModeChange);
     document.getElementById('setting-download-mode')?.addEventListener('change', onDownloadModeChange);
@@ -177,6 +142,58 @@ async function bootstrapApp() {
     document.getElementById('setting-auto-organize')?.addEventListener('change', updatePathPreview);
     document.getElementById('setting-path-template')?.addEventListener('input', updatePathPreview);
     document.getElementById('setting-verify-mode')?.addEventListener('change', onVerifyModeChange);
+}
+
+function bindCollapsibleSections() {
+    document.querySelectorAll('.section-collapsible .section-header').forEach(header => {
+        header.setAttribute('tabindex', '0');
+        header.setAttribute('role', 'button');
+        const section = header.closest('.section-collapsible');
+        const toggleSection = () => {
+            section?.classList.toggle('collapsed');
+            header.setAttribute('aria-expanded', String(!section?.classList.contains('collapsed')));
+        };
+        header.setAttribute('aria-expanded', String(!section?.classList.contains('collapsed')));
+        header.addEventListener('click', toggleSection);
+        header.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleSection(); }
+        });
+    });
+}
+
+function bindGlobalKeyboardInteractions() {
+    document.addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        const drawer = document.getElementById('video-drawer');
+        if (drawer?.classList.contains('active')) { closeVideoDrawer(); return; }
+        const openModal = document.querySelector('.modal-overlay.active');
+        if (!openModal || openModal.id === 'confirm-modal') return;
+        if (openModal.id === 'qrcode-modal') closeQRCodeModal();
+        else if (openModal.id === 'blogger-modal') closeBloggerModal();
+        else if (openModal.id === 'blogger-notice-modal') closeBloggerNoticeModal();
+        else openModal.classList.remove('active');
+    });
+}
+
+function bindNetworkListeners() {
+    window.addEventListener('offline', () => {
+        _state.isNetworkOnline = false;
+        updateNetworkBanner();
+        updateNetworkDisabledButtons();
+        showToast('网络已断开，部分功能已禁用', 'warning');
+    });
+    window.addEventListener('online', () => {
+        _state.networkFailCount = 0;
+        _state.isNetworkOnline = true;
+        updateNetworkBanner();
+        updateNetworkDisabledButtons();
+        showToast('网络已恢复', 'success');
+        if (_state.sessionAuthenticated !== true) return;
+        loadHistoryBoard(_state.currentBoardTab);
+        updateDownloadLists();
+        const offlineSince = Math.floor((Date.now() - 5 * 60 * 1000) / 1000);
+        apiPost('/api/download/retry-all', { since: offlineSince }).catch(() => {});
+    });
 }
 
 function applySessionRole(role) {
@@ -189,9 +206,10 @@ function applySessionRole(role) {
     document.getElementById('login-prompt-btn')?.setAttribute('hidden', '');
 
     if (role === 'viewer') {
-        document.querySelectorAll('button[data-action]').forEach(button => {
-            button.disabled = true;
-            button.title = 'Viewer 会话仅可查看';
+        document.querySelectorAll('[data-action]').forEach(control => {
+            if (['close-video-drawer', 'close-blogger-modal', 'close-blogger-notice-modal', 'close-qr-modal'].includes(control.dataset.action)) return;
+            control.setAttribute('aria-disabled', 'true');
+            control.title = 'Viewer 会话仅可查看';
         });
         document.querySelectorAll('input, select, textarea').forEach(control => {
             control.disabled = true;
@@ -200,7 +218,7 @@ function applySessionRole(role) {
 }
 
 function showStartupError(error) {
-    const message = error?.message || '页面初始化失败，请重试。';
+    const message = formatStartupError(error);
     let panel = document.getElementById('startup-error-panel');
     if (!panel) {
         panel = document.createElement('section');
@@ -211,9 +229,42 @@ function showStartupError(error) {
     }
     panel.innerHTML = `
         <div class="startup-error-content">
-            <h2>页面启动失败</h2>
+            <h2>页面初始化异常</h2>
             <p>${escapeStartupMessage(message)}</p>
             <button type="button" class="btn btn-primary" data-startup-retry>重试</button>
+        </div>
+    `;
+    panel.querySelector('[data-startup-retry]')?.addEventListener('click', () => window.location.reload());
+}
+
+function formatStartupError(error) {
+    const message = String(error?.message || '页面初始化失败，请重试。');
+    if (/Failed to fetch|NetworkError|Load failed|网络|fetch/i.test(message)) {
+        return '无法连接到后端服务。请确认程序正在运行，并检查当前地址和端口。';
+    }
+    if (/Unexpected token|JSON|响应格式|HTML/i.test(message)) {
+        return '后端服务响应格式异常。请确认当前页面由 bulibuli 服务提供，而不是直接打开静态文件。';
+    }
+    if (/401|403|未登录|登录状态|配对/i.test(message)) {
+        return '当前设备尚未完成配对或登录状态已失效，请先完成配对后重试。';
+    }
+    return '页面初始化失败，请刷新页面或检查后端服务状态。';
+}
+
+function showStartupNotice(message) {
+    let panel = document.getElementById('startup-error-panel');
+    if (!panel) {
+        panel = document.createElement('section');
+        panel.id = 'startup-error-panel';
+        panel.className = 'startup-error-panel startup-notice-panel';
+        panel.setAttribute('role', 'status');
+        document.body.prepend(panel);
+    }
+    panel.innerHTML = `
+        <div class="startup-error-content">
+            <h2>部分服务暂不可用</h2>
+            <p>${escapeStartupMessage(message)}</p>
+            <button type="button" class="btn btn-primary" data-startup-retry>重试连接</button>
         </div>
     `;
     panel.querySelector('[data-startup-retry]')?.addEventListener('click', () => window.location.reload());
@@ -232,6 +283,16 @@ export function initTabSwitching() {
             if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
                 switchTab(tab.dataset.tab);
+                return;
+            }
+            if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                event.preventDefault();
+                const tabs = [...document.querySelectorAll('.nav-tab')];
+                const currentIndex = tabs.indexOf(tab);
+                const nextIndex = event.key === 'Home' ? 0
+                    : event.key === 'End' ? tabs.length - 1
+                        : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+                tabs[nextIndex]?.focus();
             }
         });
     });
@@ -239,12 +300,18 @@ export function initTabSwitching() {
 
 export function switchTab(tabName) {
     _state.currentTab = tabName;
-    document.querySelectorAll('.tab-panel, .nav-tab').forEach(el => el.classList.remove('active'));
-    document.getElementById(`tab-${tabName}`).classList.add('active');
+    const activePanel = document.getElementById(`tab-${tabName}`);
+    if (!activePanel) return;
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+        const active = panel === activePanel;
+        panel.classList.toggle('active', active);
+        panel.hidden = !active;
+    });
     document.querySelectorAll('.nav-tab').forEach(tab => {
         const selected = tab.dataset.tab === tabName;
         tab.classList.toggle('active', selected);
         tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
     });
     if (tabName === 'history') {
         // 每次进入下载管理都实时从后端拉取看板数据
@@ -342,14 +409,14 @@ export async function refreshQRCode() {
             startPollingQRCode(qrcode.qrcodeKey, generation);
         } else {
             // 信封层错误由 apiGet 抛异常进 catch，这里仅处理 code=0 但缺字段的异常响应（不回显 'success'）
-            canvasContainer.innerHTML = '<i class="fa-solid fa-exclamation-circle fa-3x" data-js-style="1"></i>';
+            canvasContainer.innerHTML = '<i class="fa-solid fa-exclamation-circle fa-3x status-error"></i>';
             hintEl.textContent = '获取二维码失败：响应缺少必要字段，请重试';
             refreshBtn.hidden = false;
         }
     } catch (e) {
         if (!isActiveQRCodeGeneration(generation)) return;
         console.error('[QRCode] 获取二维码失败:', e);
-        canvasContainer.innerHTML = '<i class="fa-solid fa-exclamation-circle fa-3x" data-js-style="1"></i>';
+        canvasContainer.innerHTML = '<i class="fa-solid fa-exclamation-circle fa-3x status-error"></i>';
         hintEl.textContent = e.message || '网络请求失败';
         refreshBtn.hidden = false;
     }

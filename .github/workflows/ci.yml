@@ -46,8 +46,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y aria2 ffmpeg
       - run: npm ci --ignore-scripts
         working-directory: static/js
-      - name: Expose frontend test dependencies
-        run: ln -s static/js/node_modules node_modules
       - run: npm run build
         working-directory: static/js
       - run: npx playwright install --with-deps chromium

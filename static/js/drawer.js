@@ -96,9 +96,9 @@ export async function openVideoDrawer(bvid) {
         const bodyEl = document.getElementById('drawer-body');
         if (bodyEl) {
             bodyEl.innerHTML = `
-                <div class="empty-state" data-js-style="16">
-                    <i class="fa-solid fa-exclamation-circle" data-js-style="17"></i>
-                    <p data-js-style="18">未找到该视频记录</p>
+                <div class="empty-state drawer-empty-state">
+                    <i class="fa-solid fa-exclamation-circle drawer-error-icon"></i>
+                    <p class="drawer-empty-message">未找到该视频记录</p>
                     <p class="empty-hint">该视频可能尚未入库或已被删除</p>
                 </div>`;
         }

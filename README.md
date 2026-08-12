@@ -110,6 +110,7 @@ cargo test --all-targets
 cd static/js
 npm ci --ignore-scripts
 npm run build
+npm run test:smoke
 cd ../..
 python build.py --check
 python build.py --portable

@@ -132,10 +132,10 @@ export async function doManualQuery() {
             showToast(_NETWORK_ERR_MSG, 'error');
             resultDiv.innerHTML = `<div class="card empty-state"><i class="fa-solid fa-inbox fa-2x mb-md"></i><p>暂无结果，请稍后重试</p></div>`;
         } else {
-            resultDiv.innerHTML = `<div class="card empty-state" data-js-style="1"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(result.message || '查询失败')}</p></div>`;
+            resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(result.message || '查询失败')}</p></div>`;
         }
     } catch (e) {
-        resultDiv.innerHTML = `<div class="card empty-state" data-js-style="1"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>请求错误: ${escapeHtml(e.message)}</p></div>`;
+        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>请求错误: ${escapeHtml(e.message)}</p></div>`;
     } finally {
         _state.manualQueryLoading = false;
         btn.disabled = false;
@@ -299,12 +299,12 @@ export async function doManualResolve() {
             return;
         }
         if (result.code !== 0) {
-            resultDiv.innerHTML = `<div class="card empty-state" data-js-style="1"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(result.message || '解析失败')}</p></div>`;
+            resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(result.message || '解析失败')}</p></div>`;
             return;
         }
         await renderResolveResult(result.data || {});
     } catch (e) {
-        resultDiv.innerHTML = `<div class="card empty-state" data-js-style="1"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>请求错误: ${escapeHtml(e.message)}</p></div>`;
+        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>请求错误: ${escapeHtml(e.message)}</p></div>`;
     } finally {
         if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
     }
@@ -337,7 +337,7 @@ async function renderResolveResult(result) {
 
     // 未知类型 / pay_blocked 兜底
     if (result.pay_blocked) {
-        resultDiv.innerHTML = `<div class="card empty-state" data-js-style="1"><i class="fa-solid fa-lock fa-2x mb-md"></i><p>${escapeHtml(result.message || '当前账号无权限访问该内容')}</p></div>`;
+        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-lock fa-2x mb-md"></i><p>${escapeHtml(result.message || '当前账号无权限访问该内容')}</p></div>`;
         return;
     }
     resultDiv.innerHTML = `<div class="card empty-state"><i class="fa-solid fa-info-circle fa-2x mb-md"></i><p>未能识别的链接类型</p></div>`;
@@ -350,7 +350,7 @@ async function renderResolvedNormalVideo(bvid, resultDiv) {
         const info = await apiGet(`/api/video/info?bvid=${encodeURIComponent(bvid)}`);
         const data = info.data || {};
         if (info.code !== 0 || !data.bvid) {
-            resultDiv.innerHTML = `<div class="card empty-state" data-js-style="1"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(info.message || '获取视频信息失败')}</p></div>`;
+        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(info.message || '获取视频信息失败')}</p></div>`;
             return;
         }
         _state.manualQueryVideos = _state.manualQueryVideos || {};
@@ -369,6 +369,6 @@ async function renderResolvedNormalVideo(bvid, resultDiv) {
         };
         resultDiv.innerHTML = `<div class="video-grid" id="manual-video-grid">${renderManualVideoCard(_state.manualQueryVideos[data.bvid])}</div>`;
     } catch (e) {
-        resultDiv.innerHTML = `<div class="card empty-state" data-js-style="1"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>获取视频信息失败: ${escapeHtml(e.message)}</p></div>`;
+        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>获取视频信息失败: ${escapeHtml(e.message)}</p></div>`;
     }
 }

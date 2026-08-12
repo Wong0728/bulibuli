@@ -18,7 +18,7 @@
                     <div id="cookie-login-status" class="login-status-box">
                         <span class="login-user-sub"><i class="fa-solid fa-spinner fa-spin"></i> 正在检查登录状态...</span>
                     </div>
-                    <div class="btn-group html-style-10">
+                    <div class="btn-group account-action-group">
                         <button type="button" class="btn btn-primary" data-action="show-qr-login">
                             <i class="fa-solid fa-qrcode"></i> 扫码登录 / 切换账号
                         </button>
@@ -32,10 +32,10 @@
                     <div class="form-note">推荐扫码登录；登录后 Cookie 由服务器安全保存，页面不再显示明文。切换账号可重新扫码或手动粘贴其他账号的 Cookie。</div>
 
                     <!-- 手动粘贴（高级，默认折叠，仅用于输入，不回显已保存 Cookie）。 -->
-                    <div class="html-style-11" id="manual-cookie-box" hidden>
+                    <div class="manual-cookie-panel" id="manual-cookie-box" hidden>
                         <label class="sr-only" for="manual-cookies">B站 Cookie</label>
                         <textarea id="manual-cookies" class="form-control" placeholder="粘贴其他账号的 Cookie 字符串（含 SESSDATA），点击“保存并登录”切换账号"></textarea>
-                        <div class="btn-group html-style-12">
+                        <div class="btn-group manual-cookie-actions">
                             <button type="button" class="btn btn-primary" data-action="save-manual-cookie">
                                 <i class="fa-solid fa-save"></i> 保存并登录
                             </button>
@@ -78,7 +78,7 @@
                         <div class="switch-group">
                             <span class="switch-label">跳过充电专属视频</span>
                             <label class="toggle-switch">
-                                <input type="checkbox" id="setting-skip-charge-videos">
+                                <input type="checkbox" id="setting-skip-charge-videos" aria-label="跳过充电专属视频">
                                 <span class="slider"></span>
                             </label>
                         </div>
@@ -125,7 +125,7 @@
                         </select>
                     </div>
                     <div class="form-group form-full">
-                        <div class="switch-group"><span class="switch-label">允许画质自动降级</span><label class="toggle-switch"><input type="checkbox" id="setting-allow-quality-fallback"><span class="slider"></span></label></div>
+                        <div class="switch-group"><span class="switch-label">允许画质自动降级</span><label class="toggle-switch"><input type="checkbox" id="setting-allow-quality-fallback" aria-label="允许画质自动降级"><span class="slider"></span></label></div>
                     </div>
                 </div>
             </div>
@@ -165,7 +165,7 @@
                         <div class="switch-group">
                             <span class="switch-label">自动下载弹幕</span>
                             <label class="toggle-switch">
-                                <input type="checkbox" id="setting-auto-download-danmaku">
+                                <input type="checkbox" id="setting-auto-download-danmaku" aria-label="自动下载弹幕">
                                 <span class="slider"></span>
                             </label>
                         </div>
@@ -175,7 +175,7 @@
                         <div class="switch-group">
                             <span class="switch-label">自动下载评论</span>
                             <label class="toggle-switch">
-                                <input type="checkbox" id="setting-auto-download-comments">
+                                <input type="checkbox" id="setting-auto-download-comments" aria-label="自动下载评论">
                                 <span class="slider"></span>
                             </label>
                         </div>
@@ -200,7 +200,7 @@
                         <div class="form-note">命中该正则的评论/回复不会写入结果（作用于评论正文，全局生效）。</div>
                     </div>
                     <div class="form-group">
-                        <label>弹幕/评论归档</label>
+                        <label for="setting-sidecar-archive-mode">弹幕/评论归档</label>
                         <select id="setting-sidecar-archive-mode" class="form-control">
                             <option value="overwrite">仅保留最新文件（默认）</option>
                             <option value="keep_latest_n">保留最近 N 次归档</option>
@@ -209,7 +209,7 @@
                         <div class="form-note">固定名文件始终保存最新内容，供查看和烧录使用。</div>
                     </div>
                     <div class="form-group" id="sidecar-archive-limit-group" hidden>
-                        <label>归档保留次数</label>
+                        <label for="setting-sidecar-archive-limit">归档保留次数</label>
                         <input type="number" id="setting-sidecar-archive-limit" class="form-control" min="1" max="50">
                         <div class="form-note">范围: 1-50。固定名最新文件不计入归档次数。</div>
                     </div>
@@ -229,19 +229,19 @@
                         <div class="switch-group">
                             <span class="switch-label">启用智能下载</span>
                             <label class="toggle-switch">
-                                <input type="checkbox" id="setting-enable-smart-download">
+                                <input type="checkbox" id="setting-enable-smart-download" aria-label="启用智能下载">
                                 <span class="slider"></span>
                             </label>
                         </div>
                         <div class="form-note">根据视频发布时间智能决定何时下载弹幕和评论，避免新视频弹幕/评论过少的问题</div>
                     </div>
                     <div class="form-group" id="smart-download-settings">
-                        <label>最小发布时间（小时）</label>
+                        <label for="setting-min-publish-hours">最小发布时间（小时）</label>
                         <input type="number" id="setting-min-publish-hours" class="form-control" min="0" max="72">
                         <div class="form-note">范围: 0-72，默认 1 小时。视频发布超过此时间后才下载弹幕/评论</div>
                     </div>
                     <div class="form-group" id="time-points-settings">
-                        <label>分时下载时间点（小时）</label>
+                        <label for="time-point-input">分时下载时间点（小时）</label>
                         <div id="time-point-chips" class="time-point-chips"></div>
                         <div class="time-point-add">
                             <input type="number" id="time-point-input" class="form-control" min="0" max="72" placeholder="小时，如 5">
@@ -305,17 +305,17 @@
                     <h3 class="settings-section-title"><i class="fa-solid fa-rocket"></i> Aria2c 高级参数</h3>
                     <div class="settings-grid">
                         <div class="form-group">
-                            <label>每服务器最大连接数</label>
+                            <label for="setting-max-conn-per-server">每服务器最大连接数</label>
                             <input type="number" id="setting-max-conn-per-server" class="form-control" min="1" max="16">
                             <div class="form-note">范围: 1-16，建议 16</div>
                         </div>
                         <div class="form-group">
-                            <label>分片数量</label>
+                            <label for="setting-split">分片数量</label>
                             <input type="number" id="setting-split" class="form-control" min="1" max="16">
                             <div class="form-note">范围: 1-16，建议与连接数相同</div>
                         </div>
                         <div class="form-group">
-                            <label>最小分片大小</label>
+                            <label for="setting-min-split-size">最小分片大小</label>
                             <select id="setting-min-split-size" class="form-control">
                                 <option value="1M">1 MB</option>
                                 <option value="5M">5 MB</option>
@@ -324,17 +324,17 @@
                             <div class="form-note">小文件可增大</div>
                         </div>
                         <div class="form-group">
-                            <label>最大重试次数</label>
+                            <label for="setting-max-tries">最大重试次数</label>
                             <input type="number" id="setting-max-tries" class="form-control" min="3" max="10">
                             <div class="form-note">范围: 3-10，建议 5</div>
                         </div>
                         <div class="form-group">
-                            <label>重试等待时间 (秒)</label>
+                            <label for="setting-retry-wait">重试等待时间 (秒)</label>
                             <input type="number" id="setting-retry-wait" class="form-control" min="1" max="30">
                             <div class="form-note">范围: 1-30，建议 5</div>
                         </div>
                         <div class="form-group">
-                            <label>最大同时下载数</label>
+                            <label for="setting-max-concurrent-downloads">最大同时下载数</label>
                             <input type="number" id="setting-max-concurrent-downloads" class="form-control" min="1" max="32">
                             <div class="form-note">范围 1-32，与上面的并行数保持同步</div>
                         </div>
@@ -364,7 +364,7 @@
                         </div>
                     </div>
                     <div class="form-group form-full" id="ffmpeg-detected-path-group">
-                        <label>当前检测到的路径</label>
+                        <span class="form-label">当前检测到的路径</span>
                         <div id="ffmpeg-detected-path" class="path-preview-box">
                             <i class="fa-solid fa-spinner fa-spin"></i> 检测中...
                         </div>
@@ -400,27 +400,27 @@
             <div class="section-body">
                 <div class="settings-grid">
                     <div class="form-group">
-                        <label>弹幕透明度</label>
+                        <label for="setting-burn-opacity">弹幕透明度</label>
                         <input type="number" id="setting-burn-opacity" class="form-control" min="0.1" max="1" step="0.1">
                         <div class="form-note">范围: 0.1~1.0，默认 0.6</div>
                     </div>
                     <div class="form-group">
-                        <label>字号缩放</label>
+                        <label for="setting-burn-font-size-scale">字号缩放</label>
                         <input type="number" id="setting-burn-font-size-scale" class="form-control" min="0.5" max="2" step="0.1">
                         <div class="form-note">范围: 0.5~2.0，默认 1.0</div>
                     </div>
                     <div class="form-group">
-                        <label>滚动弹幕时长（秒）</label>
+                        <label for="setting-burn-scroll-time">滚动弹幕时长（秒）</label>
                         <input type="number" id="setting-burn-scroll-time" class="form-control" min="1" max="60" step="0.5">
                         <div class="form-note">范围: 1~60，默认 8</div>
                     </div>
                     <div class="form-group">
-                        <label>固定弹幕时长（秒）</label>
+                        <label for="setting-burn-fix-time">固定弹幕时长（秒）</label>
                         <input type="number" id="setting-burn-fix-time" class="form-control" min="1" max="60" step="0.5">
                         <div class="form-note">范围: 1~60，默认 4</div>
                     </div>
                     <div class="form-group">
-                        <label>底部保留高度（像素）</label>
+                        <label for="setting-burn-bottom-reserve">底部保留高度（像素）</label>
                         <input type="number" id="setting-burn-bottom-reserve" class="form-control" min="0" max="200" step="1">
                         <div class="form-note">范围: 0~200，默认 50；避免弹幕遮挡字幕</div>
                     </div>
@@ -462,7 +462,7 @@
                         <div class="switch-group">
                             <span class="switch-label">自动下载 CC 字幕</span>
                             <label class="toggle-switch">
-                                <input type="checkbox" id="setting-subtitle-enabled">
+                                <input type="checkbox" id="setting-subtitle-enabled" aria-label="自动下载 CC 字幕">
                                 <span class="slider"></span>
                             </label>
                         </div>
@@ -471,14 +471,14 @@
                         <div class="switch-group">
                             <span class="switch-label">接受 AI 自动生成字幕</span>
                             <label class="toggle-switch">
-                                <input type="checkbox" id="setting-subtitle-accept-ai">
+                                <input type="checkbox" id="setting-subtitle-accept-ai" aria-label="接受 AI 自动生成字幕">
                                 <span class="slider"></span>
                             </label>
                         </div>
                         <div class="form-note">关闭时跳过 lan 以 ai- 开头的字幕</div>
                     </div>
                     <div class="form-group form-full">
-                        <label>语言过滤（逗号分隔，留空下载全部）</label>
+                        <label for="setting-subtitle-languages">语言过滤（逗号分隔，留空下载全部）</label>
                         <input type="text" id="setting-subtitle-languages" class="form-control" placeholder="zh-CN,zh-Hans">
                         <div class="form-note">例如 zh-CN,zh-Hans；留空表示下载全部语言</div>
                     </div>
@@ -495,11 +495,11 @@
             <div class="section-body">
                 <div class="settings-grid">
                     <div class="form-group form-full">
-                        <label>自动分文件夹</label>
+                        <label for="setting-auto-organize">自动分文件夹</label>
                         <div class="switch-group">
                             <span class="switch-label">按博主UID自动创建子文件夹</span>
                             <label class="toggle-switch">
-                                <input type="checkbox" id="setting-auto-organize">
+                                <input type="checkbox" id="setting-auto-organize" aria-label="按博主 UID 自动创建子文件夹">
                                 <span class="slider"></span>
                             </label>
                         </div>
@@ -514,7 +514,7 @@
                         <select id="setting-conflict-strategy" class="form-control"><option value="suffix">保留并加时间戳</option><option value="skip">跳过新文件</option><option value="overwrite">覆盖已有文件</option></select>
                     </div>
                     <div class="form-group form-full">
-                        <label>当前下载路径预览</label>
+                        <span class="form-label">当前下载路径预览</span>
                         <div id="path-preview" class="path-preview-box">
                             <i class="fa-solid fa-file-video"></i>
                             <span id="path-preview-text">./data/downloads/{博主UID}/{视频标题}.mp4</span>
@@ -534,17 +534,17 @@
             <div class="section-body">
                 <div class="settings-grid">
                     <div class="form-group">
-                        <label>历史记录上限</label>
+                        <label for="setting-history-limit">历史记录上限</label>
                         <input type="number" id="setting-history-limit" class="form-control" min="100" max="5000">
                         <div class="form-note">范围: 100-5000，建议 1000</div>
                     </div>
                     <div class="form-group">
-                        <label>UID历史上限</label>
+                        <label for="setting-uid-history-limit">UID历史上限</label>
                         <input type="number" id="setting-uid-history-limit" class="form-control" min="5" max="50">
                         <div class="form-note">范围: 5-50，建议 10</div>
                     </div>
                     <div class="form-group">
-                        <label>日志上限</label>
+                        <label for="setting-log-limit">日志上限</label>
                         <input type="number" id="setting-log-limit" class="form-control" min="50" max="500">
                         <div class="form-note">范围: 50-500，建议 100</div>
                     </div>
@@ -560,7 +560,7 @@
             <div class="section-body">
                 <div class="settings-grid">
                     <div class="form-group form-full">
-                        <label>全局默认保留数</label>
+                        <label for="setting-per-blogger-retain-default">全局默认保留数</label>
                         <input type="number" id="setting-per-blogger-retain-default" class="form-control" min="0" max="1000">
                         <div class="form-note">0 = 不限制；≥1 时每个博主只保留最新 N 条视频（超出的按发布时间删除文件 + 记录），对所有博主统一生效。</div>
                     </div>
@@ -577,7 +577,7 @@
             <div class="section-body">
                 <div class="settings-grid">
                     <div class="form-group form-full">
-                        <label>校验模式</label>
+                        <label for="setting-verify-mode">校验模式</label>
                         <select id="setting-verify-mode" class="form-control">
                             <option value="off">关闭</option>
                             <option value="on_completion">下载完成时校验一次</option>
@@ -586,12 +586,12 @@
                         <div class="form-note">下载完成时算一次 MD5 存库；周期模式另起后台 worker 定时复核</div>
                     </div>
                     <div class="form-group" id="verify-periodic-group" hidden>
-                        <label>校验间隔（天）</label>
+                        <label for="setting-verify-periodic-days">校验间隔（天）</label>
                         <input type="number" id="setting-verify-periodic-days" class="form-control" min="1" max="90">
                         <div class="form-note">范围: 1-90，建议 7</div>
                     </div>
                     <div class="form-group" id="verify-batch-group" hidden>
-                        <label>单次批量</label>
+                        <label for="setting-verify-periodic-batch">单次批量</label>
                         <input type="number" id="setting-verify-periodic-batch" class="form-control" min="1" max="200">
                         <div class="form-note">范围: 1-200，建议 20。每 60 秒扫一批最久未校验的</div>
                     </div>
@@ -633,7 +633,7 @@
                     <li><strong>Cookie 信任 / FFmpeg 白名单</strong>：首次使用时 TUI 会交互式提示确认，无需手动编辑配置文件。</li>
                 </ol>
                 <div id="ai-skill-path-box" class="form-group form-full settings-ai-skill-path" hidden>
-                    <label>AI Skill 文件路径</label>
+                    <span class="form-label">AI Skill 文件路径</span>
                     <div class="path-preview-box settings-path-preview">
                         <code id="ai-skill-path-text">docs/skill.md</code>
                         <button class="btn btn-sm" id="copy-ai-skill-path-btn"><i class="fa-solid fa-copy"></i> 复制路径</button>
@@ -658,7 +658,7 @@
                         <div class="switch-group">
                             <span class="switch-label">重投检测（纯提示）</span>
                             <label class="toggle-switch">
-                                <input type="checkbox" id="setting-detect-reupload">
+                                <input type="checkbox" id="setting-detect-reupload" aria-label="重投检测">
                                 <span class="slider"></span>
                             </label>
                         </div>
@@ -685,7 +685,7 @@
             <div class="section-body">
                 <div class="settings-grid">
                     <div class="form-group">
-                        <label>L1 视频数据刷新间隔（分钟）</label>
+                        <label for="setting-l1-interval-minutes">L1 视频数据刷新间隔（分钟）</label>
                         <input type="number" id="setting-l1-interval-minutes" class="form-control" min="1" max="1440">
                         <div class="form-note">范围: 1-1440，建议 5。后端每 N 分钟抽 50 条最久未刷的视频更新播放量/状态</div>
                     </div>

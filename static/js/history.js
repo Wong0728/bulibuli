@@ -55,7 +55,7 @@ export async function loadHistoryBoard(tab, { append = false } = {}) {
         if (result.code !== 0) {
             // 网络错误：统一用右上角 toast + 顶栏横幅，不在看板内联渲染，保留原有内容
             if (result.offline) { showToast(_NETWORK_ERR_MSG, 'error'); return; }
-            board.innerHTML = `<div class="empty-state-grid"><i class="fa-solid fa-exclamation-circle" data-js-style="1"></i><p>${escapeHtml(result.message || '加载看板失败')}</p></div>`;
+            board.innerHTML = `<div class="empty-state-grid"><i class="fa-solid fa-exclamation-circle status-error"></i><p>${escapeHtml(result.message || '加载看板失败')}</p></div>`;
             return;
         }
         const data = result.data || {};
@@ -200,7 +200,7 @@ export function renderBloggerSection(g, tab) {
     const face = g.face || '';
     const faceUrl = face ? `/api/video/proxy-image?url=${encodeURIComponent(face)}` : '';
     const avatarHtml = faceUrl
-        ? `<img src="${faceUrl}" class="blogger-section-avatar" alt="" data-image-error="show-next"><div class="blogger-section-avatar blogger-section-avatar-fallback" data-js-style="6">${escapeHtml((g.name || g.uid || '?').slice(0, 1))}</div>`
+        ? `<img src="${faceUrl}" class="blogger-section-avatar" alt="" data-image-error="show-next"><div class="blogger-section-avatar blogger-section-avatar-fallback" hidden>${escapeHtml((g.name || g.uid || '?').slice(0, 1))}</div>`
         : `<div class="blogger-section-avatar blogger-section-avatar-fallback">${escapeHtml((g.name || g.uid || '?').slice(0, 1))}</div>`;
 
     const videos = g.videos || [];
@@ -602,17 +602,17 @@ export function updateDownloadItemProgress(downloadItem, data) {
     // 更新状态图标和速度信息
     if (metaInfo) {
         let statusText = '等待中';
-        let statusIcon = '<i class="fa-solid fa-clock" data-js-style="7"></i>';
+        let statusIcon = '<i class="fa-solid fa-clock status-pending"></i>';
 
         if (status === 'downloading') {
             statusText = `(${step}/${totalSteps}) ${stepLabel || '下载中'}`;
-            statusIcon = '<i class="fa-solid fa-spinner fa-spin" data-js-style="8"></i>';
+            statusIcon = '<i class="fa-solid fa-spinner fa-spin status-progress"></i>';
         } else if (status === 'completed' || status === 'merged') {
             statusText = '已完成';
-            statusIcon = '<i class="fa-solid fa-check-circle" data-js-style="9"></i>';
+            statusIcon = '<i class="fa-solid fa-check-circle status-success"></i>';
         } else if (status === 'failed') {
             statusText = '失败';
-            statusIcon = '<i class="fa-solid fa-exclamation-circle" data-js-style="1"></i>';
+            statusIcon = '<i class="fa-solid fa-exclamation-circle status-error"></i>';
         }
 
         metaInfo.innerHTML = `${statusIcon} ${statusText}${speed && status === 'downloading' ? ` · ${speed}` : ''} ${taskType === 'audio' ? '· 音频' : ''}`;
