@@ -82,6 +82,20 @@
     <circle cx="1840" cy="481" r="5.5" fill="#45b5f3"/>
   </g>
 
+  <!-- Background-only bottom decoration: keep it behind every card and foreground label. -->
+  <g id="bottom-decor">
+    <ellipse cx="985" cy="943" rx="430" ry="68" fill="#40bcf1" fill-opacity=".07"/>
+    <ellipse cx="985" cy="942" rx="392" ry="56" fill="none" stroke="#74d2f5" stroke-width="13" opacity=".55"/>
+    <ellipse cx="985" cy="940" rx="333" ry="41" fill="none" stroke="#1faee9" stroke-width="3" opacity=".6"/>
+    <ellipse cx="985" cy="941" rx="278" ry="31" fill="none" stroke="#9ce2fb" stroke-width="2" opacity=".6"/>
+    <path d="M0 935c120-35 210 0 315 45 165 70 335 85 495 75 120-8 190-8 300 0 160 13 320-10 495-55 105-35 195-55 315-30v110H0z" fill="#159fe9"/>
+    <path d="M0 958c130-28 250 12 350 52 160 62 325 69 470 60 105-6 180-6 280 0 160 12 330-14 500-55 120-30 220-50 320-25v90H0z" fill="#2db1f1" opacity=".94"/>
+    <path d="M0 900c80-35 145-39 236-2 114 47 180 93 324 109-157 23-343 21-560 24z" fill="#ff8eb8" opacity=".9"/>
+    <path d="M1920 921c-92-40-147-38-223-4-107 47-189 93-327 104 179 33 353 18 550-9z" fill="#20a9ec"/>
+    <path d="M0 985c180-35 270-7 385 40 215 50 395 57 575 51 180-6 390-21 630-60 130-51 210-66 330-38" fill="none" stroke="#fff" stroke-width="2" opacity=".78"/>
+  </g>
+
+  <!-- Connectors sit above the waves but below cards and labels. -->
   <g fill="none" stroke-width="2.2" stroke-dasharray="7 7" opacity=".9">
     <path d="M431 171C503 171 540 170 612 178" stroke="#52baf0"/><circle cx="431" cy="171" r="5" fill="#52baf0" stroke="none"/><circle cx="612" cy="178" r="5" fill="#52baf0" stroke="none"/>
     <path d="M1506 176C1448 160 1407 165 1322 209" stroke="#ff7eab"/><circle cx="1506" cy="176" r="5" fill="#ff7eab" stroke="none"/><circle cx="1322" cy="209" r="5" fill="#ff7eab" stroke="none"/>
@@ -89,9 +103,9 @@
     <path d="M1396 719C1358 768 1328 807 1313 858" stroke="#4cbcf1"/><circle cx="1396" cy="719" r="5" fill="#4cbcf1" stroke="none"/><circle cx="1313" cy="858" r="5" fill="#4cbcf1" stroke="none"/>
   </g>
 
-  <g id="cards" font-family="Arial,'Microsoft YaHei','PingFang SC',sans-serif" filter="url(#shadow)">
+  <g id="cards" font-family="Arial,'Microsoft YaHei','PingFang SC',sans-serif">
     <g transform="translate(94 99)">
-      <rect width="378" height="330" rx="30" fill="url(#card)" stroke="#82caf4" stroke-width="2"/>
+      <rect width="378" height="330" rx="30" fill="url(#card)" stroke="#82caf4" stroke-width="2" filter="url(#shadow)"/>
       <circle cx="28" cy="28" r="8.5" fill="#19a9ef"/><text x="58" y="37" fill="#112b59" font-size="26" font-weight="700">UP 主监控</text>
       <rect x="35" y="64" width="307" height="241" rx="15" fill="#fff" stroke="#d3e9f7"/>
       <rect x="35" y="64" width="307" height="18" rx="14" fill="#43baf0"/>
@@ -104,32 +118,32 @@
       <g transform="translate(57 184)"><rect width="260" height="34" rx="10" fill="#f3f9fd"/><rect width="36" height="26" x="0" y="4" rx="4" fill="#19a9ef"/><path d="M14 11l9 6-9 6z" fill="#fff"/><rect x="48" y="9" width="114" height="5" rx="3" fill="#bccde0"/><rect x="48" y="20" width="82" height="5" rx="3" fill="#bccde0"/></g>
       <g transform="translate(57 224)"><rect width="260" height="34" rx="10" fill="#f3f9fd"/><rect width="36" height="26" x="0" y="4" rx="4" fill="#19a9ef"/><path d="M14 11l9 6-9 6z" fill="#fff"/><rect x="48" y="9" width="114" height="5" rx="3" fill="#bccde0"/><rect x="48" y="20" width="82" height="5" rx="3" fill="#bccde0"/></g>
       <g transform="translate(57 264)"><rect width="260" height="34" rx="10" fill="#f3f9fd"/><rect width="36" height="26" x="0" y="4" rx="4" fill="#f85d93"/><path d="M14 11l9 6-9 6z" fill="#fff"/><rect x="48" y="9" width="114" height="5" rx="3" fill="#bccde0"/><rect x="48" y="20" width="82" height="5" rx="3" fill="#bccde0"/></g>
-      <circle cx="314" cy="286" r="29" fill="#fff"/><path d="M314 273c-6 0-10 5-10 11v7l-4 4h28l-4-4v-7c0-6-4-11-10-11zM309 297c1 4 9 4 10 0z" fill="#149ee9"/>
-      <circle cx="360" cy="88" r="39" fill="url(#blueButton)" stroke="#d2f1ff" stroke-width="10"/><circle cx="354" cy="82" r="13" fill="none" stroke="#fff" stroke-width="5"/><path d="M364 92l13 13" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="293" cy="254" r="29" fill="#fff"/><path d="M293 241c-6 0-10 5-10 11v7l-4 4h28l-4-4v-7c0-6-4-11-10-11zM288 265c1 4 9 4 10 0z" fill="#149ee9"/>
+      <circle cx="352" cy="68" r="39" fill="url(#blueButton)" stroke="#d2f1ff" stroke-width="10"/><circle cx="346" cy="62" r="13" fill="none" stroke="#fff" stroke-width="5"/><path d="M356 72l13 13" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
     </g>
 
     <g transform="translate(1396 99)">
-      <rect width="392" height="323" rx="30" fill="url(#pinkCard)" stroke="#ff92b8" stroke-width="2"/>
+      <rect width="392" height="323" rx="30" fill="url(#pinkCard)" stroke="#ff92b8" stroke-width="2" filter="url(#shadow)"/>
       <circle cx="28" cy="28" r="8.5" fill="#f85d93"/><text x="58" y="37" fill="#112b59" font-size="26" font-weight="700">视频补档下载</text>
       <rect x="36" y="80" width="205" height="125" rx="11" fill="#d6dce9"/><path d="M131 117l39 26-39 26z" fill="#f85d93"/>
-      <circle cx="338" cy="137" r="59" fill="url(#pinkButton)" stroke="#ffe0ec" stroke-width="13"/><path d="M338 108v34m-13-12 13 13 13-13m-21 15v11h42v-11" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="351" cy="137" r="52.5" fill="url(#pinkButton)" stroke="#ffe0ec" stroke-width="13"/><path d="M351 108v34m-13-12 13 13 13-13m-21 15v11h42v-11" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
       <rect x="36" y="243" width="294" height="18" rx="10" fill="#e3eaf2"/><rect x="36" y="243" width="270" height="18" rx="10" fill="#f65a92"/><text x="337" y="257" fill="#0a2c60" font-size="18" font-weight="700">92%</text><text x="36" y="294" fill="#6785ac" font-size="16">28.6 MB/s · 1.2 GB / 1.3 GB</text>
     </g>
 
     <g transform="translate(94 505)">
-      <rect width="356" height="317" rx="30" fill="url(#pinkCard)" stroke="#ff92b8" stroke-width="2"/>
+      <rect width="356" height="317" rx="30" fill="url(#pinkCard)" stroke="#ff92b8" stroke-width="2" filter="url(#shadow)"/>
       <circle cx="28" cy="28" r="8.5" fill="#f85d93"/><text x="58" y="37" fill="#112b59" font-size="26" font-weight="700">直播录制</text>
       <rect x="32" y="67" width="290" height="237" rx="14" fill="#fff7fb"/>
       <rect x="45" y="90" width="66" height="28" rx="6" fill="#f85d93"/><text x="78" y="110" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">LIVE</text>
-      <rect x="237" y="90" width="72" height="28" rx="6" fill="#f85d93"/><text x="273" y="110" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">● REC</text>
-      <path d="M32 114c9 0 13-10 19-14s11 25 20 22 11-31 21-29 14 30 26 24 9-9 18-8 8 9 16 2 8-19 18-17 14 34 27 24 9-22 19-21 13 27 25 21 12-18 22-15 10 19 21 16 11-17 23-15 8 11 15 7" fill="none" stroke="#fb5a94" stroke-width="2.6"/>
+      <rect x="234" y="90" width="75" height="28" rx="6" fill="#f85d93"/><circle cx="253" cy="104" r="3.5" fill="#fff"/><text x="279" y="110" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">REC</text>
+      <path transform="translate(32 133)" d="M0 47C9 47 13 37 19 33S30 58 39 55 50 24 60 26 74 56 86 50 95 41 104 42 112 51 120 44 128 25 138 27 152 61 165 51 174 29 184 30 197 57 209 51 221 33 231 36 241 55 252 52 263 35 275 37 283 48 290 44" fill="none" stroke="#fb5a94" stroke-width="2.6"/>
       <rect x="32" y="217" width="290" height="38" fill="#5b6680"/><text x="46" y="242" fill="#fff" font-size="18">00:42:18</text><circle cx="131" cy="235" r="5" fill="#fa6a9c"/>
-      <rect x="52" y="274" width="5" height="22" rx="2" fill="#687a9b"/><rect x="62" y="274" width="5" height="22" rx="2" fill="#687a9b"/><rect x="114" y="275" width="19" height="19" rx="2" fill="#687a9b"/><circle cx="209" cy="284" r="15" fill="none" stroke="#fa669a" stroke-width="4"/><circle cx="209" cy="284" r="7" fill="#fa669a"/>
-      <circle cx="338" cy="87" r="39" fill="url(#pinkButton)" stroke="#ffdceb" stroke-width="10"/><rect x="322" y="76" width="27" height="24" rx="5" fill="#fff"/><path d="M349 83l10-6v22l-10-6z" fill="#fff"/><path d="M333 83l9 5-9 5z" fill="#f65c94"/>
+      <rect x="52" y="260" width="5" height="22" rx="2" fill="#687a9b"/><rect x="62" y="260" width="5" height="22" rx="2" fill="#687a9b"/><rect x="114" y="261" width="19" height="19" rx="2" fill="#687a9b"/><circle cx="191" cy="271" r="15" fill="none" stroke="#fa669a" stroke-width="4"/><circle cx="191" cy="271" r="7" fill="#fa669a"/>
+      <circle cx="335" cy="59" r="34" fill="url(#pinkButton)" stroke="#ffdceb" stroke-width="10"/><rect x="319" y="48" width="27" height="24" rx="5" fill="#fff"/><path d="M346 55l10-6v22l-10-6z" fill="#fff"/><path d="M330 55l9 5-9 5z" fill="#f65c94"/>
     </g>
 
     <g transform="translate(1396 505)">
-      <rect width="415" height="306" rx="30" fill="url(#card)" stroke="#82caf4" stroke-width="2"/>
+      <rect width="415" height="306" rx="30" fill="url(#card)" stroke="#82caf4" stroke-width="2" filter="url(#shadow)"/>
       <circle cx="28" cy="28" r="8.5" fill="#19a9ef"/><text x="58" y="37" fill="#112b59" font-size="26" font-weight="700">弹幕字幕</text>
       <g font-size="18" font-weight="600" text-anchor="middle">
         <rect x="28" y="86" width="118" height="36" rx="13" fill="#e6f0f7"/><text x="87" y="110" fill="#365d85">前方高能！</text>
@@ -140,11 +154,11 @@
         <rect x="88" y="237" width="100" height="36" rx="13" fill="#eaf1f8"/><text x="138" y="261" fill="#5f7796">(ﾟ∀ﾟ)ﾉ</text>
       </g>
       <path d="M251 174h48m-9-10 10 10-10 10" fill="none" stroke="#159fe9" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M332 104h53l23 23v97h-76z" fill="#fff" stroke="#159fe9" stroke-width="3"/><path d="M385 104v24h23" fill="none" stroke="#159fe9" stroke-width="3"/><rect x="344" y="178" width="58" height="36" rx="8" fill="#159fe9"/><text x="373" y="203" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">.srt</text>
+      <g transform="translate(303 104) scale(.9565 .9545)"><path d="M8 4h53l23 23v97H8Z" fill="#fff" stroke="#159fe9" stroke-width="3"/><path d="M61 4v24h23" fill="none" stroke="#159fe9" stroke-width="3"/><rect x="20" y="78" width="58" height="36" rx="8" fill="#159fe9"/><text x="49" y="103" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">.srt</text></g>
     </g>
 
     <g transform="translate(607 783)">
-      <rect width="706" height="181" rx="30" fill="url(#card)" stroke="#82caf4" stroke-width="2"/>
+      <rect width="706" height="181" rx="30" fill="url(#card)" stroke="#82caf4" stroke-width="2" filter="url(#shadow)"/>
       <circle cx="28" cy="28" r="8.5" fill="#19a9ef"/><text x="58" y="37" fill="#112b59" font-size="26" font-weight="700">跨平台运行</text>
       <g fill="none" stroke="#587aa4" stroke-width="4">
         <g transform="translate(37 70)"><rect x="8" y="8" width="54" height="39" rx="3"/><path d="M26 58h18M35 47v11" stroke-linecap="round"/></g>
@@ -159,8 +173,8 @@
   </g>
 
   <g id="title-group" font-family="Arial Black,'Microsoft YaHei UI','Microsoft YaHei','PingFang SC',sans-serif" text-anchor="middle" filter="url(#textShadow)">
-    <text x="960" y="344" font-size="158" font-weight="700" letter-spacing="-14" transform="skewX(-11 960 344)" stroke="#fff" stroke-width="10" paint-order="stroke fill"><tspan fill="#14a1ea">补哩</tspan><tspan fill="#f85d93">补哩</tspan></text>
-    <text x="960" y="515" font-family="Arial Black,Arial,sans-serif" font-size="136" font-style="italic" font-weight="700" letter-spacing="-12" transform="skewX(-11 960 515)" stroke="#fff" stroke-width="10" paint-order="stroke fill"><tspan fill="#14a1ea">buli</tspan><tspan fill="#f85d93">buli</tspan></text>
+    <text x="960" y="344" font-size="158" font-weight="700" letter-spacing="-14" transform="translate(960 344) skewX(-11) translate(-960 -344)" stroke="#fff" stroke-width="10" paint-order="stroke fill"><tspan fill="#14a1ea">补哩</tspan><tspan fill="#f85d93">补哩</tspan></text>
+    <text x="960" y="515" font-family="Arial Black,Arial,sans-serif" font-size="136" font-style="italic" font-weight="700" letter-spacing="-12" transform="translate(960 515) skewX(-11) translate(-960 -515)" stroke="#fff" stroke-width="10" paint-order="stroke fill"><tspan fill="#14a1ea">buli</tspan><tspan fill="#f85d93">buli</tspan></text>
     <g fill="#19a9ef" stroke="#fff" stroke-width="10" paint-order="stroke fill"><rect x="564" y="502" width="30" height="30"/><rect x="540" y="538" width="19" height="19"/><rect x="1326" y="512" width="30" height="30"/><rect x="1353" y="548" width="18" height="18"/></g>
     <g stroke="#2db1f1" stroke-width="10" stroke-linecap="round"><path d="M508 536h52M1360 536h52"/></g>
   </g>
@@ -173,15 +187,4 @@
     <text x="1372" y="695" fill="#43b6f5" font-size="58" font-weight="700" letter-spacing="-15" transform="scale(-1 1) translate(-2744 0)">»»»</text>
   </g>
 
-  <g id="bottom-decor">
-    <ellipse cx="985" cy="943" rx="430" ry="68" fill="#40bcf1" fill-opacity=".07"/>
-    <ellipse cx="985" cy="942" rx="392" ry="56" fill="none" stroke="#74d2f5" stroke-width="13" opacity=".55"/>
-    <ellipse cx="985" cy="940" rx="333" ry="41" fill="none" stroke="#1faee9" stroke-width="3" opacity=".6"/>
-    <ellipse cx="985" cy="941" rx="278" ry="31" fill="none" stroke="#9ce2fb" stroke-width="2" opacity=".6"/>
-    <path d="M0 935c120-35 210 0 315 45 165 70 335 85 495 75 120-8 190-8 300 0 160 13 320-10 495-55 105-35 195-55 315-30v110H0z" fill="#159fe9"/>
-    <path d="M0 958c130-28 250 12 350 52 160 62 325 69 470 60 105-6 180-6 280 0 160 12 330-14 500-55 120-30 220-50 320-25v90H0z" fill="#2db1f1" opacity=".94"/>
-    <path d="M0 900c80-35 145-39 236-2 114 47 180 93 324 109-157 23-343 21-560 24z" fill="#ff8eb8" opacity=".9"/>
-    <path d="M1920 921c-92-40-147-38-223-4-107 47-189 93-327 104 179 33 353 18 550-9z" fill="#20a9ec"/>
-    <path d="M0 985c180-35 270-7 385 40 215 50 395 57 575 51 180-6 390-21 630-60 130-51 210-66 330-38" fill="none" stroke="#fff" stroke-width="2" opacity=".78"/>
-  </g>
 </svg>
