@@ -14,6 +14,7 @@ use tracing::{info, warn};
 use super::DownloadManager;
 
 impl DownloadManager {
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_to_history(
         &self,
         bvid: &str,
@@ -22,11 +23,16 @@ impl DownloadManager {
         pub_timestamp: Option<i64>,
         cookies: Option<&str>,
         source: &str,
+        cid: Option<i64>,
+        page: Option<i32>,
+        part_title: Option<&str>,
     ) -> Result<()> {
-        let existing = history::Entity::find()
-            .filter(history::Column::Bvid.eq(bvid))
-            .one(&self.db)
-            .await?;
+        let mut existing_query = history::Entity::find().filter(history::Column::Bvid.eq(bvid));
+        existing_query = match cid {
+            Some(cid) => existing_query.filter(history::Column::Cid.eq(cid)),
+            None => existing_query.filter(history::Column::Cid.is_null()),
+        };
+        let existing = existing_query.one(&self.db).await?;
         let requested_source = if source == "manual" { "manual" } else { "auto" };
         // 同一 BV 同时存在自动与手动产物时，history.source 保持 auto，
         // 防止一次手动补下载把自动侧车调度永久排除。
@@ -129,6 +135,9 @@ impl DownloadManager {
         if let Some(existing) = existing {
             let mut model: history::ActiveModel = existing.into();
             model.uid = Set(uid_to_save);
+            model.cid = Set(cid);
+            model.page = Set(page);
+            model.part_title = Set(part_title.map(str::to_string));
             model.source = Set(source.to_string());
             model.title = Set(title);
             model.pub_date = Set(pub_date);
@@ -149,6 +158,9 @@ impl DownloadManager {
             let new_history = history::ActiveModel {
                 uid: Set(uid_to_save),
                 bvid: Set(bvid.to_string()),
+                cid: Set(cid),
+                page: Set(page),
+                part_title: Set(part_title.map(str::to_string)),
                 source: Set(source.to_string()),
                 title: Set(title),
                 pub_date: Set(pub_date),
@@ -191,6 +203,7 @@ impl DownloadManager {
         let digest = crate::services::file_safety::stream_file_md5(path).await?;
         let h = history::Entity::find()
             .filter(history::Column::Bvid.eq(bvid))
+            .filter(history::Column::FilePath.eq(path.to_string_lossy().to_string()))
             .one(&self.db)
             .await?;
         if let Some(h) = h {

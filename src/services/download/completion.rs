@@ -105,8 +105,14 @@ impl DownloadManager {
         model.total_size = Set(status.total_size);
         model.speed = Set(0);
         model.filename = Set(Some(final_filename.clone()));
-        self.apply_guarded_update(&task.bvid, task.id, task.generation, model)
-            .await;
+        if !self
+            .apply_guarded_update(&task.bvid, task.id, task.generation, model)
+            .await
+        {
+            return CompleteOutcome::Skip {
+                clear_throttle: false,
+            };
+        }
         // 添加到下载历史
         let file_path = Some(dir.join(&final_filename));
         // 完成后的附加请求使用当前登录态。
@@ -123,6 +129,9 @@ impl DownloadManager {
                 None,
                 Some(&task_cookies),
                 task.source.as_deref().unwrap_or("auto"),
+                task.cid,
+                task.page,
+                task.part_title.as_deref(),
             )
             .await
         {

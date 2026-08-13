@@ -29,16 +29,6 @@ impl DownloadManager {
             .lock()
             .await
             .remove(&task_cache_key(&task.bvid, task.cid));
-        self.broadcast_progress(
-            task,
-            "failed",
-            task.progress_percent,
-            task.downloaded_size,
-            task.total_size,
-            0,
-            Some(&error),
-        )
-        .await;
     }
 
     /// 按 generation 守卫应用一次任务字段更新：仅当数据库中该任务的 generation
@@ -58,7 +48,14 @@ impl DownloadManager {
             .exec(&self.db)
             .await
         {
-            Ok(_) => true,
+            Ok(result) => {
+                if result.rows_affected == 1 {
+                    true
+                } else {
+                    warn!("跳过陈旧任务状态写入（generation 已变化）: {bvid}");
+                    false
+                }
+            }
             Err(sea_orm::DbErr::RecordNotUpdated) => {
                 warn!("跳过陈旧任务状态写入（generation 已变化）: {bvid}");
                 false
@@ -73,15 +70,16 @@ impl DownloadManager {
     async fn apply_guarded_updates(
         &self,
         updates: Vec<(String, i32, i64, download_task::ActiveModel)>,
-    ) {
+    ) -> HashSet<i32> {
         if updates.is_empty() {
-            return;
+            return HashSet::new();
         }
+        let mut updated_ids = HashSet::new();
         let transaction = match self.db.begin().await {
             Ok(transaction) => transaction,
             Err(error) => {
                 error!("开始下载任务批量更新事务失败: {error}");
-                return;
+                return HashSet::new();
             }
         };
         for (bvid, task_id, generation, model) in updates {
@@ -92,19 +90,26 @@ impl DownloadManager {
                 .exec(&transaction)
                 .await
             {
-                Ok(_) => {}
+                Ok(result) if result.rows_affected == 1 => {
+                    updated_ids.insert(task_id);
+                }
+                Ok(_) => {
+                    warn!("跳过陈旧任务批量写入（generation 已变化）: {bvid}");
+                }
                 Err(sea_orm::DbErr::RecordNotUpdated) => {
                     warn!("跳过陈旧任务状态写入（generation 已变化）: {bvid}");
                 }
                 Err(error) => {
                     error!("批量更新下载任务失败 {bvid}: {error}");
-                    return;
+                    return HashSet::new();
                 }
             }
         }
         if let Err(error) = transaction.commit().await {
             error!("提交下载任务批量更新事务失败: {error}");
+            return HashSet::new();
         }
+        updated_ids
     }
 
     pub(super) async fn monitor_loop(&self) {
@@ -252,23 +257,26 @@ impl DownloadManager {
                         model.error = Set(Some("Aria2 下载器不可用".to_string()));
                         model.speed = Set(0);
                         // generation 守卫：避免覆盖用户重试后重置的新状态。
-                        self.apply_guarded_update(&task.bvid, task.id, task.generation, model)
+                        let updated = self
+                            .apply_guarded_update(&task.bvid, task.id, task.generation, model)
                             .await;
                         // 任务终态：清理 DB 节流与进度缓存
                         self.progress_cache
                             .lock()
                             .await
                             .remove(&task_cache_key(&task.bvid, task.cid));
-                        self.broadcast_progress(
-                            task,
-                            "failed",
-                            task.progress_percent,
-                            task.downloaded_size,
-                            task.total_size,
-                            0,
-                            Some("Aria2 下载器不可用"),
-                        )
-                        .await;
+                        if updated {
+                            self.broadcast_progress(
+                                task,
+                                "failed",
+                                task.progress_percent,
+                                task.downloaded_size,
+                                task.total_size,
+                                0,
+                                Some("Aria2 下载器不可用"),
+                            )
+                            .await;
+                        }
                     }
                     aria2_fail_count = 0;
                 }
@@ -277,6 +285,8 @@ impl DownloadManager {
             aria2_fail_count = 0;
 
             let mut to_update: Vec<(String, i32, i64, download_task::ActiveModel)> = Vec::new();
+            let mut deferred_progress: Vec<(download_task::Model, String, i32, i64, i64, i64)> =
+                Vec::new();
             let mut completed_bvids: Vec<(String, Option<i64>, Option<String>)> = Vec::new();
             let gid_tasks = tasks
                 .iter()
@@ -429,16 +439,14 @@ impl DownloadManager {
                                             model,
                                         ));
                                     }
-                                    self.broadcast_progress(
-                                        &task,
-                                        "downloading",
+                                    deferred_progress.push((
+                                        task.clone(),
+                                        "downloading".to_string(),
                                         status.progress_percent,
                                         status.downloaded_size,
                                         status.total_size,
                                         status.speed,
-                                        None,
-                                    )
-                                    .await;
+                                    ));
                                 }
                                 "waiting" if task.status != "pending" => {
                                     info!(
@@ -452,16 +460,14 @@ impl DownloadManager {
                                         task.generation,
                                         model,
                                     ));
-                                    self.broadcast_progress(
-                                        &task,
-                                        "pending",
+                                    deferred_progress.push((
+                                        task.clone(),
+                                        "pending".to_string(),
                                         task.progress_percent,
                                         task.downloaded_size,
                                         task.total_size,
                                         0,
-                                        None,
-                                    )
-                                    .await;
+                                    ));
                                 }
                                 "paused" if task.status != "paused" => {
                                     info!(
@@ -475,16 +481,14 @@ impl DownloadManager {
                                         task.generation,
                                         model,
                                     ));
-                                    self.broadcast_progress(
-                                        &task,
-                                        "paused",
+                                    deferred_progress.push((
+                                        task.clone(),
+                                        "paused".to_string(),
                                         task.progress_percent,
                                         task.downloaded_size,
                                         task.total_size,
                                         0,
-                                        None,
-                                    )
-                                    .await;
+                                    ));
                                 }
                                 "waiting" | "paused" => {}
                                 "stopped" | "removed" => {
@@ -523,7 +527,15 @@ impl DownloadManager {
                 }
             }
 
-            self.apply_guarded_updates(to_update).await;
+            let updated_ids = self.apply_guarded_updates(to_update).await;
+            for (task, status, progress, downloaded, total, speed) in deferred_progress {
+                if updated_ids.contains(&task.id) {
+                    self.broadcast_progress(
+                        &task, &status, progress, downloaded, total, speed, None,
+                    )
+                    .await;
+                }
+            }
 
             for (bvid, cid, uid) in completed_bvids {
                 if let Err(e) = self.on_task_completed(&bvid, cid, uid.as_deref()).await {

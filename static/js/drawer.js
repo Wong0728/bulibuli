@@ -10,7 +10,7 @@ _state.drawerController = null;
 
 // 打开视频详情抽屉。
 // 始终走 /api/history/list?bvid=... 拉取完整详情（含 files/burned/blogger）；看板缓存仅用于秒开标题与兜底。
-export async function openVideoDrawer(bvid) {
+export async function openVideoDrawer(bvid, historyId = undefined) {
     if (!bvid) {
         showToast('无效的视频BV号', 'error');
         return;
@@ -22,6 +22,7 @@ export async function openVideoDrawer(bvid) {
     if (!drawer || !overlay || !titleEl) return;
 
     _state.currentDrawerBvid = bvid;
+    _state.currentDrawerHistoryId = historyId;
     const requestId = ++_state.drawerRequestId;
     _state.drawerController?.abort();
     const controller = new AbortController();
@@ -34,7 +35,8 @@ export async function openVideoDrawer(bvid) {
     document.body.classList.add('modal-open');
 
     // 秒开：先用看板缓存显示标题；缓存不含 files，仅用于即时反馈。
-    const cachedVideo = (_state.currentBoardVideos && _state.currentBoardVideos[bvid]) || null;
+    const cachedVideo = (_state.currentBoardVideos && _state.currentBoardVideos[`${bvid}:${historyId}`])
+        || (_state.currentBoardVideos && _state.currentBoardVideos[bvid]) || null;
     if (cachedVideo && cachedVideo.title) {
         titleEl.textContent = cachedVideo.title;
     }
@@ -43,7 +45,8 @@ export async function openVideoDrawer(bvid) {
     // 看板缓存不含 files，直接用会导致“已下载文件”只剩兜底 sidecar、且不渲染烧录按钮。
     let video = null;
     try {
-        const result = await apiGet(`/api/history/list?bvid=${encodeURIComponent(bvid)}`, {
+        const historyQuery = historyId == null ? '' : `&history_id=${encodeURIComponent(historyId)}`;
+        const result = await apiGet(`/api/history/list?bvid=${encodeURIComponent(bvid)}${historyQuery}`, {
             signal: controller.signal,
         });
         if (requestId !== _state.drawerRequestId || _state.currentDrawerBvid !== bvid) return;
@@ -122,6 +125,7 @@ export function closeVideoDrawer() {
     drawer?.classList.remove('active');
     document.body.classList.remove('modal-open');
     _state.currentDrawerBvid = null;
+    _state.currentDrawerHistoryId = null;
 }
 
 // 从手动查询界面打开视频详情抽屉。

@@ -1,7 +1,7 @@
 use crate::models::history;
 use anyhow::Result;
 use chrono::{Duration, Local};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
 pub(super) fn auto_burn_retry_at(attempts: i32) -> chrono::DateTime<Local> {
     let exponent = attempts.clamp(0, 6) as u32;
@@ -64,14 +64,11 @@ async fn any_path_exists(paths: &[std::path::PathBuf]) -> bool {
 
 pub(super) async fn update_auto_burn_state(
     db: &sea_orm::DatabaseConnection,
-    bvid: &str,
+    history_id: i32,
     status: &str,
     next_retry_at: Option<chrono::DateTime<Local>>,
 ) -> Result<()> {
-    let history = history::Entity::find()
-        .filter(history::Column::Bvid.eq(bvid))
-        .one(db)
-        .await?;
+    let history = history::Entity::find_by_id(history_id).one(db).await?;
     let Some(history) = history else {
         return Ok(());
     };

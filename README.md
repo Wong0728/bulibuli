@@ -120,7 +120,7 @@ python build.py --portable
 
 ## 文档与贡献
 
-- [文档索引](docs/README.md)
+- [用户文档索引](docs/user/README.md)
 - [贡献指南](CONTRIBUTING.md)
 - [行为准则](CODE_OF_CONDUCT.md)
 - [安全策略](SECURITY.md)

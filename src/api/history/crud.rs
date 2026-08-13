@@ -32,6 +32,8 @@ pub(super) async fn get_by_uid(
 pub(super) struct DeleteHistoryRequest {
     /// 视频 BV 号
     bvid: String,
+    /// 可选的精确 history 记录；缺省时删除该 BV 的全部分 P 记录。
+    history_id: Option<i32>,
     /// 是否同时删除本地文件（视频/封面/弹幕/字幕）。默认 true。
     delete_files: Option<bool>,
 }
@@ -39,6 +41,7 @@ pub(super) struct DeleteHistoryRequest {
 #[derive(Deserialize)]
 pub(super) struct OpenDirectoryRequest {
     bvid: String,
+    history_id: Option<i32>,
     /// 由 scan_files 返回的相对路径；不接受客户端绝对路径。
     path: Option<String>,
 }
@@ -56,12 +59,16 @@ pub(super) async fn open_directory(
     if bvid.is_empty() {
         return Err(AppError::BadRequest("请提供视频BV号".to_string()));
     }
-    let history = state
-        .business
-        .history_service
-        .find_by_bvid(bvid)
-        .await?
-        .ok_or_else(|| AppError::NotFound("未找到该视频记录".to_string()))?;
+    let history = match req.history_id {
+        Some(id) => state
+            .business
+            .history_service
+            .find_by_id(id)
+            .await?
+            .filter(|history| history.bvid == bvid),
+        None => state.business.history_service.find_by_bvid(bvid).await?,
+    }
+    .ok_or_else(|| AppError::NotFound("未找到该视频记录".to_string()))?;
     let target = if let Some(relative) = req.path.as_deref().filter(|path| !path.trim().is_empty())
     {
         let files = state
@@ -121,7 +128,7 @@ pub(super) async fn delete_history(
     match state
         .business
         .history_service
-        .delete_record(bvid, delete_files)
+        .delete_record(bvid, delete_files, req.history_id)
         .await?
     {
         Some((removed_files, removed_tasks)) => Ok(Json(ApiResponse::with_message(

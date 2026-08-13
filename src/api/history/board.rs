@@ -19,6 +19,8 @@ pub(super) struct ListQuery {
     tab: Option<String>,
     /// 单视频详情查询（抽屉用）。
     bvid: Option<String>,
+    /// 多 P 详情的精确 history 主键；缺省时兼容按 bvid 取最新记录。
+    history_id: Option<i32>,
     page: Option<u64>,
     page_size: Option<u64>,
 }
@@ -36,6 +38,7 @@ pub(super) async fn list_history(
             &state.business,
             &state.infra,
             bvid.trim(),
+            q.history_id,
             server_time,
             can_open_directory,
         )
@@ -212,10 +215,21 @@ async fn build_video_list(
                 path_display_mode,
             );
 
-            let task = aggregate_task_progress(task_by_bvid.get(&h.bvid).map(Vec::as_slice), &h);
+            let matching_tasks = task_by_bvid.get(&h.bvid).map(|tasks| {
+                tasks
+                    .iter()
+                    .filter(|task| task.cid == h.cid)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+            let task = aggregate_task_progress(matching_tasks.as_deref(), &h);
 
             json!({
                 "bvid": h.bvid,
+                "history_id": h.id,
+                "cid": h.cid,
+                "page": h.page,
+                "part_title": h.part_title,
                 "title": h.title,
                 "source": h.source,
                 "pub_timestamp": h.pub_timestamp,
@@ -258,10 +272,18 @@ async fn build_single_video_response(
     business: &BusinessState,
     infra: &InfraState,
     bvid: &str,
+    history_id: Option<i32>,
     server_time: i64,
     can_open_directory: bool,
 ) -> Result<Value, AppError> {
-    let h = business.history_service.find_by_bvid(bvid).await;
+    let h = match history_id {
+        Some(id) => business
+            .history_service
+            .find_by_id(id)
+            .await
+            .map(|value| value.filter(|history| history.bvid == bvid)),
+        None => business.history_service.find_by_bvid(bvid).await,
+    };
     let Ok(Some(h)) = h else {
         return Err(AppError::NotFound("未找到该视频记录".to_string()));
     };
@@ -307,7 +329,10 @@ async fn build_single_video_response(
     };
 
     // 查最新 download_task
-    let tasks = business.history_service.download_tasks_for_bvid(bvid).await;
+    let tasks = business
+        .history_service
+        .download_tasks_for_history(&h)
+        .await;
     let task = aggregate_task_progress(Some(&tasks), &h);
     let task_info = json!({
         "progress_percent": task.progress,
@@ -358,6 +383,10 @@ async fn build_single_video_response(
         "server_time": server_time,
         "video": {
             "bvid": h.bvid,
+            "history_id": h.id,
+            "cid": h.cid,
+            "page": h.page,
+            "part_title": h.part_title,
             "title": h.title,
             "source": h.source,
             "pub_timestamp": h.pub_timestamp,

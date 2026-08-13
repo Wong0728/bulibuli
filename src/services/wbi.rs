@@ -150,10 +150,8 @@ impl WbiKeysCache {
         let resp = req.send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let body_preview = resp.text().await.context("读取WBI keys错误响应体失败")?;
-            let preview: String = body_preview.chars().take(500).collect();
-            warn!(status = %status, "WBI keys 请求返回非2xx: {preview}");
-            return Err(anyhow!("WBI keys请求返回HTTP {status}: {preview}"));
+            warn!(status = %status, "WBI keys 请求返回非2xx");
+            return Err(anyhow!("WBI keys请求返回HTTP {status}"));
         }
         let content_type = resp
             .headers()
@@ -180,10 +178,9 @@ impl WbiKeysCache {
             match serde_json::from_slice(&bytes) {
                 Ok(v) => v,
                 Err(e) => {
-                    let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(500)]);
-                    warn!(content_type = %content_type, "WBI keys 响应JSON解析失败: {e}，前500字节: {preview}");
+                    warn!(content_type = %content_type, "WBI keys 响应JSON解析失败: {e}");
                     return Err(anyhow!(
-                        "WBI keys响应解析失败: {e}，Content-Type: {content_type}，前500字节: {preview}"
+                        "WBI keys响应解析失败: {e}，Content-Type: {content_type}"
                     ));
                 }
             };

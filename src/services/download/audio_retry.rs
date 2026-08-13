@@ -3,7 +3,7 @@
 use crate::models::download_task;
 use crate::services::file_safety::sanitize_filename;
 use chrono::{Duration, Local};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QuerySelect, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::collections::HashSet;
 use tracing::{error, info, warn};
 
@@ -12,21 +12,24 @@ use super::DownloadManager;
 
 impl DownloadManager {
     /// 音频重试耗尽后，降级为纯视频合并（ffmpeg remux m4s 为 mp4，无音频）
-    async fn fallback_video_only_merge(&self, bvid: &str) {
+    async fn fallback_video_only_merge(&self, bvid: &str, cid: Option<i64>) {
         // 查找视频任务
-        let video_task = match download_task::Entity::find()
+        let mut video_query = download_task::Entity::find()
             .filter(download_task::Column::Bvid.eq(bvid))
             .filter(download_task::Column::TaskType.eq("video"))
-            .filter(download_task::Column::Status.eq("completed"))
-            .one(&self.db)
-            .await
-        {
+            .filter(download_task::Column::Status.eq("completed"));
+        video_query = match cid {
+            Some(cid) => video_query.filter(download_task::Column::Cid.eq(cid)),
+            None => video_query.filter(download_task::Column::Cid.is_null()),
+        };
+        let video_task = match video_query.one(&self.db).await {
             Ok(Some(t)) => t,
             _ => return,
         };
 
         let dir = self.task_download_dir(&video_task).await;
-        let default_filename = format!("{bvid}.m4s");
+        let stem = super::file_stem_for(bvid, video_task.page);
+        let default_filename = format!("{stem}.m4s");
         let v_filename = video_task.filename.as_deref().unwrap_or(&default_filename);
         let v_path = dir.join(v_filename);
         if !v_path.exists() {
@@ -35,7 +38,7 @@ impl DownloadManager {
 
         let title = video_task.title.as_deref().unwrap_or(bvid);
         let safe_title = sanitize_filename(title);
-        let output = dir.join(format!("{safe_title}_{bvid}.mp4"));
+        let output = dir.join(format!("{safe_title}_{stem}.mp4"));
 
         info!("[音频降级] {bvid} 音频重试耗尽，执行纯视频 remux（无音频）");
 
@@ -50,8 +53,15 @@ impl DownloadManager {
                 info!("[音频降级] {bvid} 纯视频 remux 完成: {}", output.display());
                 // 更新历史记录
                 let source = video_task.source.as_deref().unwrap_or("auto");
-                if let Err(e) =
-                    Self::update_history_after_merge_static(&self.db, bvid, &output, source).await
+                if let Err(e) = Self::update_history_after_merge_static(
+                    &self.db,
+                    bvid,
+                    cid,
+                    video_task.page,
+                    &output,
+                    source,
+                )
+                .await
                 {
                     warn!("[音频降级] 更新历史记录失败 {bvid}: {e}");
                 }
@@ -62,12 +72,11 @@ impl DownloadManager {
                     "warning",
                 )
                 .await;
-                if let Ok(Some(audio_task)) = download_task::Entity::find()
+                let audio_query = download_task::Entity::find()
                     .filter(download_task::Column::Bvid.eq(bvid))
                     .filter(download_task::Column::TaskType.eq("audio"))
-                    .one(&self.db)
-                    .await
-                {
+                    .filter(download_task::Column::Cid.eq(cid));
+                if let Ok(Some(audio_task)) = audio_query.one(&self.db).await {
                     let mut model: download_task::ActiveModel = audio_task.into();
                     model.status = Set("degraded".to_string());
                     model.attempts = Set(4);
@@ -102,20 +111,18 @@ impl DownloadManager {
             .iter()
             .map(|task| task.bvid.clone())
             .collect::<Vec<_>>();
-        let completed_video_bvids = if failed_bvids.is_empty() {
+        let completed_video_keys = if failed_bvids.is_empty() {
             HashSet::new()
         } else {
             download_task::Entity::find()
-                .select_only()
-                .column(download_task::Column::Bvid)
                 .filter(download_task::Column::Bvid.is_in(failed_bvids))
                 .filter(download_task::Column::TaskType.eq("video"))
                 .filter(download_task::Column::Status.eq("completed"))
-                .into_tuple::<String>()
                 .all(&self.db)
                 .await
                 .unwrap_or_default()
                 .into_iter()
+                .map(|task| (task.bvid, task.cid))
                 .collect::<HashSet<_>>()
         };
 
@@ -129,12 +136,12 @@ impl DownloadManager {
                     "[音频自动重试] {bvid} 已达最大重试次数 {}, 执行纯视频降级",
                     attempts
                 );
-                self.fallback_video_only_merge(&bvid).await;
+                self.fallback_video_only_merge(&bvid, audio_task.cid).await;
                 continue;
             }
 
             // 检查该 bvid 的视频任务是否已完成
-            let video_done = completed_video_bvids.contains(&bvid);
+            let video_done = completed_video_keys.contains(&(bvid.clone(), audio_task.cid));
             if !video_done {
                 // 视频未完成，跳过音频重试（等视频完成后再试）
                 continue;
@@ -233,6 +240,7 @@ impl DownloadManager {
                 .await
             {
                 Ok((gid, permit)) => {
+                    let runtime_gid = gid.clone();
                     let mut model: download_task::ActiveModel = audio_task.into();
                     model.status = Set("downloading".to_string());
                     model.error = Set(None);
@@ -245,7 +253,11 @@ impl DownloadManager {
                     let delay = Duration::seconds(10 * 2_i64.pow(attempts + 1));
                     model.next_retry_at = Set(Some(now + delay));
                     if let Err(e) = model.update(&self.db).await {
-                        error!("[音频自动重试] 更新任务失败 {bvid}: {e}");
+                        if let Some(gid) = runtime_gid.as_deref() {
+                            let _ = self.aria2.remove(gid).await;
+                        }
+                        error!("[音频自动重试] 更新任务失败 {bvid}，已取消外部传输: {e}");
+                        continue;
                     }
                     if engine == TransferEngine::Native {
                         // permit 转移至 spawned task；spawn 失败时 permit 自动 Drop 释放

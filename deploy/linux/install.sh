@@ -68,9 +68,8 @@ download_text() {
 }
 
 resolve_latest_version() {
-    local api_url="https://api.github.com/repos/${REPO}/releases?per_page=20"
     local tag
-    tag="$(download_text "${api_url}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    tag="$(download_text "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
     [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || \
         die "无法从 GitHub Releases 解析最新版本；请用 BULIBULI_VERSION=vX.Y.Z 固定版本重试"
     printf '%s\n' "${tag}"
@@ -341,6 +340,7 @@ install_service() {
     local service_data=""
     local hardening=""
     local configured_data="${BULIBULI_DATA_DIR:-${BILI__DATA_DIR:-}}"
+    [[ "${APP_DIR}" != *$'\n'* && "${APP_DIR}" != *$'\r'* && "${configured_data}" != *$'\n'* ]] || die "路径不能包含换行或回车"
     if [ -n "${configured_data}" ] && [[ "${configured_data}" != /* ]]; then
         die "BULIBULI_DATA_DIR/BILI__DATA_DIR 必须是绝对路径"
     fi
@@ -381,6 +381,18 @@ PrivateDevices=true"
 ReadWritePaths=${configured_data}"
     fi
 
+    systemd_quote() {
+        local value="$1"
+        [[ "${value}" != *$'\n'* && "${value}" != *$'\r'* ]] || die "路径不能包含换行或回车"
+        value="${value//\\/\\\\}"
+        value="${value//\"/\\\"}"
+        value="${value//%/%%}"
+        printf '"%s"' "${value}"
+    }
+    local escaped_runtime escaped_bin escaped_data
+    escaped_runtime="$(systemd_quote "${runtime_dir}")"
+    escaped_bin="$(systemd_quote "${BIN_PATH}")"
+    escaped_data="$(systemd_quote "${configured_data}")"
     cat > "${UNIT_FILE}" <<EOF
 [Unit]
 Description=补哩补哩 bulibuli（B站视频监控下载服务）
@@ -390,8 +402,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 ${service_identity}
-WorkingDirectory=${runtime_dir}
-ExecStart=${BIN_PATH}
+WorkingDirectory=${escaped_runtime}
+ExecStart=${escaped_bin}
 Restart=always
 RestartSec=5
 KillMode=control-group
@@ -400,12 +412,14 @@ NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
 ${hardening}
-${service_data}
+Environment=BILI__DATA_DIR=${escaped_data}
+ReadWritePaths=${escaped_data}
 TimeoutStopSec=30
 
 [Install]
 WantedBy=${WANTED_BY}
 EOF
+    systemd-analyze verify "${UNIT_FILE}" || die "systemd 单元校验失败，未启用服务"
     "${SYSTEMCTL[@]}" daemon-reload
     "${SYSTEMCTL[@]}" enable --now "${SERVICE_NAME}"
     if [ "$(id -u)" -ne 0 ] && command -v loginctl >/dev/null 2>&1; then

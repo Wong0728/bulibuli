@@ -290,7 +290,8 @@ impl DownloadManager {
                 model.status = Set("failed".to_string());
                 model.error = Set(Some(message.clone()));
                 model.speed = Set(0);
-                self.apply_guarded_update(&task.bvid, task.id, task.generation, model)
+                let updated = self
+                    .apply_guarded_update(&task.bvid, task.id, task.generation, model)
                     .await;
                 self.log_bvid(
                     &task.bvid,
@@ -299,16 +300,18 @@ impl DownloadManager {
                     "error",
                 )
                 .await;
-                self.broadcast_progress(
-                    &task,
-                    "failed",
-                    task.progress_percent,
-                    progress.downloaded(),
-                    progress.total(),
-                    0,
-                    Some(&message),
-                )
-                .await;
+                if updated {
+                    self.broadcast_progress(
+                        &task,
+                        "failed",
+                        task.progress_percent,
+                        progress.downloaded(),
+                        progress.total(),
+                        0,
+                        Some(&message),
+                    )
+                    .await;
+                }
             }
         }
     }

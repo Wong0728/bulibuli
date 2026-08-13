@@ -164,7 +164,7 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: portable-artifacts
+    needs: [rust, frontend-and-policy, dependency-audit, portable-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -207,3 +207,29 @@ jobs:
             [[ "${tag}" == *-alpha* || "${tag}" == *-beta* || "${tag}" == *-rc* ]] && prerelease_flag+=(--prerelease)
             gh release create "${tag}" dist/* --title "bulibuli ${tag}" --notes-file "${notes_file}" "${prerelease_flag[@]}"
           fi
+      - name: Verify published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          expected_count="$(find dist -maxdepth 1 -type f | wc -l)"
+          actual_count="$(gh release view "${tag}" --json assets --jq '.assets | length')"
+          test "${actual_count}" -eq "${expected_count}"
+          verify_dir="${RUNNER_TEMP}/bulibuli-release-verify"
+          mkdir -p "${verify_dir}"
+          while IFS= read -r file; do
+            name="$(basename "${file}")"
+            remote_size="$(gh release view "${tag}" --json assets --jq ".assets[] | select(.name == \"${name}\") | .size")"
+            test -n "${remote_size}"
+            test "${remote_size}" -eq "$(stat -c '%s' "${file}")"
+          done < <(find dist -maxdepth 1 -type f -print)
+          gh release download "${tag}" --pattern '*.sha256' --dir "${verify_dir}" --clobber
+          for manifest in "${verify_dir}"/*.sha256; do
+            archive="$(awk 'NF >= 2 { print $2; exit }' "${manifest}")"
+            test -n "${archive}"
+            gh release download "${tag}" --pattern "${archive}" --dir "${verify_dir}" --clobber
+            (cd "${verify_dir}" && sha256sum -c "$(basename "${manifest}")")
+          done

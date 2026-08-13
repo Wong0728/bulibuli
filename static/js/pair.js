@@ -66,6 +66,7 @@ const card = document.getElementById('card');
 
 let paired = false;
 let pairingExpiresAt = null;
+let stateLoadInFlight = false;
 
 function setHint(text, kind = '') {
     hint.textContent = text;
@@ -103,7 +104,8 @@ function renderHint() {
 }
 
 async function loadState() {
-    if (paired) return;
+    if (paired || stateLoadInFlight) return;
+    stateLoadInFlight = true;
     try {
         const response = await fetch('/api/auth/state', {
             credentials: 'same-origin',
@@ -122,6 +124,9 @@ async function loadState() {
     } catch {
         setHint('无法连接服务器，正在重试…', 'error');
         btn.disabled = true;
+    } finally {
+        stateLoadInFlight = false;
+        if (!paired) setTimeout(loadState, 5000);
     }
 }
 
@@ -171,5 +176,4 @@ form.addEventListener('submit', async (e) => {
 });
 
 loadState();
-setInterval(loadState, 5000);
 setInterval(renderHint, 1000);

@@ -3,8 +3,8 @@
 use crate::error::AppResult;
 use crate::models::{download_task, history};
 use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -13,11 +13,29 @@ use tracing::{info, warn};
 use super::{BoardPage, HistoryCounts, HistoryService};
 
 impl HistoryService {
-    /// 按 bvid 查询单条历史记录。
+    /// 按历史记录 ID 查询，供多 P 请求使用精确粒度。
+    pub async fn find_by_id(&self, id: i32) -> AppResult<Option<history::Model>> {
+        Ok(history::Entity::find_by_id(id).one(&self.db).await?)
+    }
+
+    /// 按 bvid 查询单条历史记录。旧调用方无分 P 信息时仍保留该兼容入口；
+    /// 新调用方应优先传 history_id，避免多 P 之间互相覆盖。
     pub async fn find_by_bvid(&self, bvid: &str) -> AppResult<Option<history::Model>> {
         Ok(history::Entity::find()
             .filter(history::Column::Bvid.eq(bvid))
+            .order_by_desc(history::Column::DownloadTime)
+            .order_by_desc(history::Column::Id)
             .one(&self.db)
+            .await?)
+    }
+
+    /// 返回同一 BV 下的全部分 P 历史记录。
+    pub async fn list_by_bvid(&self, bvid: &str) -> AppResult<Vec<history::Model>> {
+        Ok(history::Entity::find()
+            .filter(history::Column::Bvid.eq(bvid))
+            .order_by_asc(history::Column::Page)
+            .order_by_asc(history::Column::Id)
+            .all(&self.db)
             .await?)
     }
 
@@ -160,13 +178,18 @@ impl HistoryService {
             .await?)
     }
 
-    /// 某 bvid 的全部下载任务（抽屉详情用）。
-    pub async fn download_tasks_for_bvid(&self, bvid: &str) -> Vec<download_task::Model> {
-        download_task::Entity::find()
-            .filter(download_task::Column::Bvid.eq(bvid))
-            .all(&self.db)
-            .await
-            .unwrap_or_default()
+    /// 查询与一条 history 对应的任务，按 cid 隔离多 P；NULL cid 保持单 P 语义。
+    pub async fn download_tasks_for_history(
+        &self,
+        history: &history::Model,
+    ) -> Vec<download_task::Model> {
+        let mut query =
+            download_task::Entity::find().filter(download_task::Column::Bvid.eq(&history.bvid));
+        query = match history.cid {
+            Some(cid) => query.filter(download_task::Column::Cid.eq(cid)),
+            None => query.filter(download_task::Column::Cid.is_null()),
+        };
+        query.all(&self.db).await.unwrap_or_default()
     }
 
     /// 删除单条视频记录及其关联数据。
@@ -181,61 +204,81 @@ impl HistoryService {
         &self,
         bvid: &str,
         delete_files: bool,
+        history_id: Option<i32>,
     ) -> AppResult<Option<(Vec<String>, u64)>> {
-        let h = history::Entity::find()
-            .filter(history::Column::Bvid.eq(bvid))
-            .one(&self.db)
-            .await?;
-        let Some(h) = h else {
-            return Ok(None);
+        let histories = if let Some(history_id) = history_id {
+            history::Entity::find_by_id(history_id)
+                .filter(history::Column::Bvid.eq(bvid))
+                .all(&self.db)
+                .await?
+        } else {
+            self.list_by_bvid(bvid).await?
         };
+        if histories.is_empty() {
+            return Ok(None);
+        }
 
         let mut removed_files: Vec<String> = Vec::new();
         if delete_files {
-            // 删除详情页能够发现的全部重复产物，覆盖 manual、UID 和归档目录。
-            let discovered = self
-                .scan_files(bvid, h.uid.as_deref(), h.file_path.as_deref())
-                .await;
             let mut seen = HashSet::new();
-            for file in discovered {
-                let Some(path) = self.resolve_download_relative_path(&file.path) else {
-                    continue;
-                };
-                if seen.insert(path.clone()) {
-                    Self::remove_file_logged(bvid, &path, "产物", &mut removed_files).await;
+            for h in &histories {
+                if history_id.is_none() {
+                    // 聚合删除时扫描整 BV，覆盖 manual、UID 和归档目录。
+                    let discovered = self
+                        .scan_files(bvid, h.uid.as_deref(), h.file_path.as_deref())
+                        .await;
+                    for file in discovered {
+                        let Some(path) = self.resolve_download_relative_path(&file.path) else {
+                            continue;
+                        };
+                        if seen.insert(path.clone()) {
+                            Self::remove_file_logged(bvid, &path, "产物", &mut removed_files).await;
+                        }
+                    }
                 }
-            }
-            // 兼容 history 中指向下载根目录外的旧绝对路径，仅删除明确记录的两个文件。
-            for path in [
-                h.file_path.as_deref().map(Path::new),
-                h.cover_local_path.as_deref().map(Path::new),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if seen.insert(path.to_path_buf()) {
-                    Self::remove_file_logged(bvid, path, "历史记录", &mut removed_files).await;
+                // 精确删除只处理本 history 明确指向的文件，避免误删同 BV 其他 P。
+                // 兼容 history 中指向下载根目录外的旧绝对路径，仅删除明确记录的两个文件。
+                for path in [
+                    h.file_path.as_deref().map(Path::new),
+                    h.cover_local_path.as_deref().map(Path::new),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if seen.insert(path.to_path_buf()) {
+                        Self::remove_file_logged(bvid, path, "历史记录", &mut removed_files).await;
+                    }
                 }
             }
         }
 
-        // 4. 删除 download_task
-        let deleted_tasks = download_task::Entity::delete_many()
-            .filter(download_task::Column::Bvid.eq(bvid))
-            .exec(&self.db)
-            .await?;
+        // 删除与所选 history 对应的任务；无 history_id 时清理该 BV 全部任务。
+        let mut deleted_task_count = 0;
+        for h in &histories {
+            let mut query =
+                download_task::Entity::delete_many().filter(download_task::Column::Bvid.eq(bvid));
+            query = match h.cid {
+                Some(cid) => query.filter(download_task::Column::Cid.eq(cid)),
+                None => query.filter(download_task::Column::Cid.is_null()),
+            };
+            deleted_task_count += query.exec(&self.db).await?.rows_affected;
+        }
         info!(
             "[delete_history] {bvid} 级联清理 download_task: {} 条",
-            deleted_tasks.rows_affected
+            deleted_task_count
         );
 
-        // 5. 删除 history 记录
-        history::Entity::delete_by_id(h.id).exec(&self.db).await?;
+        // 删除所选 history；无 history_id 时删除该 BV 的全部分 P 记录。
+        let ids = histories.iter().map(|h| h.id).collect::<Vec<_>>();
+        history::Entity::delete_many()
+            .filter(history::Column::Id.is_in(ids))
+            .exec(&self.db)
+            .await?;
         info!(
             "[delete_history] {bvid} 已删除记录，文件 {} 个",
             removed_files.len()
         );
-        Ok(Some((removed_files, deleted_tasks.rows_affected)))
+        Ok(Some((removed_files, deleted_task_count)))
     }
 
     async fn remove_file_logged(
@@ -283,30 +326,46 @@ impl HistoryService {
                 "SELECT COUNT(*) AS count FROM history_fts WHERE history_fts MATCH ?".to_string(),
                 [sea_orm::Value::from(fts_match.clone())],
             ))
+            .await;
+        if let Ok(Some(row)) = count_row {
+            let total = row.try_get::<i64>("", "count").unwrap_or(0).max(0) as u64;
+            if let Ok(rows) = self
+                .db
+                .query_all_raw(sea_orm::Statement::from_sql_and_values(
+                    backend,
+                    "SELECT h.* FROM history h JOIN history_fts fts ON h.id = fts.rowid \
+                     WHERE history_fts MATCH ? ORDER BY h.download_time DESC LIMIT ? OFFSET ?"
+                        .to_string(),
+                    [
+                        sea_orm::Value::from(fts_match),
+                        sea_orm::Value::from(page_size as i64),
+                        sea_orm::Value::from(((page - 1) * page_size) as i64),
+                    ],
+                ))
+                .await
+            {
+                let models = rows
+                    .iter()
+                    .filter_map(|row| history::Model::from_query_result(row, "").ok())
+                    .collect();
+                return Ok((models, total));
+            }
+        }
+        let like = format!("%{keyword}%");
+        let query = history::Entity::find().filter(
+            Condition::any()
+                .add(history::Column::Title.contains(&like))
+                .add(history::Column::Bvid.contains(&like))
+                .add(history::Column::Uid.contains(&like))
+                .add(history::Column::PartTitle.contains(&like)),
+        );
+        let total = query.clone().count(&self.db).await?;
+        let models = query
+            .order_by_desc(history::Column::DownloadTime)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all(&self.db)
             .await?;
-        let total = count_row
-            .and_then(|row| row.try_get::<i64>("", "count").ok())
-            .unwrap_or(0)
-            .max(0) as u64;
-        let rows = self
-            .db
-            .query_all_raw(sea_orm::Statement::from_sql_and_values(
-                backend,
-                "SELECT h.* FROM history h JOIN history_fts fts ON h.id = fts.rowid \
-                 WHERE history_fts MATCH ? ORDER BY h.download_time DESC LIMIT ? OFFSET ?"
-                    .to_string(),
-                [
-                    sea_orm::Value::from(fts_match),
-                    sea_orm::Value::from(page_size as i64),
-                    sea_orm::Value::from(((page - 1) * page_size) as i64),
-                ],
-            ))
-            .await?;
-        use sea_orm::FromQueryResult;
-        let models = rows
-            .iter()
-            .filter_map(|row| history::Model::from_query_result(row, "").ok())
-            .collect();
         Ok((models, total))
     }
 
@@ -317,9 +376,22 @@ impl HistoryService {
         source: &str,
         output_path: Option<&Path>,
     ) -> AppResult<()> {
+        let h = self.find_by_bvid(bvid).await?;
+        let Some(h) = h else {
+            return Ok(());
+        };
+        self.mark_burned_by_id(h.id, source, output_path).await
+    }
+
+    /// 更新指定 history 的烧录状态，避免同 BV 多 P 时写错记录。
+    pub async fn mark_burned_by_id(
+        &self,
+        history_id: i32,
+        source: &str,
+        output_path: Option<&Path>,
+    ) -> AppResult<()> {
         use sea_orm::{ActiveModelTrait, Set};
-        let h = history::Entity::find()
-            .filter(history::Column::Bvid.eq(bvid))
+        let h = history::Entity::find_by_id(history_id)
             .one(&self.db)
             .await?;
         let Some(h) = h else {

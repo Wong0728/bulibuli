@@ -271,15 +271,22 @@ impl DownloadManager {
             .await?;
         let runtime_gid = gid.clone();
         let mut model: download_task::ActiveModel = task.clone().into();
-        model.gid = Set(gid);
+        model.gid = Set(gid.clone());
         model.status = Set("downloading".to_string());
         if let Err(e) = model.update(&self.db).await {
-            // 下载任务已投递至引擎，但状态持久化失败；
-            // 任务实际在运行但 DB 状态不一致，记录严重错误供排查
-            error!(
-                "无法更新下载任务状态，可能导致状态不一致: task_id={}, error={}",
-                task.id, e
-            );
+            if let Some(gid) = runtime_gid.as_deref() {
+                if let Err(remove_error) = self.aria2.remove(gid).await {
+                    error!("回滚 Aria2 任务失败 gid={gid}: {remove_error}");
+                }
+            }
+            let _ = download_task::Entity::delete_by_id(task.id)
+                .exec(&self.db)
+                .await;
+            return Err(anyhow!(
+                "下载任务状态持久化失败，已取消外部传输: task_id={}, error={}",
+                task.id,
+                e
+            ));
         }
         if engine == TransferEngine::Native {
             // permit 转移至 spawned task，持有跨越整个下载生命周期；
@@ -378,7 +385,7 @@ impl DownloadManager {
         model.downloaded_size = Set(0);
         model.total_size = Set(0);
         model.speed = Set(0);
-        model.gid = Set(gid);
+        model.gid = Set(gid.clone());
         model.filename = Set(Some(filename));
         model.download_dir = Set(Some(dir.to_string_lossy().to_string()));
         model.source = Set(Some(source.to_string()));
@@ -387,12 +394,16 @@ impl DownloadManager {
         model.completion_triggered = Set(false);
         model.stage = Set("transferring".to_string());
         if let Err(e) = model.update(&self.db).await {
-            // 下载任务已投递至引擎（aria2/原生），但状态持久化失败；
-            // 任务实际在运行但 DB 状态不一致，记录严重错误供排查
-            error!(
-                "无法更新下载任务状态，可能导致状态不一致: task_id={}, error={}",
-                download_id, e
-            );
+            if let Some(gid) = gid.as_deref() {
+                if let Err(remove_error) = self.aria2.remove(gid).await {
+                    error!("回滚 Aria2 任务失败 gid={gid}: {remove_error}");
+                }
+            }
+            return Err(anyhow!(
+                "下载任务状态持久化失败，已取消外部传输: task_id={}, error={}",
+                download_id,
+                e
+            ));
         }
         if engine == TransferEngine::Native {
             // permit 转移至 spawned task；spawn 失败时 permit 自动 Drop 释放

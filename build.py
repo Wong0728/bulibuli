@@ -440,7 +440,12 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
         shutil.copytree(
             static_src,
             package_dir / "static",
-            ignore=shutil.ignore_patterns("node_modules"),
+            ignore=shutil.ignore_patterns(
+                "node_modules",
+                "test-results",
+                "playwright-report",
+                "*.trace.zip",
+            ),
         )
         portable_index = package_dir / "static" / "index.html"
         if (package_dir / "static" / "dist" / "app.bundle.js").is_file() and portable_index.is_file():
@@ -577,30 +582,45 @@ def run_quality_checks():
     """Run the mandatory formatting, lint, test and source-policy gates."""
     print("[check] running mandatory quality gates")
     commands = [
-        ["cargo", "fmt", "--all", "--", "--check"],
-        ["cargo", "check", "--all-targets"],
-        [
-            "cargo",
-            "clippy",
-            "--all-targets",
-            "--all-features",
-            "--",
-            "-D",
-            "warnings",
-        ],
-        ["cargo", "test", "--all-targets"],
+        (["cargo", "fmt", "--all", "--", "--check"], ROOT),
+        (["cargo", "check", "--all-targets"], ROOT),
+        (
+            [
+                "cargo",
+                "clippy",
+                "--all-targets",
+                "--all-features",
+                "--",
+                "-D",
+                "warnings",
+            ],
+            ROOT,
+        ),
+        (["cargo", "test", "--all-targets"], ROOT),
     ]
-    # Playwright 用例同样使用 .mjs 后缀，但由 Playwright runner 执行；
-    # 不要把它们放入无依赖的 Node 契约测试命令。
+    # Node 原生测试与 Playwright 测试使用显式入口；不能由扩展名反推 runner。
     frontend_tests = sorted(
-        path for path in (ROOT / "tests").glob("*.mjs") if not path.name.endswith(".spec.mjs")
+        path
+        for path in (ROOT / "tests").glob("frontend_*.mjs")
+        if not path.name.endswith(".spec.mjs")
     )
     if frontend_tests:
         commands.append(
-            ["node", "--test", *(str(path.relative_to(ROOT)) for path in frontend_tests)]
+            (
+                ["node", "--test", *(str(path.relative_to(ROOT)) for path in frontend_tests)],
+                ROOT,
+            )
         )
-    for command in commands:
-        run(command, cwd=str(ROOT))
+    if sys.platform == "win32":
+        npm_command = "npm.cmd"
+        playwright_bin = ROOT / "static" / "js" / "node_modules" / ".bin" / "playwright.cmd"
+    else:
+        npm_command = "npm"
+        playwright_bin = ROOT / "static" / "js" / "node_modules" / ".bin" / "playwright"
+    if playwright_bin.is_file():
+        commands.append(([npm_command, "run", "test:smoke"], ROOT / "static" / "js"))
+    for command, cwd in commands:
+        run(command, cwd=str(cwd))
 
     ok = True
     advisory_warnings = []

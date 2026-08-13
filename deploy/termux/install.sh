@@ -58,7 +58,7 @@ download_text() {
 
 resolve_latest_version() {
     local tag
-    tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    tag="$(download_text "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
     [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || die "无法解析最新 Release 版本"
     printf '%s\n' "${tag}"
 }
@@ -94,13 +94,19 @@ install_deps() {
 ensure_source() {
     [ "${MODE}" = "remote-source" ] || return
     if [ -f "${APP_DIR}/Cargo.toml" ]; then
+        if [ "${APP_VERSION}" != "latest" ]; then
+            git -C "${APP_DIR}" fetch --depth 1 origin "${APP_VERSION}" || die "无法获取指定版本 ${APP_VERSION}"
+            git -C "${APP_DIR}" checkout --detach "${APP_VERSION}" || die "无法切换到指定版本 ${APP_VERSION}"
+        fi
         return
     fi
     if [ "${APP_VERSION}" = "latest" ]; then
         APP_VERSION="$(resolve_latest_version)"
         log "已解析最新 Release：${APP_VERSION}"
     fi
-    rm -rf -- "${APP_DIR}"
+    if [ -e "${APP_DIR}" ]; then
+        die "源码目录已存在但不是 bulibuli 源码：${APP_DIR}（不会删除已有目录）"
+    fi
     mkdir -p "$(dirname "${APP_DIR}")"
     log "下载 bulibuli ${APP_VERSION} 源码..."
     git clone --depth 1 --branch "${APP_VERSION}" \
@@ -121,7 +127,11 @@ ensure_binary() {
 }
 
 is_running() {
-    [ -f "${PID_FILE}" ] && kill -0 "$(cat "${PID_FILE}")" 2>/dev/null
+    local pid
+    [ -f "${PID_FILE}" ] || return 1
+    pid="$(cat "${PID_FILE}")"
+    kill -0 "${pid}" 2>/dev/null || return 1
+    [ -r "/proc/${pid}/cmdline" ] && tr '\0' ' ' <"/proc/${pid}/cmdline" | grep -F -- "${BIN_PATH}" >/dev/null
 }
 
 start_daemon() {

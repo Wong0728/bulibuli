@@ -891,25 +891,26 @@ async function burnRecordingDanmaku(recordingId) {
 
 function trackBurnTask(taskId) {
     const startedAt = Date.now();
-    const timer = window.setInterval(async () => {
+    const poll = async () => {
         try {
             const response = await apiGet(`/api/download/burn/status/${taskId}`);
             const status = response.data?.status;
             if (status === 'completed') {
-                window.clearInterval(timer);
                 showToast('弹幕烧录完成，已生成弹幕版视频', 'success');
                 await refreshDashboard(true);
             } else if (status === 'failed') {
-                window.clearInterval(timer);
                 showToast(`弹幕烧录失败：${response.data?.message || '未知错误'}`, 'error');
             } else if (Date.now() - startedAt > 30 * 60 * 1000) {
-                window.clearInterval(timer);
                 showToast('弹幕烧录超时，请到录制目录确认结果', 'warning');
+            } else {
+                window.setTimeout(poll, 3000);
             }
         } catch (error) {
             console.error('[live] 查询烧录任务状态失败：', error);
+            window.setTimeout(poll, 3000);
         }
-    }, 3000);
+    };
+    poll();
 }
 
 // --- 直播源设置弹窗 ---

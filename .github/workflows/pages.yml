@@ -32,3 +32,17 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+      - name: Verify deployed page
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          test -n "${PAGE_URL}"
+          for attempt in 1 2 3 4 5; do
+            if curl --fail --silent --show-error --location "${PAGE_URL}" | grep -q "bulibuli"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "deployed Pages URL did not return expected content: ${PAGE_URL}" >&2
+          exit 1

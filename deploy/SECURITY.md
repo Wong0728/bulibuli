@@ -44,7 +44,7 @@ bulibuli ctl trust ffmpeg /absolute/path/ffmpeg
   `geo db <path>` 指定同时包含 IPv4+IPv6 的 mmdb 数据库。
 - 数据库每月由 DB-IP 发布新版本，更新方式见 `resources/README.md`。
 
-`lan` 使用 HTTP，不具备链路加密，只适合可信局域网。应用内 IP/CIDR 规则是请求级访问控制，不能代替主机防火墙，也不能保护家庭公网带宽免受 DDoS。
+`proxy` 默认从主端口开始绑定，若端口被占用会回退到后续端口；请以启动日志或 `data/actual_port.txt` 中的实际端口更新 Caddy 的反代目标。`lan` 使用 HTTP，不具备链路加密，只适合可信局域网。应用内 IP/CIDR 规则是请求级访问控制，不能代替主机防火墙，也不能保护家庭公网带宽免受 DDoS。
 
 Cloudflare 应设为 DNS-only（灰云）。这种模式不会提供 Cloudflare WAF/DDoS 代理保护；若源站有 IPv6 DNS 记录，源 IPv6 也会公开。应同时配置主机防火墙，只开放 Caddy 的 HTTPS 端口。
 如确需在受控部署中跳过会话认证，只配置 `security.toml` 的 `auth_bypass_ips` 明确单个客户端 IP。该字段不接受 CIDR，默认为空；不要填入 `0.0.0.0`、`::` 等未指定地址，也不要把它理解为可信网络。服务启动时会对非空配置打印高风险告警；反向代理场景还必须确认 `X-Forwarded-For` 的来源可信。

@@ -107,7 +107,11 @@ export async function loadHistoryBoard(tab, { append = false } = {}) {
         _state.currentBoardVideos = {};
         groups.forEach(g => {
             (g.videos || []).forEach(v => {
-                if (v.bvid) _state.currentBoardVideos[v.bvid] = { ...v, blogger: { uid: g.uid, name: g.name, face: g.face } };
+                if (v.bvid) {
+                    const cached = { ...v, blogger: { uid: g.uid, name: g.name, face: g.face } };
+                    _state.currentBoardVideos[v.bvid] = cached;
+                    if (v.history_id != null) _state.currentBoardVideos[`${v.bvid}:${v.history_id}`] = cached;
+                }
             });
         });
 
@@ -233,7 +237,8 @@ export function renderBoardVideoCard(v) {
     const title = escapeHtml(v.title || '未知标题');
     const state = v.state || 'completed';
     const stateDot = stateDotClass(state, v);
-    const coverUrl = `/api/cover/${bvid}`;
+    const coverQuery = v.history_id == null ? '' : `?history_id=${encodeURIComponent(v.history_id)}`;
+    const coverUrl = `/api/cover/${bvid}${coverQuery}`;
     const duration = v.duration ? formatDuration(v.duration) : '';
     const pubDate = v.pub_date || (v.pub_timestamp ? formatTimestamp(v.pub_timestamp) : '');
     const view = formatViewCount(v.view);
@@ -260,7 +265,7 @@ export function renderBoardVideoCard(v) {
             <i class="fa-solid fa-file-video"></i>
             <span>${escapeHtml(v.file_path || '路径已隐藏')}</span>
             ${v.file_path ? `<button class="btn btn-sm btn-ghost" data-copy-path="${escapeHtml(v.file_path)}" title="复制路径"><i class="fa-solid fa-copy"></i></button>` : ''}
-            ${v.can_open_directory && v.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${bvid}" data-path="${escapeHtml(v.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
+            ${v.can_open_directory && v.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${bvid}" data-history-id="${escapeHtml(String(v.history_id ?? ''))}" data-path="${escapeHtml(v.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
         </div>
     ` : '';
 
@@ -286,7 +291,7 @@ export function renderBoardVideoCard(v) {
     ` : '';
 
     return `
-        <div class="board-video-card state-${stateDot}" data-action="open-video" data-bvid="${bvid}">
+        <div class="board-video-card state-${stateDot}" data-action="open-video" data-bvid="${bvid}" data-history-id="${escapeHtml(String(v.history_id ?? ''))}">
             <div class="board-card-state-dot" title="${escapeHtml(stateLabel(state, v))}"></div>
             <div class="board-card-thumb">
                 <img src="${coverUrl}" alt="" loading="lazy" data-image-error="thumb-fallback">
@@ -436,7 +441,7 @@ export async function manualRefreshBoard() {
         await loadHistoryBoard(_state.currentBoardTab);
         // 若抽屉打开，同步刷新抽屉
         if (_state.currentDrawerBvid) {
-            await openVideoDrawer(_state.currentDrawerBvid);
+            await openVideoDrawer(_state.currentDrawerBvid, _state.currentDrawerHistoryId);
         }
     } catch (e) {
         // 手动操作失败必须给出可见反馈。

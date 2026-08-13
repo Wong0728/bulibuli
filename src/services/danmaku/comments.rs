@@ -282,10 +282,7 @@ impl DanmakuService {
 
             // 检测风控：返回 HTML 而非 JSON
             if !content_type.contains("application/json") {
-                let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]);
-                warn!(
-                    "[评论] B站返回非 JSON 响应 (Content-Type: {content_type})，可能触发风控。前 200 字节: {preview}"
-                );
+                warn!("[评论] B站返回非 JSON 响应 (Content-Type: {content_type})，可能触发风控");
                 last_err = Some(anyhow!(
                     "B站返回非 JSON 响应 (Content-Type: {content_type})，可能触发风控"
                 ));
@@ -295,8 +292,7 @@ impl DanmakuService {
             let data: Value = match serde_json::from_slice(&bytes) {
                 Ok(v) => v,
                 Err(e) => {
-                    let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]);
-                    last_err = Some(anyhow!("评论 JSON 解析失败: {e}。前 200 字节: {preview}"));
+                    last_err = Some(anyhow!("评论 JSON 解析失败: {e}"));
                     continue;
                 }
             };

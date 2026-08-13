@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use tracing::{debug, warn};
 
 const MAX_API_JSON_BYTES: usize = 2 * 1024 * 1024;
-const MAX_API_ERROR_PREVIEW_BYTES: usize = 32 * 1024;
 
 use super::models::{BiliEnvelope, RiskControlData};
 use super::BiliApi;
@@ -163,22 +162,12 @@ impl BiliApi {
                 }
                 Ok(response) if response.status().is_server_error() && server_retries < 3 => {
                     let status = response.status();
-                    let body_preview = read_limited_body(response, MAX_API_ERROR_PREVIEW_BYTES)
-                        .await
-                        .map(|bytes| {
-                            String::from_utf8_lossy(&bytes)
-                                .chars()
-                                .take(200)
-                                .collect::<String>()
-                        })
-                        .unwrap_or_default();
                     server_retries += 1;
                     let delay_secs = 1u64 << (server_retries - 1); // 指数退避: 1s, 2s, 4s
                     warn!(
                         attempt = server_retries,
                         max_retries = 3,
                         %status,
-                        body_preview = %body_preview,
                         "B站 API 服务器错误，{delay_secs}s 后重试"
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
@@ -269,35 +258,24 @@ impl BiliApi {
             if let Some(host) = host.as_deref() {
                 self.bad_cdns.record_failure(host).await;
             }
-            let preview = String::from_utf8_lossy(
-                &read_limited_body(response, MAX_API_ERROR_PREVIEW_BYTES)
-                    .await
-                    .context("读取 B站 API 错误响应失败")?,
-            )
-            .chars()
-            .take(500)
-            .collect::<String>();
-            if status.as_u16() == 412 {
-                let error = BiliApiError::classify(-412, preview.clone());
-                if notify {
-                    self.notify_bili_error(&error, &serde_json::Value::Null)
-                        .await;
-                }
-                return Err(error.into());
+            let code = match status.as_u16() {
+                401 => -101,
+                403 | 412 => -403,
+                404 => -404,
+                429 => 429,
+                value if value >= 500 => value as i64,
+                _ => -400,
+            };
+            let error = BiliApiError::classify(code, format!("HTTP {status}"));
+            if notify {
+                self.notify_bili_error(&error, &serde_json::Value::Null)
+                    .await;
             }
-            return Err(anyhow!("B站 API {api_name} 返回 HTTP {status}: {preview}"));
+            return Err(error.into());
         }
         if !content_type.is_empty() && !content_type.contains("json") {
-            let preview = String::from_utf8_lossy(
-                &read_limited_body(response, MAX_API_ERROR_PREVIEW_BYTES)
-                    .await
-                    .context("读取 B站 API 非 JSON 响应失败")?,
-            )
-            .chars()
-            .take(500)
-            .collect::<String>();
             return Err(anyhow!(
-                "B站 API {api_name} 返回非 JSON Content-Type {content_type}: {preview}"
+                "B站 API {api_name} 返回非 JSON Content-Type {content_type}"
             ));
         }
         if let Some(host) = host.as_deref() {

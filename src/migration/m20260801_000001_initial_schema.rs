@@ -50,6 +50,9 @@ impl MigrationTrait for Migration {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uid TEXT,
                 bvid TEXT NOT NULL,
+                cid BIGINT,
+                page INTEGER,
+                part_title TEXT,
                 source TEXT NOT NULL DEFAULT 'auto',
                 title TEXT,
                 pub_date TEXT,
@@ -296,6 +299,9 @@ impl MigrationTrait for Migration {
             )
             .await;
         if fts_result.is_ok() {
+            let _ = conn
+                .execute_unprepared("INSERT INTO history_fts(history_fts) VALUES('rebuild')")
+                .await;
             let _ = conn.execute_unprepared(
                 "CREATE TRIGGER IF NOT EXISTS history_fts_ai AFTER INSERT ON history BEGIN INSERT INTO history_fts(rowid, title, bvid, uid) VALUES (new.id, new.title, new.bvid, new.uid); END;",
             ).await;

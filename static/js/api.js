@@ -33,9 +33,14 @@ export async function requestEnvelope(url, options = {}, handlers = {}) {
     });
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-        throw new ApiError(response.status || 502, '响应格式异常', {
-            retryable: response.status >= 500,
+        const status = response.status || 502;
+        const error = new ApiError(status, status === 401 ? '登录已过期' : status === 403 ? '请求被风控拦截' : '响应格式异常', {
+            status,
+            retryable: status >= 500,
         });
+        if (status === 401) await handlers.onUnauthorized?.(error);
+        if (status === 403) await handlers.onRiskControl?.(error);
+        throw error;
     }
     const envelope = await response.json();
     try {

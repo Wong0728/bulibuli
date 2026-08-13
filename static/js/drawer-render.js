@@ -7,6 +7,8 @@ export function renderDrawerContent(video, bvid) {
     if (!bodyEl) return;
     // 属性位插值统一用转义后的 bvid，防止含引号时发生属性逃逸
     const safeBvid = escapeHtml(bvid || '');
+    const historyId = video.history_id != null ? Number(video.history_id) : null;
+    const safeHistoryId = historyId == null ? '' : escapeHtml(String(historyId));
 
     // 统一字段命名，兼容 history/list 与 download/status 两种来源。
     const state = video.state || video.status || 'completed';
@@ -17,7 +19,8 @@ export function renderDrawerContent(video, bvid) {
     const canOpenDirectory = video.can_open_directory === true;
 
     // 封面统一走 /api/cover/{bvid}（本地优先 + 兜底下载）
-    const coverUrl = `/api/cover/${encodeURIComponent(bvid)}`;
+    const coverQuery = historyId == null ? '' : `?history_id=${encodeURIComponent(historyId)}`;
+    const coverUrl = `/api/cover/${encodeURIComponent(bvid)}${coverQuery}`;
     const durationStr = video.duration ? formatDuration(Number(video.duration)) : '';
     const pubDate = video.pub_date || (video.pub_timestamp ? formatTimestamp(Number(video.pub_timestamp)) : '')
         || (video.pubdate ? video.pubdate : '');
@@ -42,7 +45,7 @@ export function renderDrawerContent(video, bvid) {
             <i class="fa-solid fa-file-video"></i>
             <span>${escapeHtml(video.file_path || '路径已隐藏')}</span>
             ${video.file_path ? `<button class="btn btn-sm btn-ghost copy-path-btn" data-copy-path="${escapeHtml(video.file_path)}" title="复制路径"><i class="fa-solid fa-copy"></i></button>` : ''}
-            ${canOpenDirectory && video.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-path="${escapeHtml(video.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
+            ${canOpenDirectory && video.relative_path ? `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-path="${escapeHtml(video.relative_path)}" title="打开文件所在目录"><i class="fa-solid fa-folder-open"></i></button>` : ''}
         </div>
     ` : '';
 
@@ -104,7 +107,7 @@ export function renderDrawerContent(video, bvid) {
 
     // 删除按钮（所有状态都可删，带二次确认）
     const deleteBtnHtml = `
-        <button class="drawer-btn drawer-btn-danger" data-action="delete-video" data-bvid="${safeBvid}">
+        <button class="drawer-btn drawer-btn-danger" data-action="delete-video" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}">
             <i class="fa-solid fa-trash"></i> 删除记录
         </button>
     `;
@@ -164,14 +167,14 @@ export function renderDrawerContent(video, bvid) {
             <div class="drawer-section-title">全部产物</div>
             ${renderArtifactOverview(primaryArtifactFiles(video.files))}
             <div class="drawer-file-list" id="drawer-file-list">
-                ${renderDrawerFiles(video.files, bvid, video.burned, sidecar, canOpenDirectory)}
+                ${renderDrawerFiles(video.files, bvid, video.burned, sidecar, canOpenDirectory, historyId)}
             </div>
         </div>
 
         <!-- 历史弹幕与评论浏览器。 -->
         <div class="drawer-section">
             <div class="drawer-section-title">弹幕与评论历史</div>
-            ${renderSidecarBrowser(video.files, bvid)}
+            ${renderSidecarBrowser(video.files, bvid, historyId)}
             <div id="drawer-sidecar-viewer" class="drawer-comments">
                 <div class="drawer-comments-hint">选择上方任一弹幕或评论版本查看本地内容</div>
             </div>
@@ -205,10 +208,10 @@ export function renderDrawerContent(video, bvid) {
                 <button class="drawer-extra-btn" data-action="open-video-page" data-bvid="${safeBvid}">
                     <i class="fa-solid fa-external-link-alt"></i> 原视频链接
                 </button>
-                <button class="drawer-extra-btn" data-action="download-danmaku" data-source="${artifactSource}" data-bvid="${safeBvid}">
+                <button class="drawer-extra-btn" data-action="download-danmaku" data-source="${artifactSource}" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-page="${escapeHtml(String(video.page ?? ''))}">
                     <i class="fa-solid fa-comment-dots"></i> 下载弹幕
                 </button>
-                <button class="drawer-extra-btn" data-action="download-comments" data-source="${artifactSource}" data-bvid="${safeBvid}">
+                <button class="drawer-extra-btn" data-action="download-comments" data-source="${artifactSource}" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}">
                     <i class="fa-solid fa-comments"></i> 下载评论
                 </button>
             </div>
@@ -240,7 +243,7 @@ function primaryArtifactFiles(files) {
     return files.filter(file => !['danmaku', 'comment'].includes(file.file_type || file.type));
 }
 
-export function renderDrawerFiles(files, bvid, burned, sidecar, canOpenDirectory = false) {
+export function renderDrawerFiles(files, bvid, burned, sidecar, canOpenDirectory = false, historyId = null) {
     burned = burned || {};
     const primaryFiles = primaryArtifactFiles(files);
     // 优先使用后端返回的真实文件列表
@@ -257,7 +260,7 @@ export function renderDrawerFiles(files, bvid, burned, sidecar, canOpenDirectory
                     <span><i class="fa-solid fa-folder"></i> ${escapeHtml(locationLabel(location))}</span>
                     <span>${entries.length} 个文件</span>
                 </div>
-                ${entries.map(file => renderDrawerFileItem(file, bvid, burned, canOpenDirectory)).join('')}
+                ${entries.map(file => renderDrawerFileItem(file, bvid, burned, canOpenDirectory, historyId)).join('')}
             </div>
         `).join('');
     }
@@ -271,10 +274,11 @@ export function renderDrawerFiles(files, bvid, burned, sidecar, canOpenDirectory
     return `<div class="drawer-files-empty"><i class="fa-solid fa-inbox"></i> 暂无本地文件记录</div>`;
 }
 
-export function renderDrawerFileItem(f, bvid, burned, canOpenDirectory = false) {
+export function renderDrawerFileItem(f, bvid, burned, canOpenDirectory = false, historyId = null) {
     // `file_type` 是当前接口字段，`type` 用于读取已有缓存数据。
     const type = f.file_type || f.type || 'other';
     const safeBvid = escapeHtml(bvid || '');
+    const safeHistoryId = historyId == null ? '' : escapeHtml(String(historyId));
     const name = escapeHtml(f.name || '未知文件');
     const internalPath = escapeHtml(f.path || '');
     const path = escapeHtml(f.display_path || '');
@@ -301,7 +305,7 @@ export function renderDrawerFileItem(f, bvid, burned, canOpenDirectory = false) 
     let actions = f.display_path
         ? `<button class="btn btn-sm btn-ghost" data-copy-path="${path}" title="复制文件路径"><i class="fa-solid fa-copy"></i> 路径</button>` : '';
     if (canOpenDirectory && f.path) {
-        actions += `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-path="${internalPath}" title="打开所在目录"><i class="fa-solid fa-folder-open"></i> 打开</button>`;
+        actions += `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-path="${internalPath}" title="打开所在目录"><i class="fa-solid fa-folder-open"></i> 打开</button>`;
     }
     if (type === 'video') {
         if (burned.danmaku) {
@@ -312,10 +316,10 @@ export function renderDrawerFileItem(f, bvid, burned, canOpenDirectory = false) 
         }
         // 烧录按钮：未烧录时才显示
         if (!burned.danmaku) {
-            actions += `<button class="btn btn-sm btn-primary" data-action="burn-media" data-bvid="${safeBvid}" data-kind="danmaku" title="将弹幕烧录进视频"><i class="fa-solid fa-fire"></i> 烧录弹幕</button>`;
+            actions += `<button class="btn btn-sm btn-primary" data-action="burn-media" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-kind="danmaku" title="将弹幕烧录进视频"><i class="fa-solid fa-fire"></i> 烧录弹幕</button>`;
         }
         if (!burned.subtitle) {
-            actions += `<button class="btn btn-sm btn-primary" data-action="burn-media" data-bvid="${safeBvid}" data-kind="subtitle" title="将 CC 字幕烧录进视频"><i class="fa-solid fa-closed-captioning"></i> 烧录字幕</button>`;
+            actions += `<button class="btn btn-sm btn-primary" data-action="burn-media" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-kind="subtitle" title="将 CC 字幕烧录进视频"><i class="fa-solid fa-closed-captioning"></i> 烧录字幕</button>`;
         }
     }
 
@@ -367,16 +371,17 @@ function renderArtifactOverview(files) {
     `;
 }
 
-function renderSidecarBrowser(files, bvid) {
+function renderSidecarBrowser(files, bvid, historyId = null) {
     if (!Array.isArray(files)) files = [];
     const safeBvid = escapeHtml(bvid || '');
+    const safeHistoryId = historyId == null ? '' : escapeHtml(String(historyId));
     const danmaku = preferredDanmakuVersions(files.filter(file => file.file_type === 'danmaku'));
     const comments = files.filter(file => file.file_type === 'comment');
     const renderButtons = (entries, action, icon) => entries.length > 0
         ? entries.map(file => {
             const location = locationLabel(file.location || 'other');
             const version = file.version ? formatArchiveVersion(file.version) : (file.is_current ? '当前最新版' : '最新副本');
-            return `<button class="sidecar-version-btn" data-action="${action}" data-bvid="${safeBvid}" data-path="${escapeHtml(file.path || '')}" title="${escapeHtml(file.path || '')}">
+            return `<button class="sidecar-version-btn" data-action="${action}" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-path="${escapeHtml(file.path || '')}" title="${escapeHtml(file.path || '')}">
                 <i class="fa-solid ${icon}"></i>
                 <span>${escapeHtml(version)}</span>
                 <small>${escapeHtml(location)} · ${escapeHtml((file.format || '').toUpperCase())}</small>

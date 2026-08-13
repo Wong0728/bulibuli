@@ -13,9 +13,11 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 const STARTUP_STATE_FILE: &str = "startup_state.json";
+static STARTUP_STATE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// 终端模式：Web 模式（默认，日志 + 专家命令）或终端模式（完整交互式命令）。
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,6 +64,14 @@ impl StartupState {
 
     /// 读取 `startup_state.json`；不存在或解析失败时返回默认值（不视为错误，让向导重新跑）。
     pub fn load(data_dir: &Path) -> StartupState {
+        let _guard = STARTUP_STATE_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        Self::load_unlocked(data_dir)
+    }
+
+    fn load_unlocked(data_dir: &Path) -> StartupState {
         let path = Self::path(data_dir);
         match std::fs::read_to_string(&path) {
             Ok(raw) => serde_json::from_str::<StartupState>(&raw).unwrap_or_else(|error| {
@@ -73,11 +83,22 @@ impl StartupState {
     }
 
     fn save(&self, data_dir: &Path) -> Result<()> {
+        let _guard = STARTUP_STATE_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        self.save_unlocked(data_dir)
+    }
+
+    fn save_unlocked(&self, data_dir: &Path) -> Result<()> {
         let mut next = self.clone();
         next.last_modified = Utc::now().to_rfc3339();
         let raw = serde_json::to_string_pretty(&next)?;
         let path = Self::path(data_dir);
-        let temp = path.with_extension("json.new");
+        let temp = data_dir.join(format!(
+            ".startup_state.{}.tmp",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::write(&temp, raw)
             .with_context(|| format!("写入 startup_state.json 失败: {}", temp.display()))?;
         std::fs::rename(&temp, &path)
@@ -87,6 +108,33 @@ impl StartupState {
 
     /// 仅更新 AI 开关（供 `ai on|off` 命令调用，避免重写整份向导状态）。
     pub fn save_ai_flag(data_dir: &Path, enabled: bool) -> Result<()> {
+        Self::update(data_dir, |state| state.ai_skill_enabled = enabled)
+    }
+
+    fn update(data_dir: &Path, update: impl FnOnce(&mut StartupState)) -> Result<()> {
+        let _guard = STARTUP_STATE_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        let mut state = Self::load_unlocked(data_dir);
+        update(&mut state);
+        state.save_unlocked(data_dir)
+    }
+
+    pub fn save_terminal_mode(data_dir: &Path, mode: TerminalMode) -> Result<()> {
+        Self::update(data_dir, |state| state.terminal_mode = mode)
+    }
+
+    pub fn mark_completed(data_dir: &Path) -> Result<()> {
+        Self::update(data_dir, |state| state.onboarding_completed = true)
+    }
+}
+
+/*
+ * Keep all startup-state read/modify/write operations under one process lock.
+ * ponytail: a global lock is sufficient because this file is tiny and writes are rare.
+ */
+/*
         let mut state = Self::load(data_dir);
         state.ai_skill_enabled = enabled;
         state.save(data_dir)
@@ -105,7 +153,7 @@ impl StartupState {
         state.onboarding_completed = true;
         state.save(data_dir)
     }
-}
+*/
 
 /// 运行 onboarding。首次启动打印 Setup URL 并自动打开浏览器，后续启动显示状态摘要并自动打开浏览器。
 ///

@@ -13,9 +13,12 @@ import { closeVideoDrawer } from './drawer.js';
 import { getQRCodePayload, getQRCodePollState } from './qrcode-contract.js';
 
 // --- 初始化 ---
-window.addEventListener('DOMContentLoaded', () => {
-    bootstrapApp().catch(showStartupError);
-});
+const startBootstrap = () => bootstrapApp().catch(showStartupError);
+if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', startBootstrap, { once: true });
+} else {
+    startBootstrap();
+}
 
 async function bootstrapApp() {
     document.getElementById('blogger-notice-modal')?.querySelector('.modal-header span')?.setAttribute('id', 'blogger-notice-title');

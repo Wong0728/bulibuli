@@ -2,12 +2,14 @@ use crate::error::AppError;
 use crate::state::SharedState;
 use axum::{
     extract::Path,
+    extract::Query,
     extract::State,
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
+use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -25,9 +27,15 @@ pub fn router() -> Router<SharedState> {
     Router::new().route("/api/cover/{bvid}", get(get_cover))
 }
 
+#[derive(Deserialize, Default)]
+struct CoverQuery {
+    history_id: Option<i32>,
+}
+
 async fn get_cover(
     State(state): State<SharedState>,
     Path(bvid): Path<String>,
+    Query(query): Query<CoverQuery>,
 ) -> Result<Response, AppError> {
     let bvid = bvid.trim();
     if bvid.is_empty() {
@@ -35,8 +43,17 @@ async fn get_cover(
     }
 
     // 1. 查 history.cover_local_path
-    let uid_opt: Option<String> = match state.business.history_service.find_by_bvid(bvid).await {
-        Ok(Some(h)) => {
+    let history = match query.history_id {
+        Some(id) => state
+            .business
+            .history_service
+            .find_by_id(id)
+            .await?
+            .filter(|history| history.bvid == bvid),
+        None => state.business.history_service.find_by_bvid(bvid).await?,
+    };
+    let uid_opt: Option<String> = match history {
+        Some(h) => {
             if let Some(p) = h.cover_local_path.as_deref() {
                 let path = PathBuf::from(p);
                 // 防御：DB 字段可能被污染，路径必须位于下载根目录内，否则忽略并重新拉取
@@ -60,7 +77,7 @@ async fn get_cover(
             }
             h.uid
         }
-        _ => None,
+        None => None,
     };
 
     // 2 & 3. 本地扫描 + 下载兜底，统一走 ensure_cover_local

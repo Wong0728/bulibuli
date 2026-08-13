@@ -35,6 +35,7 @@ use crate::ws::WebSocketManager;
 use anyhow::Result;
 use chrono::Local;
 use futures::{stream, StreamExt};
+use sea_orm::sea_query::Expr;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -69,8 +70,8 @@ pub struct MonitorService {
     cancellation: CancellationToken,
     settings_cache: Arc<RwLock<Option<(Value, Instant)>>>,
     log_counter: Arc<AtomicU64>,
-    auto_burn_in_progress: Arc<tokio::sync::Mutex<HashSet<String>>>,
-    scheduled_sidecar_in_progress: Arc<tokio::sync::Mutex<HashSet<String>>>,
+    auto_burn_in_progress: Arc<tokio::sync::Mutex<HashSet<i32>>>,
+    scheduled_sidecar_in_progress: Arc<tokio::sync::Mutex<HashSet<i32>>>,
     sidecar_semaphore: Arc<Semaphore>,
 }
 
@@ -172,6 +173,21 @@ impl MonitorService {
 
         stream::iter(bloggers)
             .for_each_concurrent(4, |blogger| async move {
+                let claimed = blogger::Entity::update_many()
+                    .col_expr(
+                        blogger::Column::NextCheck,
+                        Expr::value(Local::now() + chrono::Duration::minutes(5)),
+                    )
+                    .filter(blogger::Column::Id.eq(blogger.id))
+                    .filter(blogger::Column::IsRunning.eq(true))
+                    .filter(blogger::Column::NextCheck.lte(Local::now()))
+                    .exec(&self.db)
+                    .await
+                    .map(|result| result.rows_affected == 1)
+                    .unwrap_or(false);
+                if !claimed {
+                    return;
+                }
                 // 活跃时段守卫：静默期不发任何 B 站请求，直接把 next_check
                 // 顺延到下一窗口开始（防止用户中途改时段后旧 next_check 反复触发）
                 let windows = blogger

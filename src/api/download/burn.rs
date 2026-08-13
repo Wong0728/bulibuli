@@ -24,6 +24,7 @@ pub(super) struct BurnRequest {
     bvid: String,
     source: String,
     video_path: Option<String>,
+    history_id: Option<i32>,
 }
 
 pub(super) async fn burn(
@@ -37,6 +38,7 @@ pub(super) async fn burn(
         &req.bvid,
         &req.source,
         req.video_path,
+        req.history_id,
     )
     .await
 }
@@ -57,6 +59,7 @@ async fn spawn_burn(
     bvid: &str,
     source: &str,
     video_path: Option<String>,
+    history_id: Option<i32>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let bvid = bvid.trim();
     if bvid.is_empty() {
@@ -69,7 +72,16 @@ async fn spawn_burn(
         ));
     }
 
-    let video_path = resolve_burn_video_path(infra, business, bvid, video_path).await?;
+    let history = match history_id {
+        Some(id) => business
+            .history_service
+            .find_by_id(id)
+            .await?
+            .filter(|history| history.bvid == bvid),
+        None => business.history_service.find_by_bvid(bvid).await?,
+    };
+    let video_path =
+        resolve_burn_video_path(infra, business, bvid, video_path, history.as_ref()).await?;
     if !video_path.exists() {
         return Err(AppError::NotFound("视频文件不存在".to_string()));
     }
@@ -94,6 +106,7 @@ async fn spawn_burn(
     let monitor_service = business.monitor_service.clone();
     let bvid_string = bvid.to_string();
     let source_for_spawn = source.clone();
+    let history_id_for_spawn = history.as_ref().map(|history| history.id);
 
     {
         let mut tasks = burn_tasks.lock().await;
@@ -165,10 +178,23 @@ async fn spawn_burn(
                 drop(tasks);
 
                 if success {
-                    if let Err(e) = history_service
-                        .mark_burned(&bvid_string, &source_for_spawn, output_path.as_deref())
-                        .await
-                    {
+                    let result = match history_id_for_spawn {
+                        Some(id) => {
+                            history_service
+                                .mark_burned_by_id(id, &source_for_spawn, output_path.as_deref())
+                                .await
+                        }
+                        None => {
+                            history_service
+                                .mark_burned(
+                                    &bvid_string,
+                                    &source_for_spawn,
+                                    output_path.as_deref(),
+                                )
+                                .await
+                        }
+                    };
+                    if let Err(e) = result {
                         error!("更新历史记录烧录状态失败 {bvid_string}: {e}");
                     }
                     monitor_service
@@ -218,9 +244,10 @@ async fn spawn_burn(
 
 async fn resolve_burn_video_path(
     infra: &InfraState,
-    business: &BusinessState,
+    _business: &BusinessState,
     bvid: &str,
     video_path: Option<String>,
+    history: Option<&crate::models::history::Model>,
 ) -> Result<std::path::PathBuf, AppError> {
     if let Some(p) = video_path.filter(|p| !p.is_empty()) {
         // 安全校验：用户指定的路径必须位于 download_dir 之下，防止路径遍历
@@ -236,10 +263,9 @@ async fn resolve_burn_video_path(
         }
         return Ok(canonical);
     }
-    let h = business.history_service.find_by_bvid(bvid).await?;
-    if let Some(h) = h {
-        if let Some(fp) = h.file_path {
-            if let Ok(canonical) = std::fs::canonicalize(&fp) {
+    if let Some(h) = history {
+        if let Some(fp) = h.file_path.as_deref() {
+            if let Ok(canonical) = std::fs::canonicalize(fp) {
                 let root = std::fs::canonicalize(&infra.paths.download_dir)
                     .unwrap_or_else(|_| infra.paths.download_dir.clone());
                 if canonical.starts_with(root) {

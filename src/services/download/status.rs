@@ -256,6 +256,7 @@ impl DownloadManager {
             "bvid": bvid,
             "cid": task.cid,
             "page": task.page,
+            "generation": task.generation,
             "part_title": task.part_title,
             "type": task_type,
             "status": status,

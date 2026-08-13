@@ -118,7 +118,7 @@ impl MonitorService {
             if now_ts >= target_ts {
                 {
                     let mut in_progress = self.scheduled_sidecar_in_progress.lock().await;
-                    if !in_progress.insert(h.bvid.clone()) {
+                    if !in_progress.insert(h.id) {
                         continue;
                     }
                 }
@@ -141,7 +141,7 @@ impl MonitorService {
                             .scheduled_sidecar_in_progress
                             .lock()
                             .await
-                            .remove(&h.bvid);
+                            .remove(&h.id);
                         return;
                     };
                     if service.cancellation.is_cancelled() {
@@ -150,7 +150,7 @@ impl MonitorService {
                             .scheduled_sidecar_in_progress
                             .lock()
                             .await
-                            .remove(&h.bvid);
+                            .remove(&h.id);
                         return;
                     }
                     service
@@ -173,6 +173,7 @@ impl MonitorService {
                             &title,
                             &cookies,
                             &dc,
+                            h.page,
                         )
                         .await
                     {
@@ -209,7 +210,7 @@ impl MonitorService {
                         .scheduled_sidecar_in_progress
                         .lock()
                         .await
-                        .remove(&h.bvid);
+                        .remove(&h.id);
                 });
             }
         }
@@ -345,7 +346,7 @@ impl MonitorService {
 
             {
                 let mut guard = self.auto_burn_in_progress.lock().await;
-                if !guard.insert(h.bvid.clone()) {
+                if !guard.insert(h.id) {
                     continue;
                 }
             }
@@ -359,6 +360,7 @@ impl MonitorService {
 
             let db = self.db.clone();
             let bvid = h.bvid.clone();
+            let history_id = h.id;
             let source = source.to_string();
             let burner = burner.clone();
             let in_progress = self.auto_burn_in_progress.clone();
@@ -368,16 +370,16 @@ impl MonitorService {
             tokio::spawn(async move {
                 let Ok(_permit) = burn_semaphore.acquire_owned().await else {
                     let mut guard = in_progress.lock().await;
-                    guard.remove(&bvid);
+                    guard.remove(&history_id);
                     return;
                 };
                 if cancellation.is_cancelled() {
                     tracing::debug!("任务已取消，跳过执行: bvid={}", bvid);
                     let mut guard = in_progress.lock().await;
-                    guard.remove(&bvid);
+                    guard.remove(&history_id);
                     return;
                 }
-                if let Err(error) = update_auto_burn_state(&db, &bvid, "running", None).await {
+                if let Err(error) = update_auto_burn_state(&db, history_id, "running", None).await {
                     warn!("[自动烧录] 更新运行状态失败 {}: {error}", bvid);
                 }
                 info!("[自动烧录] 开始为 {} 烧录 source={}", bvid, source);
@@ -391,7 +393,7 @@ impl MonitorService {
                         if success {
                             info!("[自动烧录] {} 成功: {}", bvid, message);
                             if let Err(e) = history_service
-                                .mark_burned(&bvid, &source, output.as_deref())
+                                .mark_burned_by_id(history_id, &source, output.as_deref())
                                 .await
                             {
                                 warn!("[自动烧录] 更新历史记录失败 {}: {e}", bvid);
@@ -400,7 +402,8 @@ impl MonitorService {
                             warn!("[自动烧录] {} 失败: {}", bvid, message);
                             let retry_at = auto_burn_retry_at(attempts);
                             if let Err(error) =
-                                update_auto_burn_state(&db, &bvid, "failed", Some(retry_at)).await
+                                update_auto_burn_state(&db, history_id, "failed", Some(retry_at))
+                                    .await
                             {
                                 warn!("[自动烧录] 持久化失败状态失败 {}: {error}", bvid);
                             }
@@ -410,14 +413,14 @@ impl MonitorService {
                         warn!("[自动烧录] {} 出错: {e}", bvid);
                         let retry_at = auto_burn_retry_at(attempts);
                         if let Err(error) =
-                            update_auto_burn_state(&db, &bvid, "failed", Some(retry_at)).await
+                            update_auto_burn_state(&db, history_id, "failed", Some(retry_at)).await
                         {
                             warn!("[自动烧录] 持久化异常状态失败 {}: {error}", bvid);
                         }
                     }
                 }
                 let mut guard = in_progress.lock().await;
-                guard.remove(&bvid);
+                guard.remove(&history_id);
             });
         }
         Ok(())

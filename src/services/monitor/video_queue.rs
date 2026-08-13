@@ -350,7 +350,7 @@ impl MonitorService {
                 "info",
             )
             .await;
-            self.do_download_danmaku(uid, bvid, title, cookies, &dc)
+            self.do_download_danmaku(uid, bvid, title, cookies, &dc, None)
                 .await?;
             return Ok(());
         }
@@ -372,7 +372,7 @@ impl MonitorService {
                 "info",
             )
             .await;
-            self.do_download_danmaku(uid, bvid, title, cookies, &dc)
+            self.do_download_danmaku(uid, bvid, title, cookies, &dc, None)
                 .await?;
 
             let next_index = time_points
@@ -405,6 +405,7 @@ impl MonitorService {
         title: &str,
         cookies: &str,
         dc: &Value,
+        page: Option<i32>,
     ) -> Result<()> {
         let archive_policy = SidecarArchivePolicy::new(
             dc["sidecar_archive_mode"].as_str().unwrap_or("overwrite"),
@@ -412,7 +413,7 @@ impl MonitorService {
         );
         let save_dir = self
             .download_manager
-            .artifact_dir_for_bvid(bvid, "auto")
+            .artifact_dir_for_bvid_page(bvid, "auto", page)
             .await;
 
         // 保存视频元数据 info.json（与视频同目录）
@@ -445,7 +446,7 @@ impl MonitorService {
                 .danmaku_service
                 .download_danmaku_to(
                     bvid,
-                    None,
+                    page,
                     Some(cookies),
                     Some(uid),
                     archive_policy,

@@ -83,7 +83,8 @@ impl BiliApi {
             )
             .await;
         let resp = self.send_with_retry(request).await?;
-        debug!(url, qrcode_key, "B站 API 请求: check_qrcode_status");
+        let qrcode_key_suffix = qrcode_key.chars().rev().take(4).collect::<String>();
+        debug!(url, qrcode_key_suffix, "B站 API 请求: check_qrcode_status");
         // 注意：必须先收集 Cookie，再读取 body，否则可能丢失。
         let response_cookies: HashMap<String, String> = resp
             .cookies()

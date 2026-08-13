@@ -9,6 +9,10 @@ pub struct Model {
     pub id: i32,
     pub uid: Option<String>,
     pub bvid: String,
+    pub cid: Option<i64>,
+    pub page: Option<i32>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub part_title: Option<String>,
     /// 记录来源：auto=自动监控，manual=手动下载。
     #[sea_orm(column_type = "Text", default_value = "auto")]
     pub source: String,
@@ -90,6 +94,9 @@ impl Model {
             "id": self.id,
             "uid": self.uid,
             "bvid": self.bvid,
+            "cid": self.cid,
+            "page": self.page,
+            "part_title": self.part_title,
             "source": self.source,
             "title": self.title,
             "pub_date": self.pub_date,

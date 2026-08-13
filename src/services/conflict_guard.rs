@@ -50,21 +50,28 @@ impl ConflictGuard {
         self.committed = true;
     }
 
-    /// 回滚 version：把 `version` 减 1（让其他端可以继续操作）。
+    /// 回滚 version：只回滚本次 bump 产生的版本。
     /// 仅在调用方执行实际状态变更失败时调用。
     pub async fn rollback(mut self) -> AppResult<()> {
         if self.committed {
             return Ok(());
         }
         let table = table_for(self.target);
-        let sql = format!("UPDATE {table} SET version = MAX(version - 1, 0) WHERE id = ?");
-        self.db
+        let sql = format!("UPDATE {table} SET version = version - 1 WHERE id = ? AND version = ?");
+        let result = self
+            .db
             .execute_raw(Statement::from_sql_and_values(
                 self.db.get_database_backend(),
                 sql,
-                [self.target_id.clone().into()],
+                [self.target_id.clone().into(), self.new_version.into()],
             ))
             .await?;
+        if result.rows_affected() != 1 {
+            return Err(AppError::Conflict(format!(
+                "{:?} id={} 回滚时版本已被其他写入改变",
+                self.target, self.target_id
+            )));
+        }
         self.committed = true;
         Ok(())
     }

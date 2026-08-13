@@ -114,9 +114,10 @@ impl DownloadManager {
                         guard.remove(&cache_key_for_cb);
                     }
                     if result.success {
-                        if let Err(e) =
-                            Self::update_history_after_merge_static(&db, &bvid, &output, &source)
-                                .await
+                        if let Err(e) = Self::update_history_after_merge_static(
+                            &db, &bvid, cb_cid, cb_page, &output, &source,
+                        )
+                        .await
                         {
                             warn!("更新历史记录失败 {bvid}: {e}");
                         }
@@ -174,13 +175,17 @@ impl DownloadManager {
     pub(super) async fn update_history_after_merge_static(
         db: &DatabaseConnection,
         bvid: &str,
+        cid: Option<i64>,
+        page: Option<i32>,
         path: &Path,
         source: &str,
     ) -> Result<()> {
-        let h = history::Entity::find()
-            .filter(history::Column::Bvid.eq(bvid))
-            .one(db)
-            .await?;
+        let mut query = history::Entity::find().filter(history::Column::Bvid.eq(bvid));
+        query = match cid {
+            Some(cid) => query.filter(history::Column::Cid.eq(cid)),
+            None => query.filter(history::Column::Cid.is_null()),
+        };
+        let h = query.one(db).await?;
         if let Some(h) = h {
             let current_exists = h
                 .file_path
@@ -211,6 +216,8 @@ impl DownloadManager {
             }
 
             let mut model: history::ActiveModel = h.into();
+            model.cid = Set(cid);
+            model.page = Set(page);
             model.file_path = Set(Some(path.to_string_lossy().to_string()));
             model.cover_local_path = Set(cover_local_path);
             model.download_time = Set(Some(Local::now()));

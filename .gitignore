@@ -3,10 +3,16 @@
 /static/dist/
 /static/js/node_modules/
 /data/
+/test-results/
+/playwright-report/
+*.trace.zip
 /__pycache__/
 *.py[cod]
 clippy_output*.txt
 .codex_*
+
+# Local-only developer notes. Never commit or publish this directory.
+/docs/developer/
 
 # External reference material is local-only and must never enter the public repo.
 【EXAMPLE】*/

@@ -8,7 +8,7 @@ import { showToast, confirmDialog } from './download-status.js';
 import { openVideoDrawer, closeVideoDrawer, refreshQualityPills, _ALL_QUALITY_OPTIONS } from './drawer.js';
 
 // 通用烧录入口（弹幕、字幕或两者）。
-export async function burnMedia(bvid, source, button) {
+export async function burnMedia(bvid, source, button, historyId = undefined) {
     if (!bvid || !button) return;
     if (!checkNetworkBeforeAction()) return;
     if (_state.burningTasks.has(bvid)) {
@@ -23,7 +23,7 @@ export async function burnMedia(bvid, source, button) {
     showToast('正在烧录，请等待...', 'info');
 
     try {
-        const result = await apiPost('/api/download/burn', { bvid, source });
+        const result = await apiPost('/api/download/burn', { bvid, source, history_id: historyId ?? null });
         if (result && result.offline) {
             showToast(_NETWORK_ERR_MSG, 'error');
             _state.burningTasks.delete(bvid);
@@ -98,13 +98,13 @@ export async function pollBurnStatus(bvid, taskId, button, originalHtml, source)
 }
 
 // 删除视频记录（文件和 DB）。
-export async function deleteVideoRecord(bvid) {
+export async function deleteVideoRecord(bvid, historyId = undefined) {
     if (!bvid) return;
     if (!(await confirmDialog(`确认删除视频 ${bvid} 的记录？\n\n将同时删除：\n- 本地视频文件\n- 本地封面文件\n- 弹幕 / 字幕侧车文件\n- download_task 记录\n- history 记录\n\n此操作不可撤销。`, { title: '删除记录', okText: '删除', danger: true }))) {
         return;
     }
     try {
-        const result = await apiPost('/api/history/delete', { bvid, delete_files: true });
+        const result = await apiPost('/api/history/delete', { bvid, history_id: historyId ?? null, delete_files: true });
         if (result.code === 0) {
             showToast(`已删除记录（${(result.data?.removed_files || []).length} 个文件）`, 'success');
             closeVideoDrawer();

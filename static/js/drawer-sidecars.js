@@ -3,14 +3,15 @@ import { escapeHtml } from './utils.js';
 import { apiGet } from './core.js';
 import { showToast } from './download-status.js';
 
-export async function loadDrawerComments(bvid, path = '') {
+export async function loadDrawerComments(bvid, path = '', historyId = undefined) {
     const container = document.getElementById('drawer-sidecar-viewer') || document.getElementById('drawer-comments');
     if (!container) return;
     markSelectedSidecarPath(path);
     container.innerHTML = '<div class="drawer-comments-hint"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>';
     try {
         const pathQuery = path ? `&path=${encodeURIComponent(path)}` : '';
-        const result = await apiGet(`/api/video/comments?bvid=${encodeURIComponent(bvid)}${pathQuery}`);
+        const historyQuery = historyId == null ? '' : `&history_id=${encodeURIComponent(historyId)}`;
+        const result = await apiGet(`/api/video/comments?bvid=${encodeURIComponent(bvid)}${historyQuery}${pathQuery}`);
         if (result.code !== 0) {
             if (result.offline) {
                 showToast(_NETWORK_ERR_MSG, 'error');
@@ -44,13 +45,14 @@ export async function loadDrawerComments(bvid, path = '') {
 }
 
 // 加载并展示指定弹幕文件。结构化 JSON 以时间轴列表显示，XML/TXT 不展开原始文本。
-export async function loadDrawerDanmaku(bvid, path) {
+export async function loadDrawerDanmaku(bvid, path, historyId = undefined) {
     const container = document.getElementById('drawer-sidecar-viewer');
     if (!container || !path) return;
     markSelectedSidecarPath(path);
     container.innerHTML = '<div class="drawer-comments-hint"><i class="fa-solid fa-spinner fa-spin"></i> 加载弹幕中...</div>';
     try {
-        const result = await apiGet(`/api/video/danmaku?bvid=${encodeURIComponent(bvid)}&path=${encodeURIComponent(path)}`);
+        const historyQuery = historyId == null ? '' : `&history_id=${encodeURIComponent(historyId)}`;
+        const result = await apiGet(`/api/video/danmaku?bvid=${encodeURIComponent(bvid)}&path=${encodeURIComponent(path)}${historyQuery}`);
         if (result.code !== 0) {
             container.innerHTML = `<div class="drawer-comments-hint">${escapeHtml(result.message || '加载弹幕失败')}</div>`;
             return;

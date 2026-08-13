@@ -63,8 +63,16 @@ export async function getDownloadLinks(bvid, title) {
     actionsDiv.innerHTML = '<span class="loading"></span> 获取中...';
 
     try {
-        const videoResult = await apiPost('/api/video/get-video-urls', { bvid });
-        const audioResult = await apiPost('/api/video/get-audio-url', { bvid });
+        const [videoRequest, audioRequest] = await Promise.allSettled([
+            apiPost('/api/video/get-video-urls', { bvid }),
+            apiPost('/api/video/get-audio-url', { bvid }),
+        ]);
+        const videoResult = videoRequest.status === 'fulfilled'
+            ? videoRequest.value
+            : { code: -1, message: videoRequest.reason?.message || '视频链接获取失败', data: {} };
+        const audioResult = audioRequest.status === 'fulfilled'
+            ? audioRequest.value
+            : { code: -1, message: audioRequest.reason?.message || '音频链接获取失败', data: {} };
         const videoData = videoResult.data || {};
         const audioData = audioResult.data || {};
 
@@ -264,7 +272,7 @@ export function downloadToBrowser(url, filename) {
 }
 
 // 下载弹幕
-export async function downloadDanmaku(bvid, source = '') {
+export async function downloadDanmaku(bvid, source = '', historyId = undefined, page = undefined) {
     if (!bvid) return;
     const btn = document.querySelector(`[data-role="manual-danmaku-download"][data-bvid="${CSS.escape(bvid)}"]`);
     
@@ -276,7 +284,9 @@ export async function downloadDanmaku(bvid, source = '') {
     try {
         const result = await apiPost('/api/video/download-danmaku', {
             bvid: bvid,
-            source: source || undefined
+            source: source || undefined,
+            history_id: historyId ?? undefined,
+            page: page ?? undefined,
         });
         
         if (result.code === 0) {
@@ -311,7 +321,7 @@ export async function downloadDanmaku(bvid, source = '') {
 }
 
 // 下载评论
-export async function downloadComments(bvid, source = '') {
+export async function downloadComments(bvid, source = '', historyId = undefined) {
     if (!bvid) return;
     const btn = document.querySelector(`[data-role="manual-comments-download"][data-bvid="${CSS.escape(bvid)}"]`);
     
@@ -323,7 +333,8 @@ export async function downloadComments(bvid, source = '') {
     try {
         const result = await apiPost('/api/video/download-comments', {
             bvid: bvid,
-            source: source || undefined
+            source: source || undefined,
+            history_id: historyId ?? undefined,
         });
         
         if (result.code === 0) {

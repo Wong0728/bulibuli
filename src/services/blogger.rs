@@ -76,6 +76,31 @@ impl BloggerService {
             to_delete.len()
         );
 
+        let ids = to_delete.iter().map(|item| item.id).collect::<Vec<_>>();
+        let transaction = self.db.begin().await?;
+        let mut task_ids = Vec::new();
+        for h in &to_delete {
+            let tasks = download_task::Entity::find()
+                .filter(download_task::Column::Bvid.eq(&h.bvid))
+                .filter(download_task::Column::Cid.eq(h.cid))
+                .filter(download_task::Column::Source.eq(&h.source))
+                .filter(download_task::Column::Status.is_in(["completed", "failed", "cancelled"]))
+                .all(&transaction)
+                .await?;
+            task_ids.extend(tasks.into_iter().map(|task| task.id));
+        }
+        if !task_ids.is_empty() {
+            download_task::Entity::delete_many()
+                .filter(download_task::Column::Id.is_in(task_ids))
+                .exec(&transaction)
+                .await?;
+        }
+        history::Entity::delete_many()
+            .filter(history::Column::Id.is_in(ids))
+            .exec(&transaction)
+            .await?;
+        transaction.commit().await?;
+
         for h in &to_delete {
             let sidecar_dir = h
                 .file_path
@@ -124,21 +149,6 @@ impl BloggerService {
                 }
             }
         }
-        let ids = to_delete.iter().map(|item| item.id).collect::<Vec<_>>();
-        let bvids = to_delete
-            .iter()
-            .map(|item| item.bvid.clone())
-            .collect::<Vec<_>>();
-        let transaction = self.db.begin().await?;
-        download_task::Entity::delete_many()
-            .filter(download_task::Column::Bvid.is_in(bvids))
-            .exec(&transaction)
-            .await?;
-        history::Entity::delete_many()
-            .filter(history::Column::Id.is_in(ids))
-            .exec(&transaction)
-            .await?;
-        transaction.commit().await?;
         Ok(())
     }
 

@@ -14,12 +14,21 @@ use tracing::{info, warn};
 use super::{is_valid_bvid, DedupeResult, DownloadManager, PageInfo};
 
 impl DownloadManager {
-    /// 返回指定来源视频任务的实际产物目录，供弹幕/评论与视频保持同目录。
-    pub(crate) async fn artifact_dir_for_bvid(&self, bvid: &str, source: &str) -> Option<PathBuf> {
+    /// 返回指定 BV/分P 视频任务的实际产物目录；page 用于隔离同 BV 的多 P 任务。
+    pub(crate) async fn artifact_dir_for_bvid_page(
+        &self,
+        bvid: &str,
+        source: &str,
+        page: Option<i32>,
+    ) -> Option<PathBuf> {
         let task = download_task::Entity::find()
             .filter(download_task::Column::Bvid.eq(bvid))
             .filter(download_task::Column::TaskType.eq("video"))
             .filter(download_task::Column::Source.eq(source))
+            .filter(match page {
+                Some(page) => download_task::Column::Page.eq(page),
+                None => download_task::Column::Page.is_null(),
+            })
             .one(&self.db)
             .await
             .ok()

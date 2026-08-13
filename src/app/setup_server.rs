@@ -8,7 +8,7 @@
 use crate::state::SharedState;
 use axum::{
     body::Body,
-    http::{header, HeaderValue, Request},
+    http::{header, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
@@ -64,6 +64,10 @@ fn build_setup_router(state: SharedState) -> Router {
             "/setup.js",
             ServeFile::new(static_root.join("js").join("setup.js")),
         )
+        .route_service(
+            "/bulibuli.ico",
+            ServeFile::new(static_root.join("bulibuli.ico")),
+        )
         .nest_service(
             "/css",
             tower_http::services::ServeDir::new(static_root.join("css")),
@@ -73,7 +77,7 @@ fn build_setup_router(state: SharedState) -> Router {
             tower_http::services::ServeDir::new(static_root.join("js")),
         )
         .merge(setup_api)
-        .layer(middleware::from_fn(add_setup_headers))
+        .layer(middleware::from_fn(add_setup_security))
         .with_state(state)
 }
 
@@ -100,13 +104,56 @@ async fn serve_setup_page(
     }
 }
 
-async fn add_setup_headers(request: Request<Body>, next: Next) -> Response {
+async fn add_setup_security(request: Request<Body>, next: Next) -> Response {
+    let host_allowed = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(is_loopback_host_header);
+    if !host_allowed {
+        return (StatusCode::BAD_REQUEST, "setup only accepts loopback Host").into_response();
+    }
+    if matches!(
+        request.method(),
+        &Method::POST | &Method::PUT | &Method::PATCH | &Method::DELETE
+    ) {
+        let origin_allowed = request
+            .headers()
+            .get(header::ORIGIN)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|origin| {
+                origin
+                    .strip_prefix("http://")
+                    .or_else(|| origin.strip_prefix("https://"))
+            })
+            .and_then(|value| value.split('/').next())
+            .is_some_and(is_loopback_host_header);
+        if !origin_allowed {
+            return (
+                StatusCode::FORBIDDEN,
+                "setup request requires a loopback Origin",
+            )
+                .into_response();
+        }
+    }
     let mut response = next.run(request).await;
     response.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
     response
+}
+
+fn is_loopback_host_header(value: &str) -> bool {
+    let value = value.trim();
+    let host = if let Some(end) = value.find(']') {
+        value
+            .get(usize::from(value.starts_with('['))..end)
+            .unwrap_or_default()
+    } else {
+        value.split(':').next().unwrap_or(value)
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
 
 /// 绑定 Setup 端口：绑定 127.0.0.1（IPv4 回环），带 port fallback。

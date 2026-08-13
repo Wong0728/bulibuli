@@ -16,10 +16,8 @@ impl CookieManager {
     async fn parse_json_response(&self, resp: reqwest::Response, api_name: &str) -> Result<Value> {
         let status = resp.status();
         if !status.is_success() {
-            let body_preview = resp.text().await.context("读取B站 API 错误响应体失败")?;
-            let preview: String = body_preview.chars().take(500).collect();
-            warn!(api = api_name, status = %status, "B站 API 返回非2xx状态: {preview}");
-            return Err(anyhow!("B站API返回HTTP {status}: {preview}"));
+            warn!(api = api_name, status = %status, "B站 API 返回非2xx状态");
+            return Err(anyhow!("B站API返回HTTP {status}"));
         }
         let content_type = resp
             .headers()
@@ -35,14 +33,9 @@ impl CookieManager {
         match serde_json::from_slice(&bytes) {
             Ok(v) => Ok(v),
             Err(e) => {
-                let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(500)]);
-                warn!(
-                    api = api_name,
-                    content_type = %content_type,
-                    "B站 API 响应JSON解析失败: {e}，前500字节: {preview}"
-                );
+                warn!(api = api_name, content_type = %content_type, "B站 API 响应JSON解析失败: {e}");
                 Err(anyhow!(
-                    "B站API响应解析失败({api_name}): {e}，Content-Type: {content_type}，前500字节: {preview}"
+                    "B站API响应解析失败({api_name}): {e}，Content-Type: {content_type}"
                 ))
             }
         }

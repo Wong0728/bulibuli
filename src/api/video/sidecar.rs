@@ -40,6 +40,7 @@ pub(super) struct DownloadDanmakuRequest {
     uid: Option<String>,
     source: Option<String>,
     page: Option<i32>,
+    history_id: Option<i32>,
 }
 
 pub(super) async fn download_danmaku(
@@ -66,6 +67,8 @@ pub(super) async fn download_danmaku(
         &state.infra,
         bvid,
         req.source.as_deref(),
+        req.history_id,
+        req.page,
     )
     .await;
     let result = state
@@ -88,6 +91,7 @@ pub(super) struct DownloadCommentsRequest {
     bvid: String,
     uid: Option<String>,
     source: Option<String>,
+    history_id: Option<i32>,
 }
 
 pub(super) async fn download_comments(
@@ -117,6 +121,8 @@ pub(super) async fn download_comments(
         &state.infra,
         bvid,
         req.source.as_deref(),
+        req.history_id,
+        None,
     )
     .await;
     let result = state
@@ -144,24 +150,53 @@ async fn resolve_sidecar_dir(
     infra: &InfraState,
     bvid: &str,
     source: Option<&str>,
+    history_id: Option<i32>,
+    page: Option<i32>,
 ) -> Option<std::path::PathBuf> {
+    let h = match history_id {
+        Some(id) => business
+            .history_service
+            .find_by_id(id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|history| history.bvid == bvid),
+        None => business
+            .history_service
+            .find_by_bvid(bvid)
+            .await
+            .ok()
+            .flatten(),
+    };
+    // When the caller explicitly selects a source, do not let a history row
+    // from the other source redirect the sidecar into the wrong artifact dir.
+    let history_matches_source = source
+        .map(|selected| h.as_ref().is_some_and(|history| history.source == selected))
+        .unwrap_or(true);
+    if history_matches_source {
+        if let Some(h) = h.as_ref() {
+            if let Some(fp) = h.file_path.as_deref() {
+                if let Some(parent) = std::path::Path::new(fp).parent() {
+                    if parent.exists() {
+                        return Some(parent.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
     if let Some(source @ ("manual" | "auto")) = source {
         if let Some(directory) = media
             .download_manager
-            .artifact_dir_for_bvid(bvid, source)
+            .artifact_dir_for_bvid_page(
+                bvid,
+                source,
+                page.or_else(|| h.as_ref().and_then(|value| value.page)),
+            )
             .await
         {
             return Some(directory);
         }
     }
-
-    // 查找 history 中视频的 file_path
-    let h = business
-        .history_service
-        .find_by_bvid(bvid)
-        .await
-        .ok()
-        .flatten();
     if source == Some("manual") {
         let files = business
             .history_service
@@ -185,15 +220,20 @@ async fn resolve_sidecar_dir(
         }
         return Some(infra.paths.download_dir.join("manual"));
     }
-    if let Some(h) = h {
-        if let Some(ref fp) = h.file_path {
-            let path = std::path::Path::new(fp);
-            if let Some(parent) = path.parent() {
-                if parent.exists() {
-                    return Some(parent.to_path_buf());
+    if source.is_none() {
+        if let Some(h) = h {
+            if let Some(ref fp) = h.file_path {
+                let path = std::path::Path::new(fp);
+                if let Some(parent) = path.parent() {
+                    if parent.exists() {
+                        return Some(parent.to_path_buf());
+                    }
                 }
             }
         }
+    }
+    if page.is_some() {
+        return Some(infra.paths.download_dir.clone());
     }
     // 未找到视频文件记录，返回 None 让 DanmakuService 使用默认逻辑
     None
@@ -204,6 +244,7 @@ pub(super) struct GetCommentsQuery {
     bvid: String,
     uid: Option<String>,
     path: Option<String>,
+    history_id: Option<i32>,
 }
 
 /// 通过 history 文件路径或明确 UID 定位附件，避免在请求路径遍历全部下载目录。
@@ -213,8 +254,24 @@ async fn find_download_file(
     bvid: &str,
     uid: Option<&str>,
     filename: &str,
+    history_id: Option<i32>,
 ) -> Option<std::path::PathBuf> {
-    if let Ok(Some(history)) = business.history_service.find_by_bvid(bvid).await {
+    let history = match history_id {
+        Some(id) => business
+            .history_service
+            .find_by_id(id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|history| history.bvid == bvid),
+        None => business
+            .history_service
+            .find_by_bvid(bvid)
+            .await
+            .ok()
+            .flatten(),
+    };
+    if let Some(history) = history {
         if let Some(parent) = history
             .file_path
             .as_deref()
@@ -300,8 +357,14 @@ pub(super) async fn get_comments(
     };
     // 显式路径只允许命中 scan_files 返回的本 BV 评论文件，防止路径穿越。
     if let Some(requested_path) = q.path.as_deref() {
-        let Some(path) =
-            resolve_scanned_sidecar(&state.business, bvid, requested_path, "comment").await
+        let Some(path) = resolve_scanned_sidecar(
+            &state.business,
+            bvid,
+            requested_path,
+            "comment",
+            q.history_id,
+        )
+        .await
         else {
             return Err(AppError::NotFound("未找到指定评论版本".to_string()));
         };
@@ -315,6 +378,7 @@ pub(super) async fn get_comments(
         bvid,
         uid.as_deref(),
         &format!("{bvid}_comments.html"),
+        q.history_id,
     )
     .await
     {
@@ -326,6 +390,7 @@ pub(super) async fn get_comments(
         bvid,
         uid.as_deref(),
         &format!("{bvid}_comments.txt"),
+        q.history_id,
     )
     .await
     {
@@ -345,13 +410,23 @@ async fn resolve_scanned_sidecar(
     bvid: &str,
     requested_path: &str,
     file_type: &str,
+    history_id: Option<i32>,
 ) -> Option<std::path::PathBuf> {
-    let history = business
-        .history_service
-        .find_by_bvid(bvid)
-        .await
-        .ok()
-        .flatten();
+    let history = match history_id {
+        Some(id) => business
+            .history_service
+            .find_by_id(id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|history| history.bvid == bvid),
+        None => business
+            .history_service
+            .find_by_bvid(bvid)
+            .await
+            .ok()
+            .flatten(),
+    };
     let files = business
         .history_service
         .scan_files(
@@ -411,6 +486,7 @@ async fn read_comments_file(path: &std::path::Path) -> Result<Json<ApiResponse<V
 pub(super) struct GetDanmakuQuery {
     bvid: String,
     path: String,
+    history_id: Option<i32>,
 }
 
 /// 读取 scan_files 已发现的某个弹幕版本。JSON 返回结构化列表，XML/TXT 返回文本。
@@ -424,7 +500,14 @@ pub(super) async fn get_danmaku(
             "请提供视频 BV 号和弹幕文件路径".to_string(),
         ));
     }
-    let Some(path) = resolve_scanned_sidecar(&state.business, bvid, q.path.trim(), "danmaku").await
+    let Some(path) = resolve_scanned_sidecar(
+        &state.business,
+        bvid,
+        q.path.trim(),
+        "danmaku",
+        q.history_id,
+    )
+    .await
     else {
         return Err(AppError::NotFound("未找到指定弹幕版本".to_string()));
     };
