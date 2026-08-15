@@ -19,8 +19,12 @@ use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(result) = handle_early_cli(&args) {
+        return result;
+    }
     install_crypto_provider()?;
-    if let Err(e) = run().await {
+    if let Err(e) = run(args).await {
         // 在 tracing 初始化之前用 eprintln 确保错误可见
         eprintln!("应用启动失败: {:#}", e);
         return Err(e);
@@ -37,9 +41,8 @@ fn install_crypto_provider() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("Rustls CryptoProvider 已被其他组件初始化"))
 }
 
-async fn run() -> anyhow::Result<()> {
+async fn run(args: Vec<String>) -> anyhow::Result<()> {
     let (config, paths) = load_config()?;
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.first().is_some_and(|value| value == "ctl") {
         let response = app::control::run_client(&paths.data_dir, &args[1..]).await?;
         println!("{response}");
@@ -198,6 +201,23 @@ async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn handle_early_cli(args: &[String]) -> Option<anyhow::Result<()>> {
+    match args.first().map(String::as_str) {
+        Some("--version") => {
+            println!("bulibuli {}", env!("CARGO_PKG_VERSION"));
+            Some(Ok(()))
+        }
+        Some("--help") | Some("-h") => {
+            println!(
+                "补哩补哩 bulibuli {}\n\n用法:\n  bulibuli                 启动服务\n  bulibuli --version       输出版本并退出\n  bulibuli --help          显示帮助并退出\n  bulibuli ctl <command>   执行高级控制命令\n\n常用控制命令:\n  bulibuli ctl sys status\n  bulibuli ctl sys ffmpeg-test\n  bulibuli ctl sys aria2-restart\n  bulibuli ctl dl status",
+                env!("CARGO_PKG_VERSION")
+            );
+            Some(Ok(()))
+        }
+        _ => None,
+    }
+}
+
 /// 读取 `actual_port.txt` 获取上次运行的实际端口。
 fn read_actual_port(paths: &crate::config::AppPaths) -> Option<u16> {
     std::fs::read_to_string(paths.data_dir.join("actual_port.txt"))
@@ -207,6 +227,13 @@ fn read_actual_port(paths: &crate::config::AppPaths) -> Option<u16> {
 
 #[cfg(test)]
 mod tls_tests {
+    #[test]
+    fn early_cli_flags_do_not_enter_runtime_bootstrap() {
+        assert!(super::handle_early_cli(&["--version".to_string()]).is_some());
+        assert!(super::handle_early_cli(&["--help".to_string()]).is_some());
+        assert!(super::handle_early_cli(&["ctl".to_string()]).is_none());
+    }
+
     #[test]
     fn ring_provider_builds_client_config() {
         super::install_crypto_provider().expect("install ring provider");

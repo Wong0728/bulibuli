@@ -1,4 +1,4 @@
-//! 历史记录同步：完成任务写入 history、MD5 记录、封面落盘与历史清理。
+//! 历史记录同步：完成任务写入 history、SHA-256 记录、封面落盘与历史清理。
 
 use crate::models::history;
 use crate::services::live_recorder::ffmpeg_session::redact_diagnostics;
@@ -181,11 +181,11 @@ impl DownloadManager {
             new_history.insert(&self.db).await?;
         }
 
-        // on_completion 模式下立即计算 MD5
+        // on_completion 模式下立即计算 SHA-256
         if let Some(path) = file_path {
             if path.exists() {
-                if let Err(e) = self.compute_and_store_md5(bvid, path).await {
-                    warn!("[add_to_history] 计算 MD5 失败 {bvid}: {e}");
+                if let Err(e) = self.compute_and_store_sha256(bvid, path).await {
+                    warn!("[add_to_history] 计算 SHA-256 失败 {bvid}: {e}");
                 }
             }
         }
@@ -197,10 +197,10 @@ impl DownloadManager {
         Ok(())
     }
 
-    /// 计算文件 MD5（流式分块，避免整文件读入内存）并写入 history.md5 / md5_last_checked_at。
+    /// 计算文件 SHA-256（流式分块，避免整文件读入内存）并写入 history.sha256。
     /// 由 add_to_history（on_completion）与 verify worker（periodic）共用。
-    pub async fn compute_and_store_md5(&self, bvid: &str, path: &Path) -> Result<String> {
-        let digest = crate::services::file_safety::stream_file_md5(path).await?;
+    pub async fn compute_and_store_sha256(&self, bvid: &str, path: &Path) -> Result<String> {
+        let digest = crate::services::file_safety::stream_file_sha256(path).await?;
         let h = history::Entity::find()
             .filter(history::Column::Bvid.eq(bvid))
             .filter(history::Column::FilePath.eq(path.to_string_lossy().to_string()))
@@ -208,8 +208,8 @@ impl DownloadManager {
             .await?;
         if let Some(h) = h {
             let mut model: history::ActiveModel = h.into();
-            model.md5 = Set(Some(digest.clone()));
-            model.md5_last_checked_at = Set(Some(Local::now()));
+            model.sha256 = Set(Some(digest.clone()));
+            model.sha256_last_checked_at = Set(Some(Local::now()));
             model.update(&self.db).await?;
         }
         Ok(digest)

@@ -84,9 +84,11 @@ pub enum SessionRole {
 impl SessionRole {
     fn from_db(value: &str) -> Self {
         match value {
+            "owner" => Self::Owner,
             "operator" => Self::Operator,
             "viewer" => Self::Viewer,
-            _ => Self::Owner,
+            // Corrupt or future role values must never gain the highest privilege.
+            _ => Self::Viewer,
         }
     }
 
@@ -348,9 +350,14 @@ impl AuthService {
 
     async fn session_lock(&self, id: &str) -> Arc<Mutex<()>> {
         let mut locks = self.authentication_locks.lock().await;
-        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
         if locks.len() >= MAX_AUTHENTICATION_LOCKS {
-            if let Some(key) = locks.keys().next().cloned() {
+            // Only evict entries held solely by the map. An active lock must stay
+            // in place or concurrent authentication for the same session can race.
+            let idle_key = locks
+                .iter()
+                .find(|(_, lock)| Arc::strong_count(lock) == 1)
+                .map(|(key, _)| key.clone());
+            if let Some(key) = idle_key {
                 locks.remove(&key);
             }
         }
@@ -627,11 +634,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_or_invalid_role_is_owner_but_delegated_roles_round_trip() {
+    fn known_roles_round_trip_and_invalid_roles_fail_closed() {
         assert_eq!(SessionRole::from_db("owner"), SessionRole::Owner);
         assert_eq!(SessionRole::from_db("operator"), SessionRole::Operator);
         assert_eq!(SessionRole::from_db("viewer"), SessionRole::Viewer);
-        assert_eq!(SessionRole::from_db("unexpected"), SessionRole::Owner);
+        assert_eq!(SessionRole::from_db("unexpected"), SessionRole::Viewer);
         assert!(SessionRole::Owner.can_operate());
         assert!(SessionRole::Operator.can_operate());
         assert!(!SessionRole::Viewer.can_operate());

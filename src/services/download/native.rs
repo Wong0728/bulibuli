@@ -184,3 +184,38 @@ fn build_header_map(pairs: &[(String, String)]) -> Result<HeaderMap> {
     }
     Ok(map)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_progress_tracks_total_and_downloaded_bytes() {
+        let progress = NativeProgress::default();
+        progress.set_total(100);
+        progress.add_downloaded(40);
+        progress.add_downloaded(2);
+        assert_eq!(progress.total(), 100);
+        assert_eq!(progress.downloaded(), 42);
+        progress.reset_downloaded();
+        assert_eq!(progress.downloaded(), 0);
+    }
+
+    #[test]
+    fn request_headers_reject_invalid_names_and_values() {
+        assert!(build_header_map(&[("User-Agent".to_string(), "bulibuli".to_string())]).is_ok());
+        assert!(build_header_map(&[("bad header".to_string(), "value".to_string())]).is_err());
+        assert!(build_header_map(&[("X-Test".to_string(), "line\nfeed".to_string())]).is_err());
+    }
+
+    #[tokio::test]
+    async fn finalize_checks_expected_file_size() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("payload.bin");
+        tokio::fs::write(&target, b"abc")
+            .await
+            .expect("write payload");
+        assert_eq!(finalize(&target, Some(3)).await.expect("matching size"), 3);
+        assert!(finalize(&target, Some(4)).await.is_err());
+    }
+}

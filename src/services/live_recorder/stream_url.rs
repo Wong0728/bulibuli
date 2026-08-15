@@ -4,6 +4,7 @@
 //! 过期后 CDN 返回 403。录制服务需要在过期前主动刷新。
 
 use anyhow::{anyhow, Result};
+#[cfg(test)]
 use tracing::debug;
 
 /// 从流 URL 中提取 `expires` 参数的值（Unix 时间戳）。
@@ -71,7 +72,7 @@ pub fn select_stream_candidates(
     Ok(sorted)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn select_best_stream(
     durl: &[crate::services::bili_api::models::live::LiveStreamUrl],
 ) -> Result<crate::services::bili_api::models::live::LiveStreamUrl> {

@@ -1,5 +1,6 @@
 use crate::services::audit_log::AuditEvent;
 use crate::services::auth::SessionAuth;
+use crate::services::file_safety::validate_uid;
 use anyhow::Result;
 use socketioxide::{
     extract::{Data, SocketRef},
@@ -57,7 +58,15 @@ impl WebSocketManager {
             s.on(
                 "blogger:logs:subscribe",
                 move |s: SocketRef, Data(data): Data<serde_json::Value>| async move {
-                    if let Some(uid) = data.get("uid").and_then(|v| v.as_str()) {
+                    if let Some(raw_uid) = data.get("uid").and_then(|v| v.as_str()) {
+                        let uid = match validate_uid(raw_uid) {
+                            Ok(uid) => uid,
+                            Err(error) => {
+                                warn!("[WebSocket] 拒绝无效博主 UID {raw_uid:?}: {error}");
+                                return;
+                            }
+                        };
+                        let uid = uid.as_str();
                         let room = format!("blogger:{uid}");
                         s.join(room);
                         if let Err(e) = s.emit(
@@ -97,7 +106,15 @@ impl WebSocketManager {
             s.on(
                 "blogger:logs:unsubscribe",
                 move |s: SocketRef, Data(data): Data<serde_json::Value>| async move {
-                    if let Some(uid) = data.get("uid").and_then(|v| v.as_str()) {
+                    if let Some(raw_uid) = data.get("uid").and_then(|v| v.as_str()) {
+                        let uid = match validate_uid(raw_uid) {
+                            Ok(uid) => uid,
+                            Err(error) => {
+                                warn!("[WebSocket] 拒绝取消无效博主 UID {raw_uid:?}: {error}");
+                                return;
+                            }
+                        };
+                        let uid = uid.as_str();
                         s.leave(format!("blogger:{uid}"));
                         info!("[WebSocket] 客户端 {} 取消订阅博主日志 uid={}", s.id, uid);
                     } else {

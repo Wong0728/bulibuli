@@ -1,4 +1,4 @@
-//! 下载完成处理：完成防抖闸门、MD5 去重归位、历史落库与封面下载。
+//! 下载完成处理：完成防抖闸门、SHA-256 去重归位、历史落库与封面下载。
 //!
 //! 由 `monitor` 的轮询循环在 aria2 报告 `complete` 时调用。
 
@@ -20,7 +20,7 @@ pub(super) enum CompleteOutcome {
 }
 
 impl DownloadManager {
-    /// 处理单个 aria2 `complete` 任务：闸门判定 → MD5 去重 → 补写展示字段 →
+    /// 处理单个 aria2 `complete` 任务：闸门判定 → SHA-256 去重 → 补写展示字段 →
     /// 写历史 → 记日志 → 下封面 → 广播进度。
     pub(super) async fn handle_complete(
         &self,
@@ -57,7 +57,7 @@ impl DownloadManager {
             "下载完成"
         );
 
-        // 获取下载目录与 UP 主 UID（用于 MD5 去重与历史记录）。
+        // 获取下载目录与 UP 主 UID（用于 SHA-256 去重与历史记录）。
         let uid = self.get_blogger_uid_from_history(&task.bvid).await;
         let dir = self.task_download_dir(task).await;
         // 文件名词根：单P为 bvid，多P为 `{bvid}_p{page}`，用于去重扫描与临时文件命名。
@@ -72,7 +72,7 @@ impl DownloadManager {
             status.filename.clone()
         };
 
-        // 判断是否为 .downloading 临时文件：触发 MD5 去重流程
+        // 判断是否为 .downloading 临时文件：触发 SHA-256 去重流程
         let (final_filename, dedupe_message) = if let Some(base_name) =
             aria2_filename.strip_suffix(".downloading")
         {
@@ -83,13 +83,13 @@ impl DownloadManager {
             {
                 Ok(result) => (result.final_filename, Some(result.message)),
                 Err(e) => {
-                    error!("MD5 去重失败 {}: {e}", task.bvid);
+                    error!("SHA-256 去重失败 {}: {e}", task.bvid);
                     if let Err(error) = tokio::fs::rename(&temp_path, dir.join(base_name)).await {
                         warn!("归位 aria2 临时文件失败: {error}");
                     }
                     (
                         base_name.to_string(),
-                        Some(format!("MD5 去重失败，已保留文件: {e}")),
+                        Some(format!("SHA-256 去重失败，已保留文件: {e}")),
                     )
                 }
             }

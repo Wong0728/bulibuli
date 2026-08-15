@@ -261,22 +261,23 @@ pub async fn atomic_replace(temp: &Path, target: &Path) -> AppResult<()> {
     }
 }
 
-/// 流式分块计算文件 MD5，避免整文件读入内存（数 GB 视频会打爆内存峰值）。
-/// 供 verify worker / history MD5 回填 / 下载去重共用。
-pub async fn stream_file_md5(path: &Path) -> AppResult<String> {
+/// 流式分块计算文件 SHA-256，避免整文件读入内存（数 GB 视频会打爆内存峰值）。
+/// 供 verify worker / history 回填 / 下载去重共用。
+pub async fn stream_file_sha256(path: &Path) -> AppResult<String> {
+    use sha2::{Digest, Sha256};
     use tokio::io::AsyncReadExt;
     const CHUNK_SIZE: usize = 512 * 1024;
     let mut file = tokio::fs::File::open(path).await?;
-    let mut context = md5::Context::new();
+    let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; CHUNK_SIZE];
     loop {
         let read = file.read(&mut buffer).await?;
         if read == 0 {
             break;
         }
-        context.consume(&buffer[..read]);
+        hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", context.compute()))
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 pub async fn ensure_disk_space(path: &Path, expected_bytes: Option<u64>) -> AppResult<()> {
@@ -361,13 +362,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_md5_matches_full_read_digest() {
+    async fn stream_sha256_matches_full_read_digest() {
+        use sha2::{Digest, Sha256};
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("blob.bin");
-        let payload: Vec<u8> = (0..1_000_000u32).map(|i| (i % 251) as u8).collect();
-        tokio::fs::write(&path, &payload).await.expect("write blob");
-        let streamed = stream_file_md5(&path).await.expect("stream md5");
-        assert_eq!(streamed, format!("{:x}", md5::compute(&payload)));
+        let payload = b"streamed sha256";
+        tokio::fs::write(&path, payload).await.expect("write blob");
+        let mut hasher = Sha256::new();
+        hasher.update(payload);
+        let expected = format!("{:x}", hasher.finalize());
+        assert_eq!(
+            stream_file_sha256(&path).await.expect("stream sha256"),
+            expected
+        );
     }
 
     #[tokio::test]

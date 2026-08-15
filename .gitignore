@@ -4,12 +4,17 @@
 /static/js/node_modules/
 /data/
 /test-results/
+/static/js/test-results/
 /playwright-report/
 *.trace.zip
 /__pycache__/
 *.py[cod]
 clippy_output*.txt
 .codex_*
+
+# Local collector credentials and generated Python bytecode.
+/tools/.cookie_cache
+/tools/__pycache__/
 
 # Local-only developer notes. Never commit or publish this directory.
 /docs/developer/

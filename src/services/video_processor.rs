@@ -62,3 +62,38 @@ impl VideoProcessor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ffmpeg_duration_and_rejects_malformed_input() {
+        assert_eq!(
+            VideoProcessor::parse_duration("01:02:03.5").unwrap(),
+            3723.5
+        );
+        assert!(VideoProcessor::parse_duration("not-a-duration").is_err());
+        assert!(VideoProcessor::parse_duration("01:02").is_err());
+    }
+
+    #[test]
+    fn extracts_progress_time_and_keeps_utf8_tail_safe() {
+        assert_eq!(
+            VideoProcessor::extract_time("frame=1 time=00:00:02.50 speed=1x"),
+            Some(2.5)
+        );
+        assert_eq!(VideoProcessor::extract_time("frame=1"), None);
+        let text = "处理失败：文件名含中文";
+        assert_eq!(VideoProcessor::tail_on_char_boundary(text, 6), "中文");
+    }
+
+    #[test]
+    fn temporary_merge_output_stays_next_to_final_output() {
+        let output = PathBuf::from("downloads/video.mp4");
+        assert_eq!(
+            VideoProcessor::temp_output_path(&output),
+            PathBuf::from("downloads/video.mp4.tmp")
+        );
+    }
+}

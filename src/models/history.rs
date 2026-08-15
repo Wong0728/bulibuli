@@ -43,11 +43,16 @@ pub struct Model {
     /// 疑似重投：指向老 bvid（纯提示，不自动重下）
     #[sea_orm(nullable)]
     pub reupload_of: Option<String>,
-    /// 文件 MD5（on_completion / periodic 校验后写入）
+    /// 旧版文件 MD5，仅为 API 和历史数据库兼容保留；本地完整性校验使用 sha256。
     #[sea_orm(nullable)]
     pub md5: Option<String>,
-    /// MD5 上次校验时间
+    /// 旧版 MD5 上次校验时间
     pub md5_last_checked_at: Option<DateTime<Local>>,
+    /// 文件 SHA-256（on_completion / periodic 校验后写入）
+    #[sea_orm(nullable)]
+    pub sha256: Option<String>,
+    /// SHA-256 上次校验时间
+    pub sha256_last_checked_at: Option<DateTime<Local>>,
     /// view 字段上次刷新时间（L1 worker）
     pub view_refreshed_at: Option<DateTime<Local>>,
     /// view 来源：snapshot（入库时一次性）/ live（L1 worker 刷新）
@@ -111,6 +116,8 @@ impl Model {
             "reupload_of": self.reupload_of,
             "md5": self.md5,
             "md5_last_checked_at": self.md5_last_checked_at.map(|t| t.to_rfc3339()),
+            "sha256": self.sha256,
+            "sha256_last_checked_at": self.sha256_last_checked_at.map(|t| t.to_rfc3339()),
             "view_refreshed_at": self.view_refreshed_at.map(|t| t.to_rfc3339()),
             "view_source": self.view_source,
             "burned_danmaku": self.burned_danmaku.unwrap_or(false),

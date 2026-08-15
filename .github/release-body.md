@@ -3,6 +3,7 @@
 | 平台 / 场景 | 推荐下载 | 用途与启动方式 |
 | --- | --- | --- |
 | Windows x86_64 | [portable 完整包](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-windows-x86_64-portable-__TAG__.zip) · [SHA-256](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-windows-x86_64-portable-__TAG__.zip.sha256) | 解压后运行 `bulibuli.exe`；不需要另外安装 Rust、Node.js、aria2 或 FFmpeg。 |
+| Windows x86_64（已有运行时） | [core 轻量包](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-windows-x86_64-core-__TAG__.zip) · [SHA-256](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-windows-x86_64-core-__TAG__.zip.sha256) | 不含 aria2c/FFmpeg；适合本机已有并通过自检的运行时，或使用 Windows 一键安装器。 |
 | Linux x86_64（完整包） | [portable 完整包](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-linux-x86_64-portable-__TAG__.tar.gz) · [SHA-256](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-linux-x86_64-portable-__TAG__.tar.gz.sha256) | 解压后运行 `./bulibuli`，或运行 `./install.sh run`；适合本机没有 aria2c/FFmpeg 的用户。 |
 | Linux x86_64（已有运行时） | [core 轻量包](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-linux-x86_64-core-__TAG__.tar.gz) · [SHA-256](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-linux-x86_64-core-__TAG__.tar.gz.sha256) | 不含 aria2c/FFmpeg；适合本机已有这两个程序，或使用下面的一键安装器。 |
 | macOS Intel | [portable 完整包](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-macos-x86_64-portable-__TAG__.tar.gz) · [SHA-256](https://github.com/Wong0728/bulibuli/releases/download/__TAG__/bulibuli-macos-x86_64-portable-__TAG__.tar.gz.sha256) | Apple Intel Mac 解压后运行 `./bulibuli`。 |
@@ -40,5 +41,6 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux
 
 - 每个归档旁边的 `.sha256` 文件用于校验下载完整性。
 - `portable` 是 GitHub 页面上推荐的完整自包含包。
-- `core` 只提供 Linux 轻量命令包，用于复用本机运行时，不能替代没有依赖时的完整包。
+- `core` 提供 Windows/Linux 轻量命令包，用于复用本机运行时；目标平台没有 core 资产时，安装器会回退到完整包。
+- 安装器默认读取 Release 的 `latest.json`，当前只有 Alpha 时会回退读取预发布清单；需要离线或可复现安装时，请显式指定版本。
 - 详细变更记录见 [CHANGELOG.md](https://github.com/Wong0728/bulibuli/blob/__TAG__/CHANGELOG.md)。

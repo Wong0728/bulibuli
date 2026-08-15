@@ -3,6 +3,7 @@
 :root {
     --brand: #fb7299;
     --brand-hover: #e85a89;
+    --brand-soft: #fff0f3;
     --bg: #f7f8fa;
     --surface: #ffffff;
     --border: #e5e6eb;
@@ -17,6 +18,13 @@
     --warning-text: #8a4b00;
     --info: #165dff;
     --info-text: #175cd3;
+    --color-white: #fff;
+    --surface-info: #f0f7ff;
+    --surface-muted: #f9f9f9;
+    --surface-subtle: #f9f9fb;
+    --surface-code: #1e1e2e;
+    --text-code: #cdd6f4;
+    --divider: #f0f1f5;
     --radius-sm: 4px;
     --radius-md: 6px;
     --radius-lg: 8px;
@@ -109,12 +117,12 @@ body {
 
 .step.active .step-number {
     background: var(--brand);
-    color: #fff;
+    color: var(--color-white);
 }
 
 .step.completed .step-number {
     background: var(--success);
-    color: #fff;
+    color: var(--color-white);
 }
 
 .step-label {
@@ -178,7 +186,7 @@ body {
 
 .scene-card.selected {
     border-color: var(--brand);
-    background: #fff0f3;
+    background: var(--brand-soft);
 }
 
 .scene-icon {
@@ -221,7 +229,7 @@ body {
     align-items: flex-start;
     gap: 0.75rem;
     padding: 1rem;
-    background: #f0f7ff;
+    background: var(--surface-info);
     border-radius: var(--radius-md);
     margin: 1rem 0;
 }
@@ -274,7 +282,7 @@ body {
 .detected-ips {
     margin-top: 1rem;
     padding: 0.75rem 1rem;
-    background: #f9f9f9;
+    background: var(--surface-muted);
     border-radius: var(--radius-md);
     font-size: 0.85rem;
 }
@@ -297,8 +305,8 @@ body {
 }
 
 .caddy-config pre {
-    background: #1e1e2e;
-    color: #cdd6f4;
+    background: var(--surface-code);
+    color: var(--text-code);
     padding: 1rem;
     border-radius: var(--radius-md);
     font-family: var(--font-mono);
@@ -329,7 +337,7 @@ body {
 
 .btn-primary {
     background: var(--brand);
-    color: #fff;
+    color: var(--color-white);
     border-color: var(--brand);
 }
 
@@ -400,7 +408,7 @@ body {
     width: 18px;
     left: 3px;
     bottom: 3px;
-    background: #fff;
+    background: var(--color-white);
     border-radius: 50%;
     transition: transform var(--transition-fast);
 }
@@ -417,7 +425,7 @@ input:checked + .slider::before {
 .ai-skill-section {
     margin-top: 1.5rem;
     padding: 1.25rem;
-    background: #f9f9fb;
+    background: var(--surface-subtle);
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
 }
@@ -440,7 +448,7 @@ input:checked + .slider::before {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    background: #f0f1f5;
+    background: var(--divider);
     padding: 0.5rem 0.75rem;
     border-radius: var(--radius-md);
     margin: 0.5rem 0;

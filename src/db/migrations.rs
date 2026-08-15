@@ -121,6 +121,8 @@ mod tests {
             "auto_burn_next_retry_at",
             "sidecar_attempts",
             "next_sidecar_at",
+            "sha256",
+            "sha256_last_checked_at",
             "version",
         ] {
             assert!(

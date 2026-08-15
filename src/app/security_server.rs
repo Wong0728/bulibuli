@@ -556,7 +556,7 @@ fn add_security_headers(response: &mut Response, path: &str) {
         // connect-src 仅允许同源（Socket.IO/WebSocket 均同源），不开放裸 wss:，
         // 防止页面连接到任意主机。
         HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         ),
     );
     if is_static_asset(path) {

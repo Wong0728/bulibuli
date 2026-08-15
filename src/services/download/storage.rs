@@ -1,4 +1,4 @@
-//! 下载目录派生与文件归位：目录模板渲染、任务目录回退与 MD5 去重。
+//! 下载目录派生与文件归位：目录模板渲染、任务目录回退与 SHA-256 去重。
 
 use crate::models::{download_task, history};
 use crate::services::file_safety::{
@@ -150,12 +150,12 @@ impl DownloadManager {
         self.download_dir(uid.as_deref()).await
     }
 
-    /// MD5 去重 + 文件归位：
-    /// - 计算临时文件 `temp_path` 的 MD5
+    /// SHA-256 去重 + 文件归位：
+    /// - 计算临时文件 `temp_path` 的 SHA-256
     /// - 扫描同目录下所有 `{stem}*.{ext}` 文件（排除 .downloading）
     /// - 若无匹配文件：重命名为 `original_name`（首次下载）
-    /// - 若有匹配文件且任一 MD5 相同：删除临时文件，返回"内容未变更"
-    /// - 若有匹配文件但 MD5 都不同：重命名为 `{stem}_{YYYYMMDD_HHMMSS}.{ext}`
+    /// - 若有匹配文件且任一 SHA-256 相同：删除临时文件，返回"内容未变更"
+    /// - 若有匹配文件但 SHA-256 都不同：重命名为 `{stem}_{YYYYMMDD_HHMMSS}.{ext}`
     ///
     /// `stem` 单P为 bvid（存量行为不变），多P为 `{bvid}_p{page}`，用于隔离同 bvid 不同分P的文件。
     pub(super) async fn dedupe_and_finalize_file(
@@ -177,10 +177,10 @@ impl DownloadManager {
             .parent()
             .ok_or_else(|| anyhow!("无法获取临时文件父目录"))?;
 
-        // 计算临时文件 MD5（流式分块，避免大文件打爆内存）
+        // 计算临时文件 SHA-256（流式分块，避免大文件打爆内存）
         let temp_size = tokio::fs::metadata(temp_path).await?.len();
-        let temp_md5 = crate::services::file_safety::stream_file_md5(temp_path).await?;
-        info!("[MD5去重] {} 临时文件 MD5: {}", bvid, temp_md5);
+        let temp_sha256 = crate::services::file_safety::stream_file_sha256(temp_path).await?;
+        info!("[SHA-256去重] {} 临时文件 SHA-256: {}", bvid, temp_sha256);
 
         // 提取扩展名（task_type 决定：video→m4s, audio→m4a）
         let ext = if task_type == "audio" { "m4a" } else { "m4s" };
@@ -221,7 +221,7 @@ impl DownloadManager {
             let final_path = dir.join(original_name);
             atomic_replace(temp_path, &final_path).await?;
             info!(
-                "[MD5去重] {} 无已存在文件，重命名为 {}",
+                "[SHA-256去重] {} 无已存在文件，重命名为 {}",
                 bvid, original_name
             );
             return Ok(DedupeResult {
@@ -237,44 +237,47 @@ impl DownloadManager {
             .ok()
             .flatten();
 
-        // 比对已存在文件的 MD5
+        // 比对已存在文件的 SHA-256
         for (name, path) in &existing_files {
             match tokio::fs::metadata(path).await {
                 Ok(metadata) if metadata.len() != temp_size => continue,
                 Ok(_) => {}
                 Err(error) => {
-                    warn!("[MD5去重] 读取已存在文件大小失败 {}: {error}", name);
+                    warn!("[SHA-256去重] 读取已存在文件大小失败 {}: {error}", name);
                     continue;
                 }
             }
-            let cached_md5 = cached_history.as_ref().and_then(|history| {
+            let cached_sha256 = cached_history.as_ref().and_then(|history| {
                 let same_file = history
                     .file_path
                     .as_deref()
                     .is_some_and(|cached_path| Path::new(cached_path) == path);
                 if same_file {
-                    history.md5.clone()
+                    history.sha256.clone()
                 } else {
                     None
                 }
             });
-            let existing_md5 = if let Some(cached_md5) = cached_md5 {
-                cached_md5
+            let existing_sha256 = if let Some(cached_sha256) = cached_sha256 {
+                cached_sha256
             } else {
-                match crate::services::file_safety::stream_file_md5(path).await {
+                match crate::services::file_safety::stream_file_sha256(path).await {
                     Ok(digest) => digest,
                     Err(e) => {
-                        warn!("[MD5去重] 读取已存在文件失败 {}: {e}", name);
+                        warn!("[SHA-256去重] 读取已存在文件失败 {}: {e}", name);
                         continue;
                     }
                 }
             };
-            if existing_md5 == temp_md5 {
+            if existing_sha256 == temp_sha256 {
                 // 内容相同：删除临时文件，保留原文件
                 if let Err(error) = tokio::fs::remove_file(temp_path).await {
                     warn!("清理去重临时文件失败: {error}");
                 }
-                info!("[MD5去重] {} 内容未变更（MD5 一致），删除临时文件", bvid);
+                info!(
+                    "[SHA-256去重] {} 内容未变更（SHA-256 一致），删除临时文件",
+                    bvid
+                );
                 return Ok(DedupeResult {
                     final_filename: name.clone(),
                     message: "内容未变更，跳过保存".to_string(),
@@ -314,7 +317,7 @@ impl DownloadManager {
         let new_path = dir.join(&new_name);
         atomic_replace(temp_path, &new_path).await?;
         info!(
-            "[MD5去重] {} 检测到内容变化，保留为新版本: {}",
+            "[SHA-256去重] {} 检测到内容变化，保留为新版本: {}",
             bvid, new_name
         );
         Ok(DedupeResult {

@@ -16,6 +16,13 @@
     --border: #e5e6eb;
     --text: #1d2129;
     --text-secondary: #4e5969;
+    --text-code-muted: #bdc1cb;
+    --error: #f53f3f;
+    --success: #00b578;
+    --color-white: #fff;
+    --shadow-card: 0 12px 32px rgba(0, 0, 0, 0.05);
+    --shadow-brand: 0 4px 12px rgba(251, 114, 153, 0.3);
+    --border-on-brand: 2px solid rgba(255, 255, 255, 0.3);
     --radius-lg: 12px;
     --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
 }
@@ -109,7 +116,7 @@ body {
     border: 1px solid var(--border);
     border-radius: 24px;
     padding: 40px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.05);
+    box-shadow: var(--shadow-card);
     text-align: center;
     animation: containerBreathe 6s infinite ease-in-out;
 }
@@ -157,11 +164,11 @@ h1 {
 }
 
 .hint.is-error {
-    color: #f53f3f;
+    color: var(--error);
 }
 
 .hint.is-success {
-    color: #00b578;
+    color: var(--success);
 }
 
 /* --- 输入框 --- */
@@ -188,7 +195,7 @@ h1 {
 
 .pairing-input:focus {
     border-color: var(--brand);
-    background: #fff;
+    background: var(--color-white);
     box-shadow: 0 0 0 4px var(--brand-soft);
 }
 
@@ -198,7 +205,7 @@ h1 {
     font-size: 24px;
     font-weight: 500;
     letter-spacing: 4px;
-    color: #bdc1cb;
+    color: var(--text-code-muted);
 }
 
 .pairing-input:disabled {
@@ -227,7 +234,7 @@ h1 {
 .btn-submit:hover:not(:disabled) {
     background: var(--brand-hover);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(251, 114, 153, 0.3);
+    box-shadow: var(--shadow-brand);
 }
 
 .btn-submit:active {
@@ -240,15 +247,15 @@ h1 {
 }
 
 .btn-submit.is-success {
-    background: #00b578;
+    background: var(--success);
     opacity: 1;
 }
 
 .loading-spinner {
     width: 20px;
     height: 20px;
-    border: 2px solid rgba(255,255,255,0.3);
-    border-top-color: #fff;
+    border: var(--border-on-brand);
+    border-top-color: var(--color-white);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     display: none;

@@ -207,3 +207,37 @@ fn is_valid_bvid(bvid: &str) -> bool {
     rest.chars()
         .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_keys_and_file_stems_keep_pages_isolated() {
+        assert_eq!(task_cache_key("BV1xx411c7mD", None), "BV1xx411c7mD");
+        assert_eq!(task_cache_key("BV1xx411c7mD", Some(99)), "BV1xx411c7mD#99");
+        assert_eq!(
+            backoff_key("BV1xx411c7mD", Some(99), "video"),
+            "BV1xx411c7mD#99_video"
+        );
+        assert_eq!(file_stem_for("BV1xx411c7mD", None), "BV1xx411c7mD");
+        assert_eq!(file_stem_for("BV1xx411c7mD", Some(2)), "BV1xx411c7mD_p2");
+    }
+
+    #[test]
+    fn bvid_validation_rejects_path_like_and_ambiguous_values() {
+        assert!(is_valid_bvid("BV1xx411c7mD"));
+        assert!(!is_valid_bvid("../etc/passwd"));
+        assert!(!is_valid_bvid("BV1xx411c7m0D"));
+        assert!(!is_valid_bvid("bv1xx411c7mD"));
+    }
+
+    #[test]
+    fn task_outcomes_preserve_acceptance_contract() {
+        let accepted = TaskOutcome::accepted("queued", 7);
+        assert!(accepted.ok);
+        assert_eq!(accepted.download_id, Some(7));
+        assert!(TaskOutcome::done("done").ok);
+        assert!(!TaskOutcome::rejected("duplicate").ok);
+    }
+}

@@ -78,3 +78,44 @@ pub(super) async fn update_auto_burn_state(
     model.update(db).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_windows_are_bounded() {
+        let now = Local::now();
+        let burn = auto_burn_retry_at(99)
+            .signed_duration_since(now)
+            .num_seconds();
+        let sidecar = sidecar_retry_at(99)
+            .signed_duration_since(now)
+            .num_seconds();
+        assert!((1918..=1921).contains(&burn));
+        assert!((7198..=7201).contains(&sidecar));
+    }
+
+    #[tokio::test]
+    async fn missing_burn_materials_accepts_any_supported_sidecar() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let video = dir.path().join("BV1xx411c7mD.mp4");
+        tokio::fs::write(&video, b"video").await.expect("video");
+
+        let missing = missing_burn_materials(&video, "BV1xx411c7mD", true, true).await;
+        assert_eq!(missing, vec!["弹幕", "字幕"]);
+
+        tokio::fs::write(dir.path().join("BV1xx411c7mD_danmaku.json"), b"{}")
+            .await
+            .expect("danmaku");
+        tokio::fs::create_dir_all(dir.path().join("subtitle"))
+            .await
+            .expect("subtitle dir");
+        tokio::fs::write(dir.path().join("subtitle/BV1xx411c7mD.srt"), b"1")
+            .await
+            .expect("subtitle");
+        assert!(missing_burn_materials(&video, "BV1xx411c7mD", true, true)
+            .await
+            .is_empty());
+    }
+}

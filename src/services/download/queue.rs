@@ -148,7 +148,7 @@ impl DownloadManager {
                 let filename = existing.filename.as_deref().unwrap_or(&default_filename);
                 if dir.join(filename).exists() {
                     // 下载到 .downloading 临时文件，完成后由 monitor_loop
-                    // 调用 dedupe_and_finalize_file 进行 MD5 比对，避免覆盖原文件。
+                    // 调用 dedupe_and_finalize_file 进行 SHA-256 比对，避免覆盖原文件。
                     let temp_filename = format!("{stem}.{default_ext}.downloading");
                     return self
                         .reset_and_dispatch_existing_task(
@@ -161,7 +161,7 @@ impl DownloadManager {
                             &dir,
                             temp_filename,
                             true,
-                            "已重新添加到下载队列（将进行 MD5 去重比对）",
+                            "已重新添加到下载队列（将进行 SHA-256 去重比对）",
                         )
                         .await;
                 }

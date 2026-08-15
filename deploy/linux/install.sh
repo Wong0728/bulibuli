@@ -11,6 +11,7 @@
 set -euo pipefail
 
 APP_SLUG="bulibuli"
+PACKAGE_MANIFEST_NAME="bulibuli.package.json"
 APP_VERSION="${BULIBULI_VERSION:-latest}"
 if [ "${APP_VERSION}" != "latest" ]; then
     [[ "${APP_VERSION}" == v* ]] || APP_VERSION="v${APP_VERSION}"
@@ -32,6 +33,7 @@ MODE=""
 REMOTE_BOOTSTRAP=0
 TEMP_DIR=""
 REMOTE_VARIANT="portable"
+LOCAL_RUNTIME_DIR=""
 
 log()  { printf '\033[32m[bulibuli]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[warn]\033[0m %s\n' "$*"; }
@@ -69,10 +71,56 @@ download_text() {
 
 resolve_latest_version() {
     local tag
-    tag="$(download_text "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    tag="$(download_text "https://github.com/${REPO}/releases/latest/download/latest.json" 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+    if ! [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+        command -v python3 >/dev/null 2>&1 || die "找不到 latest.json，且系统没有 python3 读取预发布 Release；请用 BULIBULI_VERSION=vX.Y.Z 固定版本重试"
+        tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null | python3 -c 'import json,sys; releases=json.load(sys.stdin); print(next((item.get("tag_name", "") for item in releases if not item.get("draft")), ""))' || true)"
+    fi
     [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || \
-        die "无法从 GitHub Releases 解析最新版本；请用 BULIBULI_VERSION=vX.Y.Z 固定版本重试"
+        die "无法读取 Release 发布清单；请用 BULIBULI_VERSION=vX.Y.Z 固定版本重试"
     printf '%s\n' "${tag}"
+}
+
+verify_package_manifest() {
+    local package_dir="$1"
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 - "${package_dir}" "${PACKAGE_MANIFEST_NAME}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+manifest_path = root / sys.argv[2]
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+if manifest.get("schema_version") != 1 or manifest.get("platform") != "linux":
+    raise SystemExit(1)
+if not (root / "bulibuli").is_file() or not (root / "static" / "index.html").is_file():
+    raise SystemExit(1)
+arch = "x86_64" if pathlib.Path("/bin/sh").exists() and __import__("platform").machine().lower() in {"x86_64", "amd64"} else None
+if arch and manifest.get("architecture") != arch:
+    raise SystemExit(1)
+for entry in manifest.get("files", []):
+    relative = pathlib.PurePosixPath(str(entry["path"]))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise SystemExit(1)
+    file_path = root.joinpath(*relative.parts).resolve()
+    if root not in file_path.parents or not file_path.is_file():
+        raise SystemExit(1)
+    digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    if digest.lower() != str(entry.get("sha256", "")).lower():
+        raise SystemExit(1)
+print(manifest["app_version"])
+PY
+}
+
+package_runtime_available() {
+    local package_dir="$1"
+    local aria2="${package_dir}/resources/aria2c"
+    local ffmpeg="${package_dir}/resources/ffmpeg"
+    [ -x "${aria2}" ] && [ -x "${ffmpeg}" ] || return 1
+    "${aria2}" -v >/dev/null 2>&1 || return 1
+    "${ffmpeg}" -version >/dev/null 2>&1 || return 1
 }
 
 verify_checksum() {
@@ -150,6 +198,9 @@ external_ffprobe_path() {
 
 runtime_available() {
     local aria2_path ffmpeg_path ffprobe_path
+    if [ -n "${LOCAL_RUNTIME_DIR}" ] && package_runtime_available "${LOCAL_RUNTIME_DIR}"; then
+        return 0
+    fi
     aria2_path="$(external_aria2_path)"
     ffmpeg_path="$(external_ffmpeg_path)"
     ffprobe_path="$(external_ffprobe_path "${ffmpeg_path}")"
@@ -239,7 +290,19 @@ download_release() {
     tar -xzf "${TEMP_DIR}/${archive_name}" -C "${TEMP_DIR}/unpacked"
     APP_DIR="${TEMP_DIR}/unpacked/$(basename "${extracted}")"
     [ -f "${APP_DIR}/${BIN_NAME}" ] || die "Release 归档缺少 ${BIN_NAME}"
+    local manifest_version
+    manifest_version="$(verify_package_manifest "${APP_DIR}")"
+    [ "v${manifest_version#v}" = "${APP_VERSION}" ] || die "Release package manifest 版本不匹配"
     verify_runtime_checksums "${APP_DIR}"
+    if [ "${REMOTE_VARIANT}" = "core" ] && [ -n "${LOCAL_RUNTIME_DIR}" ]; then
+        mkdir -p "${APP_DIR}/resources"
+        for name in aria2c ffmpeg; do
+            cp -a "${LOCAL_RUNTIME_DIR}/resources/${name}" "${APP_DIR}/resources/${name}"
+            [ -f "${LOCAL_RUNTIME_DIR}/resources/${name}.sha256" ] && \
+                cp -a "${LOCAL_RUNTIME_DIR}/resources/${name}.sha256" "${APP_DIR}/resources/${name}.sha256"
+        done
+        log "已复用旧包中通过自检的运行时"
+    fi
     BIN_PATH="${APP_DIR}/${BIN_NAME}"
     MODE="release-package"
     REMOTE_BOOTSTRAP=1
@@ -263,11 +326,26 @@ verify_runtime_checksums() {
 }
 
 detect_layout() {
-    if [ -x "${SCRIPT_DIR}/${BIN_NAME}" ] && [ -f "${SCRIPT_DIR}/static/index.html" ]; then
-        APP_DIR="${SCRIPT_DIR}"
-        BIN_PATH="${SCRIPT_DIR}/${BIN_NAME}"
-        MODE="release-package"
-        return
+    if [ -x "${SCRIPT_DIR}/${BIN_NAME}" ] && [ -f "${SCRIPT_DIR}/static/index.html" ] && \
+        [ -f "${SCRIPT_DIR}/${PACKAGE_MANIFEST_NAME}" ]; then
+        local package_version=""
+        package_version="$(verify_package_manifest "${SCRIPT_DIR}" 2>/dev/null || true)"
+        local package_variant=""
+        if [ -n "${package_version}" ] && command -v python3 >/dev/null 2>&1; then
+            package_variant="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("variant", ""))' "${SCRIPT_DIR}/${PACKAGE_MANIFEST_NAME}" || true)"
+        fi
+        if [ -n "${package_version}" ] && { [ "${APP_VERSION}" = "latest" ] || [ "${APP_VERSION}" = "v${package_version#v}" ]; } && \
+            { [ "${package_variant}" = "portable" ] && package_runtime_available "${SCRIPT_DIR}" || \
+              [ "${package_variant}" = "core" ] && runtime_available; }; then
+            APP_VERSION="v${package_version#v}"
+            APP_DIR="${SCRIPT_DIR}"
+            BIN_PATH="${SCRIPT_DIR}/${BIN_NAME}"
+            MODE="release-package"
+            return
+        fi
+        if [ -n "${package_version}" ] && package_runtime_available "${SCRIPT_DIR}"; then
+            LOCAL_RUNTIME_DIR="${SCRIPT_DIR}"
+        fi
     fi
 
     local repo_root

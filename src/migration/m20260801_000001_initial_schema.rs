@@ -69,6 +69,8 @@ impl MigrationTrait for Migration {
                 reupload_of TEXT,
                 md5 TEXT,
                 md5_last_checked_at DATETIME,
+                sha256 TEXT,
+                sha256_last_checked_at DATETIME,
                 view_refreshed_at DATETIME,
                 view_source TEXT,
                 burned_danmaku BOOLEAN DEFAULT 0,
@@ -242,6 +244,10 @@ impl MigrationTrait for Migration {
         .await?;
         conn.execute_unprepared(
             "CREATE INDEX IF NOT EXISTS idx_history_md5_checked ON history(md5_last_checked_at)",
+        )
+        .await?;
+        conn.execute_unprepared(
+            "CREATE INDEX IF NOT EXISTS idx_history_sha256_checked ON history(sha256_last_checked_at)",
         )
         .await?;
         conn.execute_unprepared(

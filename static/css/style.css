@@ -52,72 +52,72 @@
     --transition-normal: 250ms ease;
 
     /* 设计令牌：原始值集中定义在 :root。 */
-    --color-token-1: #00a1d6;
-    --color-token-2: #1a1d24;
-    --color-token-3: #22c55e;
-    --color-token-4: #2f323a;
-    --color-token-5: #333;
-    --color-token-6: #5b8ff9;
-    --color-token-7: #61666d;
-    --color-token-8: #666;
-    --color-token-9: #6b7280;
-    --color-token-10: #888;
-    --color-token-11: #999;
-    --color-token-12: #9ca3af;
-    --color-token-13: #a78bfa;
-    --color-token-14: #c9cdd4;
-    --color-token-15: #dc2626;
-    --color-token-16: #ddd;
-    --color-token-17: #e5e7eb;
-    --color-token-18: #eee;
-    --color-token-19: #ef4444;
-    --color-token-20: #f0f0f0;
-    --color-token-21: #f3f4f6;
-    --color-token-22: #f59e0b;
-    --color-token-23: #f5f5f5;
-    --color-token-24: #f9f9f9;
-    --color-token-25: #ff9a9e;
-    --color-token-26: #fff;
-    --color-token-27: rgba(0, 0, 0, 0.06);
-    --color-token-28: rgba(0, 0, 0, 0.1);
-    --color-token-29: rgba(0, 0, 0, 0.12);
-    --color-token-30: rgba(0, 0, 0, 0.35);
-    --color-token-31: rgba(0, 0, 0, 0.4);
-    --color-token-32: rgba(0, 0, 0, 0.72);
-    --color-token-33: rgba(0, 0, 0, 0.75);
-    --color-token-34: rgba(0, 0, 0, 0.8);
-    --color-token-35: rgba(0, 161, 214, 0.1);
-    --color-token-36: rgba(0, 161, 214, 0.2);
-    --color-token-37: rgba(0, 181, 120, 0.06);
-    --color-token-38: rgba(0, 181, 120, 0.1);
-    --color-token-39: rgba(0, 181, 120, 0.3);
-    --color-token-40: rgba(0, 181, 120, 0.9);
-    --color-token-41: rgba(0,0,0,0.04);
-    --color-token-42: rgba(0,0,0,0.08);
-    --color-token-43: rgba(134, 154, 172, 0.9);
-    --color-token-44: rgba(148, 153, 160, 0.9);
-    --color-token-45: rgba(239, 68, 68, 0.08);
-    --color-token-46: rgba(239, 68, 68, 0.3);
-    --color-token-47: rgba(245, 158, 11, 0.08);
-    --color-token-48: rgba(245, 158, 11, 0.1);
-    --color-token-49: rgba(245, 158, 11, 0.9);
-    --color-token-50: rgba(245, 63, 63, 0.06);
-    --color-token-51: rgba(245, 63, 63, 0.1);
-    --color-token-52: rgba(245, 63, 63, 0.18);
-    --color-token-53: rgba(245, 63, 63, 0.3);
-    --color-token-54: rgba(245, 63, 63, 0.35);
-    --color-token-55: rgba(245, 63, 63, 0.9);
-    --color-token-56: rgba(251, 114, 153, 0.1);
-    --color-token-57: rgba(251, 114, 153, 0.12);
-    --color-token-58: rgba(251, 114, 153, 0.2);
-    --color-token-59: rgba(251, 114, 153, 0.3);
-    --color-token-60: rgba(251, 114, 153, 0.9);
-    --color-token-61: rgba(255, 125, 0, 0.06);
-    --color-token-62: rgba(255, 125, 0, 0.3);
-    --color-token-63: rgba(255, 125, 0, 0.35);
-    --color-token-64: rgba(255, 255, 255, 0.3);
-    --color-token-65: rgba(255, 255, 255, 0.9);
-    --color-token-66: rgba(34, 197, 94, 0.1);
+    --color-cyan: #00a1d6;
+    --color-ink: #1a1d24;
+    --color-green: #22c55e;
+    --color-slate-dark: #2f323a;
+    --color-neutral-900: #333;
+    --color-blue: #5b8ff9;
+    --color-neutral-700: #61666d;
+    --color-neutral-600: #666;
+    --color-neutral-500: #6b7280;
+    --color-neutral-400: #888;
+    --color-neutral-300: #999;
+    --color-neutral-200: #9ca3af;
+    --color-purple: #a78bfa;
+    --color-cool-gray: #c9cdd4;
+    --color-red-600: #dc2626;
+    --color-neutral-100: #ddd;
+    --color-gray-200: #e5e7eb;
+    --color-gray-100: #eee;
+    --color-red-500: #ef4444;
+    --color-gray-050: #f0f0f0;
+    --color-gray-050-alt: #f3f4f6;
+    --color-orange: #f59e0b;
+    --color-gray-050-soft: #f5f5f5;
+    --color-gray-025: #f9f9f9;
+    --color-pink-soft: #ff9a9e;
+    --color-white: #fff;
+    --color-black-6: rgba(0, 0, 0, 0.06);
+    --color-black-10: rgba(0, 0, 0, 0.1);
+    --color-black-12: rgba(0, 0, 0, 0.12);
+    --color-black-35: rgba(0, 0, 0, 0.35);
+    --color-black-40: rgba(0, 0, 0, 0.4);
+    --color-black-72: rgba(0, 0, 0, 0.72);
+    --color-black-75: rgba(0, 0, 0, 0.75);
+    --color-black-80: rgba(0, 0, 0, 0.8);
+    --color-cyan-10: rgba(0, 161, 214, 0.1);
+    --color-cyan-20: rgba(0, 161, 214, 0.2);
+    --color-green-6: rgba(0, 181, 120, 0.06);
+    --color-green-10: rgba(0, 181, 120, 0.1);
+    --color-green-30: rgba(0, 181, 120, 0.3);
+    --color-green-90: rgba(0, 181, 120, 0.9);
+    --color-black-4: rgba(0,0,0,0.04);
+    --color-black-8: rgba(0,0,0,0.08);
+    --color-gray-blue-90: rgba(134, 154, 172, 0.9);
+    --color-gray-90: rgba(148, 153, 160, 0.9);
+    --color-red-8: rgba(239, 68, 68, 0.08);
+    --color-red-30: rgba(239, 68, 68, 0.3);
+    --color-orange-8: rgba(245, 158, 11, 0.08);
+    --color-orange-10: rgba(245, 158, 11, 0.1);
+    --color-orange-90: rgba(245, 158, 11, 0.9);
+    --color-error-6: rgba(245, 63, 63, 0.06);
+    --color-error-10: rgba(245, 63, 63, 0.1);
+    --color-error-18: rgba(245, 63, 63, 0.18);
+    --color-error-30: rgba(245, 63, 63, 0.3);
+    --color-error-35: rgba(245, 63, 63, 0.35);
+    --color-error-90: rgba(245, 63, 63, 0.9);
+    --color-brand-10: rgba(251, 114, 153, 0.1);
+    --color-brand-12: rgba(251, 114, 153, 0.12);
+    --color-brand-20: rgba(251, 114, 153, 0.2);
+    --color-brand-30: rgba(251, 114, 153, 0.3);
+    --color-brand-90: rgba(251, 114, 153, 0.9);
+    --color-orange-6: rgba(255, 125, 0, 0.06);
+    --color-orange-30: rgba(255, 125, 0, 0.3);
+    --color-orange-35: rgba(255, 125, 0, 0.35);
+    --color-white-30: rgba(255, 255, 255, 0.3);
+    --color-white-90: rgba(255, 255, 255, 0.9);
+    --color-green-bright-10: rgba(34, 197, 94, 0.1);
     --size-10: 10px;
     --size-14: 14px;
     --size-1400: 1400px;
@@ -437,8 +437,8 @@ body {
 }
 
 .server-status.connected {
-    border-color: var(--color-token-39);
-    background: var(--color-token-37);
+    border-color: var(--color-green-30);
+    background: var(--color-green-6);
     color: var(--success);
 }
 
@@ -447,8 +447,8 @@ body {
 }
 
 .server-status.connecting {
-    border-color: var(--color-token-62);
-    background: var(--color-token-61);
+    border-color: var(--color-orange-30);
+    background: var(--color-orange-6);
     color: var(--warning);
 }
 
@@ -543,8 +543,8 @@ body {
     border-radius: var(--radius-full);
     font-size: var(--size-10);
     font-weight: 600;
-    color: var(--color-token-26);
-    background: linear-gradient(135deg, var(--brand), var(--color-token-25));
+    color: var(--color-white);
+    background: linear-gradient(135deg, var(--brand), var(--color-pink-soft));
     line-height: 1.5;
 }
 
@@ -587,7 +587,7 @@ body {
 
 .login-prompt-btn:hover {
     background: var(--brand);
-    color: var(--color-token-26);
+    color: var(--color-white);
 }
 
 /* 设置页登录状态框。 */
@@ -660,7 +660,7 @@ body {
     gap: var(--size-10);
     padding: var(--size-10) var(--size-16);
     background: var(--warning-soft);
-    border: var(--size-1) solid var(--color-token-63);
+    border: var(--size-1) solid var(--color-orange-35);
     border-radius: var(--radius-lg);
     margin-bottom: var(--size-12);
     font-size: var(--size-13);
@@ -674,7 +674,10 @@ body {
     font-size: var(--size-15);
 }
 
-.cookie-warning-banner a {
+.cookie-warning-settings-link {
+    padding: 0;
+    border: none;
+    background: none;
     color: var(--brand);
     text-decoration: underline;
     font-weight: 500;
@@ -682,7 +685,7 @@ body {
     white-space: nowrap;
 }
 
-.cookie-warning-banner a:hover {
+.cookie-warning-settings-link:hover {
     color: var(--brand-hover);
 }
 
@@ -710,7 +713,7 @@ body {
     gap: var(--size-8);
     padding: var(--size-10) var(--size-16);
     background: var(--error-soft);
-    border: var(--size-1) solid var(--color-token-54);
+    border: var(--size-1) solid var(--color-error-35);
     border-radius: var(--radius-lg);
     margin-bottom: var(--size-12);
     font-size: var(--size-13);
@@ -1260,22 +1263,22 @@ select.blogger-select option[value=""] {
 .btn-primary {
     background: var(--brand);
     border-color: var(--brand);
-    color: var(--color-token-26);
+    color: var(--color-white);
 }
 
 .btn-primary:hover:not(:disabled) {
     background: var(--brand-hover);
     border-color: var(--brand-hover);
-    color: var(--color-token-26);
+    color: var(--color-white);
 }
 
 .btn-danger {
     color: var(--error);
-    border-color: var(--color-token-53);
+    border-color: var(--color-error-30);
 }
 
 .btn-danger:hover:not(:disabled) {
-    background: var(--color-token-50);
+    background: var(--color-error-6);
     border-color: var(--error);
 }
 
@@ -1503,8 +1506,8 @@ input:checked + .slider:before {
 /* 日志容器。 */
 .log-container,
 .blogger-logs-panel {
-    background: var(--color-token-2);
-    color: var(--color-token-14);
+    background: var(--color-ink);
+    color: var(--color-cool-gray);
     padding: var(--size-14);
     border-radius: var(--radius-lg);
     height: var(--size-320);
@@ -1513,7 +1516,7 @@ input:checked + .slider:before {
     font-family: var(--font-custom-6);
     font-size: var(--size-12);
     line-height: 1.6;
-    border: var(--size-1) solid var(--color-token-4);
+    border: var(--size-1) solid var(--color-slate-dark);
 }
 
 .blogger-detail-panel .blogger-logs-panel {
@@ -1539,8 +1542,8 @@ input:checked + .slider:before {
 
 .log-level-success { color: var(--success); }
 .log-level-error { color: var(--error); }
-.log-level-info { color: var(--color-token-6); }
-.log-level-wait { color: var(--color-token-13); }
+.log-level-info { color: var(--color-blue); }
+.log-level-wait { color: var(--color-purple); }
 .log-level-skip { color: var(--text-muted); }
 
 /* 手动下载结果网格布局。 */
@@ -1750,7 +1753,7 @@ tr:hover {
     display: inline-block;
     width: var(--size-14);
     height: var(--size-14);
-    border: var(--size-2) solid var(--color-token-64);
+    border: var(--size-2) solid var(--color-white-30);
     border-radius: 50%;
     border-top-color: currentColor;
     animation: spin 0.8s linear infinite;
@@ -1993,7 +1996,7 @@ tr:hover {
 
 .nav-badge {
     background: var(--border-strong);
-    color: var(--color-token-26);
+    color: var(--color-white);
     padding: var(--size-1) var(--size-7);
     border-radius: var(--radius-full);
     font-size: var(--size-11);
@@ -2133,12 +2136,12 @@ tr:hover {
 }
 
 .action-btn.retry {
-    background: var(--color-token-51);
+    background: var(--color-error-10);
     color: var(--error);
 }
 
 .action-btn.retry:hover {
-    background: var(--color-token-52);
+    background: var(--color-error-18);
 }
 
 .action-btn.download {
@@ -2147,7 +2150,7 @@ tr:hover {
 }
 
 .action-btn.download:hover {
-    background: var(--color-token-58);
+    background: var(--color-brand-20);
 }
 
 .action-btn.remove {
@@ -2166,7 +2169,7 @@ tr:hover {
 }
 
 .action-btn.burn:hover:not(:disabled) {
-    background: var(--color-token-58);
+    background: var(--color-brand-20);
 }
 
 .action-btn.burn:disabled {
@@ -2288,7 +2291,7 @@ tr:hover {
 
 .blogger-list-item.active {
     background: var(--brand-soft);
-    border-color: var(--color-token-59);
+    border-color: var(--color-brand-30);
 }
 
 .blogger-list-item .blogger-avatar {
@@ -2496,7 +2499,7 @@ tr:hover {
     left: 0;
     right: 0;
     bottom: 0;
-    background: var(--color-token-30);
+    background: var(--color-black-35);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2599,7 +2602,7 @@ tr:hover {
 
 .modal-container.qrcode .qrcode-status {
     position: absolute;
-    background: var(--color-token-65);
+    background: var(--color-white-90);
     padding: var(--size-10);
     border-radius: var(--radius-md);
     font-weight: 600;
@@ -2733,7 +2736,7 @@ tr:hover {
     left: 0;
     right: 0;
     bottom: 0;
-    background: var(--color-token-30);
+    background: var(--color-black-35);
     z-index: 999;
     opacity: 0;
     visibility: hidden;
@@ -2785,7 +2788,7 @@ tr:hover {
 
     .blogger-sidebar.active {
         transform: translateX(var(--size-260));
-        box-shadow: var(--size-4) 0 var(--size-24) var(--color-token-29);
+        box-shadow: var(--size-4) 0 var(--size-24) var(--color-black-12);
     }
 
     .sidebar-toggle-btn {
@@ -2978,7 +2981,7 @@ tr:hover {
     transition: box-shadow 0.2s;
 }
 .blogger-search-card:hover {
-    box-shadow: 0 var(--size-2) var(--size-8) var(--color-token-27);
+    box-shadow: 0 var(--size-2) var(--size-8) var(--color-black-6);
 }
 .blogger-avatar {
     width: var(--size-56);
@@ -2986,7 +2989,7 @@ tr:hover {
     border-radius: 50%;
     object-fit: cover;
     flex-shrink: 0;
-    background: var(--color-token-21);
+    background: var(--color-gray-050-alt);
 }
 .blogger-info {
     flex: 1;
@@ -3079,8 +3082,8 @@ tr:hover {
     font-size: var(--size-10);
     font-weight: 600;
     color: var(--brand);
-    background: var(--color-token-57);
-    border: var(--size-1) solid var(--color-token-59);
+    background: var(--color-brand-12);
+    border: var(--size-1) solid var(--color-brand-30);
     border-radius: var(--size-3);
     padding: var(--size-1) var(--size-5);
     margin-left: var(--size-6);
@@ -3244,7 +3247,7 @@ tr:hover {
     border-radius: var(--size-10);
     font-size: var(--size-11);
     font-weight: 600;
-    color: var(--color-token-26);
+    color: var(--color-white);
     background: var(--info);
     z-index: 2;
 }
@@ -3259,8 +3262,8 @@ tr:hover {
 .drawer-reupload-hint {
     margin: var(--size-8) 0;
     padding: var(--size-8) var(--size-12);
-    background: var(--color-token-45);
-    border: var(--size-1) solid var(--color-token-46);
+    background: var(--color-red-8);
+    border: var(--size-1) solid var(--color-red-30);
     border-radius: var(--size-6);
     font-size: var(--size-13);
     color: var(--error-text);
@@ -3299,7 +3302,7 @@ tr:hover {
 .drawer-pay-note {
     padding: var(--size-8) var(--size-12);
     margin: var(--size-8) 0;
-    background: var(--color-token-47);
+    background: var(--color-orange-8);
     border-left: var(--size-3) solid var(--warning);
     border-radius: var(--size-4);
     font-size: var(--size-13);
@@ -3473,7 +3476,7 @@ tr:hover {
 }
 .drawer-file-item:hover {
     background: var(--surface-hover);
-    box-shadow: 0 var(--size-2) var(--size-8) var(--color-token-41);
+    box-shadow: 0 var(--size-2) var(--size-8) var(--color-black-4);
 }
 .drawer-file-icon {
     width: var(--size-36);
@@ -3542,7 +3545,7 @@ tr:hover {
     padding: var(--size-3) var(--size-8);
     border-radius: var(--size-6);
     font-size: var(--size-11);
-    background: var(--color-token-66);
+    background: var(--color-green-bright-10);
     color: var(--success-text);
 }
 .drawer-files-empty {
@@ -3725,10 +3728,10 @@ tr:hover {
     border-radius: var(--size-4);
     padding: 0 var(--size-4);
 }
-.cmt-user-cyan { color: var(--color-token-1); }
-.cmt-user-green { color: var(--color-token-3); }
+.cmt-user-cyan { color: var(--color-cyan); }
+.cmt-user-green { color: var(--color-green); }
 .cmt-user-orange { color: var(--warning); }
-.cmt-user-purple { color: var(--color-token-13); }
+.cmt-user-purple { color: var(--color-purple); }
 .cmt-user-pink { color: var(--brand); }
 .cmt-vip {
     display: inline-flex;
@@ -3736,7 +3739,7 @@ tr:hover {
     padding: 0 var(--size-6);
     border-radius: var(--radius-full);
     color: var(--surface);
-    background: var(--color-token-24);
+    background: var(--color-gray-025);
     font-size: var(--size-10);
     font-weight: 600;
 }
@@ -3823,7 +3826,7 @@ tr:hover {
 /* 操作按钮。 */
 .drawer-btn-danger {
     background: var(--error);
-    color: var(--color-token-26);
+    color: var(--color-white);
     border: none;
 }
 .drawer-btn-danger:hover {
@@ -3898,7 +3901,7 @@ tr:hover {
     transition: all 0.2s;
 }
 .notice-dot-btn:hover {
-    background: var(--color-token-48);
+    background: var(--color-orange-10);
 }
 .notice-dot-btn[hidden] {
     display: none;
@@ -3911,7 +3914,7 @@ tr:hover {
     height: var(--size-16);
     padding: 0 var(--size-4);
     background: var(--error);
-    color: var(--color-token-26);
+    color: var(--color-white);
     border-radius: var(--size-8);
     font-size: var(--size-10);
     font-weight: 600;
@@ -3941,7 +3944,7 @@ tr:hover {
 .blogger-notice-tag {
     padding: var(--size-2) var(--size-6);
     background: var(--brand);
-    color: var(--color-token-26);
+    color: var(--color-white);
     border-radius: var(--size-3);
     font-size: var(--size-11);
 }
@@ -4035,8 +4038,8 @@ tr:hover {
     position: absolute;
     bottom: var(--size-8);
     right: var(--size-8);
-    background: var(--color-token-33);
-    color: var(--color-token-26);
+    background: var(--color-black-75);
+    color: var(--color-white);
     font-size: var(--size-12);
     padding: var(--size-2) var(--size-8);
     border-radius: var(--size-4);
@@ -4056,33 +4059,33 @@ tr:hover {
 }
 
 .video-card-badge.pending {
-    background: var(--color-token-43);
-    color: var(--color-token-26);
+    background: var(--color-gray-blue-90);
+    color: var(--color-white);
 }
 
 .video-card-badge.downloading {
-    background: var(--color-token-60);
-    color: var(--color-token-26);
+    background: var(--color-brand-90);
+    color: var(--color-white);
 }
 
 .video-card-badge.completed {
-    background: var(--color-token-40);
-    color: var(--color-token-26);
+    background: var(--color-green-90);
+    color: var(--color-white);
 }
 
 .video-card-badge.failed {
-    background: var(--color-token-55);
-    color: var(--color-token-26);
+    background: var(--color-error-90);
+    color: var(--color-white);
 }
 
 .video-card-badge.not-downloaded {
-    background: var(--color-token-44);
-    color: var(--color-token-26);
+    background: var(--color-gray-90);
+    color: var(--color-white);
 }
 
 .video-card-badge.pay {
-    background: var(--color-token-49);
-    color: var(--color-token-26);
+    background: var(--color-orange-90);
+    color: var(--color-white);
 }
 
 .manual-no-more {
@@ -4159,7 +4162,7 @@ tr:hover {
 .drawer-overlay {
     position: fixed;
     inset: 0;
-    background: var(--color-token-31);
+    background: var(--color-black-40);
     backdrop-filter: blur(var(--size-4));
     opacity: 0;
     visibility: hidden;
@@ -4181,7 +4184,7 @@ tr:hover {
     max-width: 90vw;
     height: 100vh;
     background: var(--surface);
-    box-shadow: var(--size-neg-10) 0 var(--size-40) var(--color-token-28);
+    box-shadow: var(--size-neg-10) 0 var(--size-40) var(--color-black-10);
     transform: translateX(100%);
     transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     z-index: 201;
@@ -4275,8 +4278,8 @@ tr:hover {
     position: absolute;
     bottom: var(--size-10);
     right: var(--size-10);
-    background: var(--color-token-34);
-    color: var(--color-token-26);
+    background: var(--color-black-80);
+    color: var(--color-white);
     font-size: var(--size-12);
     padding: var(--size-4) var(--size-10);
     border-radius: var(--size-6);
@@ -4379,7 +4382,7 @@ tr:hover {
 .quality-pill-tag {
     font-size: var(--size-10);
     padding: var(--size-1) var(--size-5);
-    background: var(--color-token-56);
+    background: var(--color-brand-10);
     color: var(--brand);
     border-radius: var(--size-4);
 }
@@ -4418,7 +4421,7 @@ tr:hover {
 
 .drawer-btn-primary {
     background: var(--brand);
-    color: var(--color-token-26);
+    color: var(--color-white);
 }
 
 .drawer-btn-primary:hover {
@@ -4426,7 +4429,7 @@ tr:hover {
 }
 
 .drawer-btn-success {
-    background: var(--color-token-38);
+    background: var(--color-green-10);
     color: var(--success);
 }
 
@@ -4470,7 +4473,7 @@ tr:hover {
 .manual-mode-switch .mode-btn.active {
     background: var(--surface);
     color: var(--text);
-    box-shadow: 0 var(--size-1) var(--size-3) var(--color-token-42);
+    box-shadow: 0 var(--size-1) var(--size-3) var(--color-black-8);
     font-weight: 500;
 }
 
@@ -4527,7 +4530,7 @@ tr:hover {
     align-items: center;
     gap: var(--size-6);
     padding: var(--size-5) var(--size-6) var(--size-5) var(--size-12);
-    background: var(--color-token-35);
+    background: var(--color-cyan-10);
     color: var(--brand);
     border-radius: var(--size-16);
     font-size: var(--size-13);
@@ -4548,7 +4551,7 @@ tr:hover {
     transition: background 0.2s;
 }
 .time-point-chip-del:hover {
-    background: var(--color-token-36);
+    background: var(--color-cyan-20);
 }
 .time-point-empty {
     font-size: var(--size-13);
@@ -4792,7 +4795,7 @@ tr:hover {
     border-radius: 50%;
     z-index: 2;
     background: var(--success);
-    box-shadow: 0 0 0 var(--size-2) var(--color-token-65);
+    box-shadow: 0 0 0 var(--size-2) var(--color-white-90);
 }
 .board-video-card.state-completed .board-card-state-dot { background: var(--success); }
 .board-video-card.state-downloading .board-card-state-dot { background: var(--brand); }
@@ -4832,8 +4835,8 @@ tr:hover {
     position: absolute;
     bottom: var(--size-6);
     right: var(--size-6);
-    background: var(--color-token-32);
-    color: var(--color-token-26);
+    background: var(--color-black-72);
+    color: var(--color-white);
     font-size: var(--size-11);
     padding: var(--size-1) var(--size-6);
     border-radius: var(--radius-sm);
@@ -4845,7 +4848,7 @@ tr:hover {
     top: var(--size-6);
     right: var(--size-6);
     background: var(--error);
-    color: var(--color-token-26);
+    color: var(--color-white);
     font-size: var(--size-11);
     font-weight: 600;
     padding: var(--size-1) var(--size-6);
@@ -4926,7 +4929,7 @@ tr:hover {
 }
 .board-card-action-btn:hover {
     background: var(--brand);
-    color: var(--color-token-26);
+    color: var(--color-white);
     border-color: var(--brand);
 }
 
@@ -5090,8 +5093,8 @@ tr:hover {
 .confirm-modal-container { max-width: var(--size-400); }
 .confirm-modal-message { padding: var(--radius-sm) 0 var(--radius-lg); font-size: var(--size-14); line-height: 1.6; color: var(--text-secondary); }
 .status-error { color: var(--error); }
-.premium-required { color: var(--color-token-11); }
-.premium-required-inline { color: var(--color-token-11); margin-left: var(--size-10); }
+.premium-required { color: var(--color-neutral-300); }
+.premium-required-inline { color: var(--color-neutral-300); margin-left: var(--size-10); }
 .empty-state-spacious { padding: var(--size-30) var(--size-20); }
 .empty-state-padded { padding: var(--size-20); }
 .status-pending { color: var(--text-muted); }

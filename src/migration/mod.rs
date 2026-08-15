@@ -12,6 +12,7 @@ mod m20260810_000009_live_source_quality;
 mod m20260810_000010_live_merge_job_guards;
 mod m20260813_000011_history_multi_page;
 mod m20260813_000012_history_fts_rebuild;
+mod m20260816_000013_history_sha256;
 
 pub struct Migrator;
 
@@ -31,6 +32,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260810_000010_live_merge_job_guards::Migration),
             Box::new(m20260813_000011_history_multi_page::Migration),
             Box::new(m20260813_000012_history_fts_rebuild::Migration),
+            Box::new(m20260816_000013_history_sha256::Migration),
         ]
     }
 }

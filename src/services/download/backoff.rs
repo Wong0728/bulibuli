@@ -8,6 +8,10 @@ use tracing::{debug, warn};
 
 use super::{backoff_key, task_cache_key, DownloadManager, RetryBackoff};
 
+fn retry_delay_secs(attempts: u32) -> u64 {
+    (2_u64.pow(attempts.min(12))).min(3600)
+}
+
 impl DownloadManager {
     /// 持久化任务的错误分类，并清除待重试时间（用于不可重试错误终止自动重试）。
     pub(super) async fn persist_task_error_kind(&self, bvid: &str, task_type: &str, kind: &str) {
@@ -110,7 +114,7 @@ impl DownloadManager {
             backoff.remove(key);
         } else {
             let attempts = backoff.get(key).map(|e| e.attempts).unwrap_or(0) + 1;
-            let delay_secs = (2_u64.pow(attempts.min(6))).min(3600); // 最大 1 小时
+            let delay_secs = retry_delay_secs(attempts); // 最大 1 小时
             backoff.insert(
                 key.to_string(),
                 RetryBackoff {
@@ -125,5 +129,19 @@ impl DownloadManager {
                 "下载任务进入重试退避"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_delay_secs;
+
+    #[test]
+    fn retry_delay_is_exponential_and_bounded() {
+        assert_eq!(retry_delay_secs(0), 1);
+        assert_eq!(retry_delay_secs(1), 2);
+        assert_eq!(retry_delay_secs(6), 64);
+        assert_eq!(retry_delay_secs(12), 3600);
+        assert_eq!(retry_delay_secs(99), 3600);
     }
 }

@@ -196,7 +196,7 @@ impl DownloadManager {
                 return Ok(());
             }
 
-            let digest = crate::services::file_safety::stream_file_md5(path).await?;
+            let digest = crate::services::file_safety::stream_file_sha256(path).await?;
             let mut cover_local_path = h.cover_local_path.clone();
             if let (Some(existing_cover), Some(output_dir)) =
                 (h.cover_local_path.as_deref(), path.parent())
@@ -221,8 +221,8 @@ impl DownloadManager {
             model.file_path = Set(Some(path.to_string_lossy().to_string()));
             model.cover_local_path = Set(cover_local_path);
             model.download_time = Set(Some(Local::now()));
-            model.md5 = Set(Some(digest));
-            model.md5_last_checked_at = Set(Some(Local::now()));
+            model.sha256 = Set(Some(digest));
+            model.sha256_last_checked_at = Set(Some(Local::now()));
             model.state = Set(Some("completed".to_string()));
             if source != "manual" {
                 model.source = Set("auto".to_string());

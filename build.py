@@ -14,6 +14,7 @@
 
 import argparse
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -37,6 +38,7 @@ with (ROOT / "Cargo.toml").open("rb") as _cargo_file:
     APP_VERSION = tomllib.load(_cargo_file)["package"]["version"]
 PORTABLE_RESOURCE_DIRS = ("geo",)
 PLATFORM_NAMES = {"windows", "linux", "macos"}
+PACKAGE_MANIFEST_NAME = "bulibuli.package.json"
 
 
 def normalize_platform(value):
@@ -218,6 +220,53 @@ def write_file_checksum(file_path):
     return manifest
 
 
+def sha256_file(file_path):
+    digest = hashlib.sha256()
+    with file_path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_package_manifest(package_dir, platform_name, target=None, variant="portable"):
+    """Write package identity and per-file hashes used by installers."""
+    runtime_names = (
+        ("aria2c.exe", "ffmpeg.exe")
+        if platform_name == "windows"
+        else ("aria2c", "ffmpeg")
+    )
+    runtime_dir = package_dir / "resources"
+    files = []
+    for path in sorted(package_dir.rglob("*")):
+        if not path.is_file() or path.name == PACKAGE_MANIFEST_NAME:
+            continue
+        files.append(
+            {
+                "path": path.relative_to(package_dir).as_posix(),
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+    manifest = {
+        "schema_version": 1,
+        "app_version": APP_VERSION,
+        "platform": platform_name,
+        "architecture": architecture_name(target),
+        "variant": variant,
+        "files": files,
+        "runtime": {
+            "aria2c": (runtime_dir / runtime_names[0]).is_file(),
+            "ffmpeg": (runtime_dir / runtime_names[1]).is_file(),
+            "ffprobe": (runtime_dir / ("ffprobe.exe" if platform_name == "windows" else "ffprobe")).is_file(),
+        },
+    }
+    manifest_path = package_dir / PACKAGE_MANIFEST_NAME
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return manifest_path
+
+
 def _unix_runtime_dependencies(binary, platform_name):
     """Return non-system shared libraries needed by a Unix runtime binary."""
     if platform_name == "linux":
@@ -339,9 +388,16 @@ def bundle_unix_runtime(source, name, resources_dst, platform_name):
 def validate_package_tree(package_dir, platform_name, variant):
     """Fail packaging if the archive would miss a direct-run contract file."""
     binary = package_dir / executable_name(platform_name)
-    required = [binary, package_dir / "README.md", package_dir / "static" / "index.html"]
+    required = [
+        binary,
+        package_dir / "README.md",
+        package_dir / "static" / "index.html",
+        package_dir / PACKAGE_MANIFEST_NAME,
+    ]
     if platform_name == "linux":
         required.append(package_dir / "install.sh")
+    elif platform_name == "windows":
+        required.append(package_dir / "install.ps1")
     runtime_names = ("aria2c.exe", "ffmpeg.exe") if platform_name == "windows" else ("aria2c", "ffmpeg")
     if variant == "portable":
         for name in runtime_names:
@@ -472,7 +528,14 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
             shutil.copy2(installer_src, installer_dst)
             installer_dst.chmod(installer_dst.stat().st_mode | 0o111)
             print("  已复制: install.sh")
+    elif platform_name == "windows":
+        installer_src = ROOT / "deploy" / "windows" / "install.ps1"
+        if installer_src.is_file():
+            shutil.copy2(installer_src, package_dir / "install.ps1")
+            print("  已复制: install.ps1")
 
+    write_package_manifest(package_dir, platform_name, target, variant)
+    print(f"  已写入: {PACKAGE_MANIFEST_NAME}")
     validate_package_tree(package_dir, platform_name, variant)
 
     archive_format = "zip" if platform_name == "windows" else "gztar"
@@ -673,6 +736,8 @@ def run_quality_checks():
     css_files = [ROOT / "static" / "css" / "style.css"] + sorted(
         (ROOT / "static" / "css").glob("*.css")
     )
+    # Vendor CSS is third-party input and is checked by its own asset hash gate.
+    css_files = [path for path in css_files if "static/css/lib" not in path.as_posix()]
     css_lines = [
         line
         for path in dict.fromkeys(css_files)
@@ -710,6 +775,14 @@ def run_quality_checks():
         (
             "CSS var() fallbacks",
             re.search(r"var\(\s*--[a-z0-9-]+\s*,", "\n".join(css_lines)) is None,
+        ),
+        (
+            "numeric CSS color tokens",
+            re.search(r"--color-token-[0-9]+\s*:", "\n".join(css_lines)) is None,
+        ),
+        (
+            "CSP unsafe-inline",
+            "unsafe-inline" not in rust_source,
         ),
     ]
     blocking_checks = [

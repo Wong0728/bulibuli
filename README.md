@@ -15,6 +15,7 @@
 | 平台 | 归档 | 运行方式 |
 | --- | --- | --- |
 | Windows x86_64 | `bulibuli-windows-x86_64-portable-*.zip` | 解压后运行 `bulibuli.exe` |
+| Windows x86_64（已有运行时） | `bulibuli-windows-x86_64-core-*.zip` | 不含 aria2c/FFmpeg；也可用 Windows 安装器自动选择包类型 |
 | Linux x86_64 | `bulibuli-linux-x86_64-portable-*.tar.gz` | 解压后运行 `./bulibuli`，或执行 `./install.sh run` |
 | macOS Intel | `bulibuli-macos-x86_64-portable-*.tar.gz` | 解压后运行 `./bulibuli` |
 | macOS Apple Silicon | `bulibuli-macos-arm64-portable-*.tar.gz` | 解压后运行 `./bulibuli` |
@@ -26,6 +27,18 @@ chmod +x bulibuli resources/aria2c resources/ffmpeg
 ```
 
 首次启动会显示本地地址；有图形桌面时尝试自动打开浏览器，没有图形桌面时直接复制终端中的地址即可。默认只监听 `127.0.0.1`。
+
+### Windows 一键安装
+
+从 Release 解压出 `install.ps1` 后，可显式指定本地目录或归档；安装器会校验 package manifest 和 SHA-256，按 `Auto` 顺序选择本地完整包、可验证运行时加 `core`，最后回退 `portable`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 `
+  -PackagePath .\bulibuli-windows-x86_64-portable-v2.0.0-alpha.3.zip `
+  -InstallDir "$env:LOCALAPPDATA\bulibuli" -Variant Auto
+```
+
+也可以从仓库中的 `deploy/windows/install.ps1` 安装固定版本；不传 `-PackagePath` 时优先读取 Release 的 `latest.json`，没有稳定版本时回退读取包含 Alpha 的 Releases 清单。PATH 修改为用户级设置，完成后请重新打开终端。
 
 ### Linux 一键安装
 
@@ -82,6 +95,13 @@ bulibuli ctl cred qrcode
 bulibuli ctl sys ffmpeg-test
 ```
 
+查看版本和帮助不会加载配置、创建数据目录、启动数据库或启动服务：
+
+```text
+bulibuli --version
+bulibuli --help
+```
+
 Linux/macOS 将 `bulibuli.exe` 替换为 `./bulibuli`。完整命令清单见 [`docs/skill.md`](docs/skill.md)。
 
 ## 数据、配置和日志
@@ -116,7 +136,7 @@ python build.py --check
 python build.py --portable
 ```
 
-`python build.py --portable` 会生成完整自包含包，拒绝组装缺少 aria2c、FFmpeg 或必要动态库的 Unix 包；`python build.py --core` 生成不含媒体运行时的轻量命令包。每个 Release 由 tag 触发 GitHub Actions，GitHub 页面上传完整 `portable` 包，Linux 另上传供一键安装器使用的 `core` 包。
+`python build.py --portable` 会生成完整自包含包，拒绝组装缺少 aria2c、FFmpeg 或必要动态库的 Unix 包；`python build.py --core` 生成不含媒体运行时的轻量命令包。每个包都会生成 `bulibuli.package.json`，记录版本、平台、架构、包类型和文件 SHA-256。每个 Release 由 tag 触发 GitHub Actions，GitHub 页面上传 `portable` 包、Windows/Linux `core` 包及 `latest.json`。
 
 ## 文档与贡献
 

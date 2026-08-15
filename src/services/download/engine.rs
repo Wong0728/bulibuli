@@ -184,7 +184,7 @@ impl DownloadManager {
     }
 
     /// 原生传输主体：持有并发许可执行下载，每秒广播一次进度；
-    /// 成功后复用 aria2 完成管线（MD5 去重/写历史/封面/合并），失败按守卫落库。
+    /// 成功后复用 aria2 完成管线（SHA-256 去重/写历史/封面/合并），失败按守卫落库。
     /// `permit` 由 `spawn_native_transfer` 转入，在整个传输过程中持有，
     /// 函数结束时 permit 随 Drop 自动释放。
     async fn run_native_transfer(
@@ -256,7 +256,7 @@ impl DownloadManager {
                     self.bili_api.bad_cdns().record_success(host).await;
                 }
                 // 合成 complete 状态复用 aria2 完成管线：
-                // MD5 去重归位、写历史、下封面、广播、触发音视频合并
+                // SHA-256 去重归位、写历史、下封面、广播、触发音视频合并
                 let status = Aria2Status {
                     status: "complete".to_string(),
                     progress_percent: 100,

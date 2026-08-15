@@ -558,50 +558,6 @@ async fn run_merge_command_timed(
     Ok(())
 }
 
-#[allow(dead_code)]
-async fn run_merge_command(ffmpeg_path: &Path, list_path: &Path, output: &Path) -> Result<()> {
-    let mut cmd = Command::new(ffmpeg_path);
-    cmd.args([
-        "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        &list_path.to_string_lossy(),
-        "-c",
-        "copy",
-        "-movflags",
-        "+faststart",
-    ])
-    .arg(output)
-    .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
-    .kill_on_drop(true);
-
-    let mut child = cmd.spawn().context("启动 FFmpeg 分段合并进程失败")?;
-    let stdout_task = tokio::spawn(read_diagnostic(child.stdout.take()));
-    let stderr_task = tokio::spawn(read_diagnostic(child.stderr.take()));
-    let status = child.wait().await.context("等待 FFmpeg 分段合并进程失败")?;
-    let _stdout = stdout_task
-        .await
-        .context("读取 FFmpeg 合并 stdout 任务失败")??;
-    let stderr = stderr_task
-        .await
-        .context("读取 FFmpeg 合并 stderr 任务失败")??;
-
-    if !status.success() {
-        let diagnostics = String::from_utf8_lossy(&stderr).trim().to_string();
-        error!(stderr = %diagnostics, "FFmpeg 分段合并失败");
-        return Err(anyhow!(
-            "直播分段合并失败: {}",
-            diagnostics.lines().last().unwrap_or("FFmpeg 返回失败状态")
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn redact_diagnostics(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut rest = value;

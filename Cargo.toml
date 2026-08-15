@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # 异步运行时
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt", "io"] }
 
 # Web 框架

@@ -8,6 +8,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set,
 };
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -20,10 +21,10 @@ const VERIFY_SCAN_INTERVAL: StdDuration = StdDuration::from_secs(60);
 /// on_completion 兼容旧数据时的回填批量。
 const BACKFILL_BATCH: u64 = 50;
 
-/// MD5 校验 worker。
+/// SHA-256 校验 worker。
 /// - `off`：不跑。
-/// - `on_completion`：下载完成时已由 `add_to_history` 立即计算；worker 只补齐 md5 为空的旧数据。
-/// - `periodic`：按 `periodic_days` 选最久未校验的 N 条，读本地 → 算 MD5 → 不一致则标 `tampered`。
+/// - `on_completion`：下载完成时已由 `add_to_history` 立即计算；worker 只补齐 sha256 为空的旧数据。
+/// - `periodic`：按 `periodic_days` 选最久未校验的 N 条，读本地 → 算 SHA-256 → 不一致则标 `tampered`。
 pub struct VerifyService {
     db: DatabaseConnection,
     settings: Arc<SettingsService>,
@@ -49,7 +50,7 @@ impl VerifyService {
         if self.handle.lock().await.is_some() {
             return;
         }
-        info!("[verify] MD5 校验 worker 已启动");
+        info!("[verify] SHA-256 校验 worker 已启动");
         let db = self.db.clone();
         let settings = self.settings.clone();
         let cancellation = self.cancellation.child_token();
@@ -68,7 +69,7 @@ impl VerifyService {
                 Err(_) => error!("[verify] worker 未在 10 秒内退出"),
             }
         }
-        info!("[verify] MD5 校验 worker 已停止");
+        info!("[verify] SHA-256 校验 worker 已停止");
     }
 
     /// 手动触发一次校验（POST /api/refresh?kind=verify 用）。
@@ -96,14 +97,14 @@ async fn verify_loop(
 }
 
 /// 单次扫描：读 SettingsService 的 ArcSwap 快照 → off 则跳过；
-/// on_completion 则回填空 md5；periodic 则按天数选条。
+/// on_completion 则回填空 sha256；periodic 则按天数选条。
 async fn run_one_cycle(db: &DatabaseConnection, settings: &SettingsService) -> Result<usize> {
     let verify = settings.current().download.verify.clone();
     let concurrency = verify.concurrency.max(1) as usize;
     match verify.mode.as_str() {
         "off" => Ok(0),
-        // 兼容旧数据：回填 md5 为空的记录
-        "on_completion" => backfill_null_md5(db, concurrency).await,
+        // 兼容旧数据：回填 sha256 为空的记录
+        "on_completion" => backfill_null_sha256(db, concurrency).await,
         _ => {
             // periodic（validate 已保证 periodic_days/periodic_batch/concurrency 在合法区间）
             verify_periodic(
@@ -117,10 +118,10 @@ async fn run_one_cycle(db: &DatabaseConnection, settings: &SettingsService) -> R
     }
 }
 
-/// on_completion 兼容旧数据：选 md5 为空且有 file_path 的记录，回填 MD5。
-async fn backfill_null_md5(db: &DatabaseConnection, concurrency: usize) -> Result<usize> {
+/// on_completion 兼容旧数据：选 sha256 为空且有 file_path 的记录，回填 SHA-256。
+async fn backfill_null_sha256(db: &DatabaseConnection, concurrency: usize) -> Result<usize> {
     let rows = history::Entity::find()
-        .filter(history::Column::Md5.is_null())
+        .filter(history::Column::Sha256.is_null())
         .filter(history::Column::FilePath.is_not_null())
         .limit(BACKFILL_BATCH)
         .all(db)
@@ -128,7 +129,10 @@ async fn backfill_null_md5(db: &DatabaseConnection, concurrency: usize) -> Resul
     if rows.is_empty() {
         return Ok(0);
     }
-    info!("[verify on_completion] 回填 {} 条空 MD5 记录", rows.len());
+    info!(
+        "[verify on_completion] 回填 {} 条空 SHA-256 记录",
+        rows.len()
+    );
     let success = stream::iter(rows)
         .map(|h| async move {
             let Some(p) = h.file_path.as_deref() else {
@@ -139,11 +143,11 @@ async fn backfill_null_md5(db: &DatabaseConnection, concurrency: usize) -> Resul
                 warn!("[verify] 文件不存在 {}: {}", h.bvid, path.display());
                 return 0usize;
             }
-            match compute_md5_blocking(&path).await {
+            match compute_sha256_blocking(&path).await {
                 Ok(digest) => {
                     let mut model: history::ActiveModel = h.clone().into();
-                    model.md5 = Set(Some(digest));
-                    model.md5_last_checked_at = Set(Some(Local::now()));
+                    model.sha256 = Set(Some(digest));
+                    model.sha256_last_checked_at = Set(Some(Local::now()));
                     if let Err(e) = model.update(db).await {
                         warn!("[verify] 回填 {} 失败: {e}", h.bvid);
                         0usize
@@ -152,7 +156,7 @@ async fn backfill_null_md5(db: &DatabaseConnection, concurrency: usize) -> Resul
                     }
                 }
                 Err(e) => {
-                    warn!("[verify] 计算 MD5 失败 {}: {e}", h.bvid);
+                    warn!("[verify] 计算 SHA-256 失败 {}: {e}", h.bvid);
                     0usize
                 }
             }
@@ -163,7 +167,7 @@ async fn backfill_null_md5(db: &DatabaseConnection, concurrency: usize) -> Resul
     Ok(success)
 }
 
-/// periodic 模式：选最久未校验的 N 条，读本地 → 算 MD5 → 不一致标 tampered。
+/// periodic 模式：选最久未校验的 N 条，读本地 → 算 SHA-256 → 不一致标 tampered。
 async fn verify_periodic(
     db: &DatabaseConnection,
     days: i64,
@@ -172,14 +176,13 @@ async fn verify_periodic(
 ) -> Result<usize> {
     let cutoff = Local::now() - chrono::Duration::days(days);
     let rows = history::Entity::find()
-        .filter(history::Column::Md5.is_not_null())
         .filter(history::Column::FilePath.is_not_null())
         .filter(
             Condition::any()
-                .add(history::Column::Md5LastCheckedAt.lt(cutoff))
-                .add(history::Column::Md5LastCheckedAt.is_null()),
+                .add(history::Column::Sha256LastCheckedAt.lt(cutoff))
+                .add(history::Column::Sha256LastCheckedAt.is_null()),
         )
-        .order_by_asc(history::Column::Md5LastCheckedAt)
+        .order_by_asc(history::Column::Sha256LastCheckedAt)
         .limit(batch)
         .all(db)
         .await?;
@@ -209,21 +212,21 @@ async fn verify_periodic(
                 mark_tampered(db, h.id).await;
                 return 0usize;
             }
-            match compute_md5_blocking(&path).await {
+            match compute_sha256_blocking(&path).await {
                 Ok(digest) => {
-                    let tampered = h.md5.as_deref().is_some_and(|old| old != digest);
+                    let tampered = h.sha256.as_deref().is_some_and(|old| old != digest);
                     let mut model: history::ActiveModel = h.clone().into();
                     if tampered {
                         warn!(
-                            "[verify] MD5 不一致，标记 tampered: {} (旧={}, 新={})",
+                            "[verify] SHA-256 不一致，标记 tampered: {} (旧={}, 新={})",
                             h.bvid,
-                            h.md5.as_deref().unwrap_or(""),
+                            h.sha256.as_deref().unwrap_or(""),
                             digest
                         );
                         model.state = Set(Some("tampered".to_string()));
                     }
-                    model.md5 = Set(Some(digest));
-                    model.md5_last_checked_at = Set(Some(Local::now()));
+                    model.sha256 = Set(Some(digest));
+                    model.sha256_last_checked_at = Set(Some(Local::now()));
                     if let Err(e) = model.update(db).await {
                         warn!("[verify] 更新 {} 失败: {e}", h.bvid);
                         0usize
@@ -232,7 +235,7 @@ async fn verify_periodic(
                     }
                 }
                 Err(e) => {
-                    warn!("[verify] 计算 MD5 失败 {}: {e}", h.bvid);
+                    warn!("[verify] 计算 SHA-256 失败 {}: {e}", h.bvid);
                     0usize
                 }
             }
@@ -248,32 +251,32 @@ async fn mark_tampered(db: &DatabaseConnection, id: i32) {
     if let Ok(Some(h)) = history::Entity::find_by_id(id).one(db).await {
         let mut model: history::ActiveModel = h.into();
         model.state = Set(Some("tampered".to_string()));
-        model.md5_last_checked_at = Set(Some(Local::now()));
+        model.sha256_last_checked_at = Set(Some(Local::now()));
         if let Err(error) = model.update(db).await {
             warn!("[verify] 持久化校验结果失败: {error}");
         }
     }
 }
 
-/// 在 spawn_blocking 中执行同步 MD5，避免批量校验阻塞 async executor。
-async fn compute_md5_blocking(path: &std::path::Path) -> Result<String> {
+/// 在 spawn_blocking 中执行同步 SHA-256，避免批量校验阻塞 async executor。
+async fn compute_sha256_blocking(path: &std::path::Path) -> Result<String> {
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || sync_md5(&path))
+    tokio::task::spawn_blocking(move || sync_sha256(&path))
         .await
-        .context("MD5 计算任务被中断")?
+        .context("SHA-256 计算任务被中断")?
 }
 
-fn sync_md5(path: &std::path::Path) -> Result<String> {
+fn sync_sha256(path: &std::path::Path) -> Result<String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).context("打开文件失败")?;
-    let mut context = md5::Context::new();
+    let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 512 * 1024];
     loop {
         let read = file.read(&mut buffer).context("读取文件失败")?;
         if read == 0 {
             break;
         }
-        context.consume(&buffer[..read]);
+        hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", context.compute()))
+    Ok(format!("{:x}", hasher.finalize()))
 }
