@@ -99,7 +99,7 @@ ratatui = "0.29"
 crossterm = "0.28"
 
 # Protobuf（弹幕 seg.so 解析）
-prost = "0.13"
+prost = "0.14"
 
 # Windows 专用：用 Job Object 确保父进程退出（含被强杀）时子进程 aria2c 一起被系统结束，避免残留占用下载目录
 [target.'cfg(windows)'.dependencies]
