@@ -76,7 +76,7 @@ uuid = { version = "1", features = ["v4"] }
 url = "2"
 urlencoding = "2"
 ipnet = { version = "2", features = ["serde"] }
-toml = "0.8"
+toml = "1.1"
 maxminddb = "0.30"
 futures = "0.3"
 regex = "1"
