@@ -95,7 +95,7 @@ which = "7"
 open = "5"
 
 # 终端交互界面（日志分区 + 命令说明 + 命令输入）
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = "0.28"
 
 # Protobuf（弹幕 seg.so 解析）
