@@ -641,6 +641,16 @@ def check_portable_bundle_contract(bundle):
     return ok
 
 
+def check_windows_installer_encoding():
+    """Windows PowerShell 5.1 needs a UTF-8 BOM to parse non-ASCII scripts."""
+    installer = ROOT / "deploy" / "windows" / "install.ps1"
+    if not installer.is_file():
+        return _quality_error("Windows installer script is missing")
+    if installer.read_bytes()[:3] != b"\xef\xbb\xbf":
+        return _quality_error("Windows installer must be UTF-8 with BOM for PowerShell 5.1")
+    return True
+
+
 def run_quality_checks():
     """Run the mandatory formatting, lint, test and source-policy gates."""
     print("[check] running mandatory quality gates")
@@ -726,6 +736,7 @@ def run_quality_checks():
     bundle = build_frontend_bundle()
     ok = check_resource_hashes() and ok
     ok = check_portable_bundle_contract(bundle) and ok
+    ok = check_windows_installer_encoding() and ok
 
     rust_source = "\n".join(path.read_text(encoding="utf-8") for path in rust_files)
     js_source = "\n".join(path.read_text(encoding="utf-8") for path in first_party_js)

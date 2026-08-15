@@ -1,4 +1,5 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
+# Windows PowerShell 5.1 requires this UTF-8 script to be saved with a BOM.
 param(
     [string]$Version,
     [string]$PackagePath,
