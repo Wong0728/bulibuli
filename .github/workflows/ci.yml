@@ -68,7 +68,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: taiki-e/install-action@bf5592ad9d327ccd561adbb048dedbc4b5e0c2a2 # cargo-audit
-      - uses: taiki-e/install-action@cf9eb3f4625079c8224b5fc0cb30d35b8897d2c5 # cargo-deny
+      - uses: taiki-e/install-action@bf5592ad9d327ccd561adbb048dedbc4b5e0c2a2 # cargo-deny
       # rust_decimal keeps rkyv 0.7 as an optional lockfile dependency; the
       # application does not enable that feature, so track but do not block on
       # this advisory until the upstream crate removes the optional edge.
