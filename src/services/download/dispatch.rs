@@ -2,7 +2,9 @@
 
 use crate::services::cdn_registry::is_mcdn_url;
 use crate::services::concurrency_gate::ConcurrencyPermit;
-use crate::services::file_safety::ensure_disk_space;
+use crate::services::file_safety::{
+    ensure_disk_space, ensure_existing_within_root, sanitize_filename,
+};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -25,6 +27,8 @@ impl DownloadManager {
         filename: &str,
     ) -> Result<(String, ConcurrencyPermit)> {
         crate::services::bili_url_policy::validate(url).await?;
+        ensure_existing_within_root(&self.paths.download_dir, dir).await?;
+        let filename = sanitize_filename(filename);
         let max_parallel = self
             .settings_service
             .current()
@@ -103,11 +107,11 @@ impl DownloadManager {
             options.insert("retry-wait".to_string(), json!(v));
         }
         options.insert("dir".to_string(), json!(dir.to_string_lossy().to_string()));
-        options.insert("out".to_string(), json!(filename));
+        options.insert("out".to_string(), json!(&filename));
 
         let gid = self
             .aria2
-            .add_download(url, filename, &enriched_cookies, headers, options)
+            .add_download(url, &filename, &enriched_cookies, headers, options)
             .await
             .map_err(|e| anyhow!("添加 Aria2 任务失败: {e}"))?;
         Ok((gid, permit))

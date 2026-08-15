@@ -173,9 +173,25 @@ impl DownloadManager {
             return Err(anyhow!("非法 bvid 格式: {bvid}（期望 BV + 10 位字符）"));
         }
 
+        // 完成回调可能提供绝对路径，旧数据库也可能残留不安全文件名。
+        // 归位前只保留单个安全文件名，避免把外部路径拼入下载目录。
+        let original_name = sanitize_filename(
+            original_name
+                .rsplit(['/', '\\'])
+                .next()
+                .filter(|value| !value.is_empty() && *value != "." && *value != "..")
+                .unwrap_or("untitled"),
+        );
+
         let dir = temp_path
             .parent()
             .ok_or_else(|| anyhow!("无法获取临时文件父目录"))?;
+        crate::services::file_safety::ensure_existing_within_root(
+            &self.paths.download_dir,
+            temp_path,
+        )
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
 
         // 计算临时文件 SHA-256（流式分块，避免大文件打爆内存）
         let temp_size = tokio::fs::metadata(temp_path).await?.len();
@@ -218,14 +234,14 @@ impl DownloadManager {
 
         if existing_files.is_empty() {
             // 首次下载或全部已删：直接重命名为 original_name
-            let final_path = dir.join(original_name);
+            let final_path = dir.join(&original_name);
             atomic_replace(temp_path, &final_path).await?;
             info!(
                 "[SHA-256去重] {} 无已存在文件，重命名为 {}",
                 bvid, original_name
             );
             return Ok(DedupeResult {
-                final_filename: original_name.to_string(),
+                final_filename: original_name.clone(),
                 message: "下载完成".to_string(),
             });
         }
@@ -304,10 +320,10 @@ impl DownloadManager {
             });
         }
         if conflict_strategy == "overwrite" {
-            let final_path = dir.join(original_name);
+            let final_path = dir.join(&original_name);
             atomic_replace(temp_path, &final_path).await?;
             return Ok(DedupeResult {
-                final_filename: original_name.to_string(),
+                final_filename: original_name.clone(),
                 message: "检测到同名不同内容，已按策略覆盖".to_string(),
             });
         }

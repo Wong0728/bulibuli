@@ -3,6 +3,7 @@
 /static/dist/
 /static/js/node_modules/
 /data/
+/demo-data/
 /test-results/
 /static/js/test-results/
 /playwright-report/

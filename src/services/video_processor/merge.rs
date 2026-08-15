@@ -194,6 +194,9 @@ impl VideoProcessor {
         let hours: f64 = parts[0].parse()?;
         let minutes: f64 = parts[1].parse()?;
         let seconds: f64 = parts[2].parse()?;
+        if hours < 0.0 || !(0.0..60.0).contains(&minutes) || !(0.0..60.0).contains(&seconds) {
+            return Err(anyhow!("无效时长范围: {s}"));
+        }
         Ok(hours * 3600.0 + minutes * 60.0 + seconds)
     }
 
@@ -386,5 +389,21 @@ impl VideoProcessor {
             start += 1;
         }
         &s[start..]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VideoProcessor;
+
+    #[test]
+    fn merge_helpers_reject_invalid_clock_ranges() {
+        assert_eq!(
+            VideoProcessor::parse_duration("00:59:59.9").unwrap(),
+            3599.9
+        );
+        assert!(VideoProcessor::parse_duration("00:60:00").is_err());
+        assert!(VideoProcessor::parse_duration("00:00:60").is_err());
+        assert!(VideoProcessor::parse_duration("-1:00:00").is_err());
     }
 }

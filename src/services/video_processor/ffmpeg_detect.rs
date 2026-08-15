@@ -68,22 +68,26 @@ impl VideoProcessor {
             "FFMPEG_DIR",
         ] {
             if let Ok(val) = std::env::var(name) {
-                let p = PathBuf::from(&val);
-                if p.is_file() {
-                    return Some(p);
-                }
                 let exe_name = if cfg!(target_os = "windows") {
                     "ffmpeg.exe"
                 } else {
                     "ffmpeg"
                 };
-                let candidate = p.join(exe_name);
-                if candidate.is_file() {
-                    return Some(candidate);
+                if let Some(path) = Self::ffmpeg_path_from_value(&val, exe_name) {
+                    return Some(path);
                 }
             }
         }
         None
+    }
+
+    fn ffmpeg_path_from_value(value: &str, exe_name: &str) -> Option<PathBuf> {
+        let path = PathBuf::from(value);
+        if path.is_file() {
+            return Some(path);
+        }
+        let candidate = path.join(exe_name);
+        candidate.is_file().then_some(candidate)
     }
 
     fn embedded_ffmpeg(&self) -> Option<PathBuf> {
@@ -145,5 +149,26 @@ impl VideoProcessor {
             }
             _ => (false, None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VideoProcessor;
+
+    #[test]
+    fn ffmpeg_env_value_accepts_file_or_directory() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let binary = dir.path().join("ffmpeg");
+        std::fs::write(&binary, b"stub").expect("binary");
+        assert_eq!(
+            VideoProcessor::ffmpeg_path_from_value(binary.to_str().unwrap(), "ffmpeg"),
+            Some(binary.clone())
+        );
+        assert_eq!(
+            VideoProcessor::ffmpeg_path_from_value(dir.path().to_str().unwrap(), "ffmpeg"),
+            Some(binary)
+        );
+        assert!(VideoProcessor::ffmpeg_path_from_value("missing", "ffmpeg").is_none());
     }
 }

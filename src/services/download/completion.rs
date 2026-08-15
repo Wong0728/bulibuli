@@ -4,6 +4,7 @@
 
 use crate::models::download_task;
 use crate::services::aria2::Aria2Status;
+use crate::services::file_safety::sanitize_filename;
 use sea_orm::Set;
 use std::time::Instant;
 use tracing::{error, info, warn};
@@ -17,6 +18,25 @@ pub(super) enum CompleteOutcome {
     Skip { clear_throttle: bool },
     /// 完成副作用已执行；UID 供 on_task_completed 触发音视频合并。
     Finished { uid: Option<String> },
+}
+
+fn resolved_filename(
+    status_filename: &str,
+    task_filename: Option<&str>,
+    stem: &str,
+    task_type: &str,
+) -> String {
+    let candidate = if status_filename.is_empty() || status_filename == "Unknown" {
+        task_filename.unwrap_or_default()
+    } else {
+        status_filename
+    };
+    candidate
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|value| !value.is_empty() && *value != "." && *value != "..")
+        .map(sanitize_filename)
+        .unwrap_or_else(|| format!("{stem}.{task_type}"))
 }
 
 impl DownloadManager {
@@ -64,13 +84,12 @@ impl DownloadManager {
         let stem = file_stem_for(&task.bvid, task.page);
 
         // Aria2 返回的文件名（处理空/Unknown 退化情况）
-        let aria2_filename = if status.filename.is_empty() || status.filename == "Unknown" {
-            task.filename
-                .clone()
-                .unwrap_or_else(|| format!("{}.{}", stem, task.task_type))
-        } else {
-            status.filename.clone()
-        };
+        let aria2_filename = resolved_filename(
+            &status.filename,
+            task.filename.as_deref(),
+            &stem,
+            &task.task_type,
+        );
 
         // 判断是否为 .downloading 临时文件：触发 SHA-256 去重流程
         let (final_filename, dedupe_message) = if let Some(base_name) =
@@ -170,5 +189,39 @@ impl DownloadManager {
         .await;
 
         CompleteOutcome::Finished { uid }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolved_filename;
+
+    #[test]
+    fn completion_filename_falls_back_without_trusting_unknown_aria2_names() {
+        assert_eq!(
+            resolved_filename("", None, "BV1xx411c7mD", "video"),
+            "BV1xx411c7mD.video"
+        );
+        assert_eq!(
+            resolved_filename("Unknown", Some("custom.mp4"), "BV1xx411c7mD", "video"),
+            "custom.mp4"
+        );
+        assert_eq!(
+            resolved_filename("actual.m4s", Some("custom.m4s"), "BV1xx411c7mD", "video"),
+            "actual.m4s"
+        );
+        assert_eq!(
+            resolved_filename(
+                r"C:\downloads\BV1xx411c7mD.m4s.downloading",
+                None,
+                "BV1xx411c7mD",
+                "video"
+            ),
+            "BV1xx411c7mD.m4s.downloading"
+        );
+        assert_eq!(
+            resolved_filename("../escape.m4s", None, "BV1xx411c7mD", "video"),
+            "escape.m4s"
+        );
     }
 }

@@ -20,6 +20,14 @@ use super::completion::CompleteOutcome;
 use super::native::{NativeProgress, TransferRequest};
 use super::{task_cache_key, DownloadManager, ProgressCache};
 
+fn temporary_transfer_filename(filename: &str) -> String {
+    if filename.ends_with(".downloading") {
+        filename.to_string()
+    } else {
+        format!("{filename}.downloading")
+    }
+}
+
 /// 统一下载引擎（枚举分发，非 trait object）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum TransferEngine {
@@ -131,10 +139,14 @@ impl DownloadManager {
             .await?
             .ok_or_else(|| anyhow!("原生下载任务不存在: {task_id}"))?;
         let dir = self.task_download_dir(&task).await;
-        let filename = task
-            .filename
-            .clone()
-            .unwrap_or_else(|| format!("{}.{}", task.bvid, task.task_type));
+        let filename = crate::services::file_safety::sanitize_filename(
+            &task
+                .filename
+                .clone()
+                .unwrap_or_else(|| format!("{}.{}", task.bvid, task.task_type)),
+        );
+        crate::services::file_safety::ensure_existing_within_root(&self.paths.download_dir, &dir)
+            .await?;
         // 与 aria2 路径一致：富化 Cookie（buvid3/bili_ticket/...）以绕过 CDN 403/-799 风控。
         let enriched_cookies = match self.bili_api.enrich_cookies_public(cookies).await {
             Ok(c) => c,
@@ -157,10 +169,13 @@ impl DownloadManager {
         if !enriched_cookies.is_empty() {
             headers.push(("Cookie".to_string(), enriched_cookies));
         }
+        // 原生下载也走完成管线：先写临时文件，成功后由 SHA-256 去重逻辑归位。
+        // 已经带后缀的旧任务保持原名，避免形成双重 `.downloading`。
+        let transfer_filename = temporary_transfer_filename(&filename);
         let request = TransferRequest {
             url: url.to_string(),
             headers,
-            target: dir.join(&filename),
+            target: dir.join(&transfer_filename),
         };
         let cancel = self.cancellation.child_token();
         self.native_tasks
@@ -246,6 +261,7 @@ impl DownloadManager {
 
         if cancel.is_cancelled() {
             // 用户移除任务或程序关停：任务行已删除/无需再写终态
+            tokio::fs::remove_file(&request.target).await.ok();
             info!("原生下载已取消: {} ({})", task.bvid, task.task_type);
             return;
         }
@@ -279,6 +295,7 @@ impl DownloadManager {
                 }
             }
             Err(e) => {
+                tokio::fs::remove_file(&request.target).await.ok();
                 // 复用坏 CDN 熔断：失败计入该 host（两次即熔断 10 分钟），
                 // 后续重试重新解析 URL 时上游会避开该 host（多 URL 轮试）
                 if let Some(host) = &host {
@@ -314,5 +331,22 @@ impl DownloadManager {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::temporary_transfer_filename;
+
+    #[test]
+    fn native_transfers_use_one_temporary_suffix() {
+        assert_eq!(
+            temporary_transfer_filename("BV1xx411c7mD.m4s"),
+            "BV1xx411c7mD.m4s.downloading"
+        );
+        assert_eq!(
+            temporary_transfer_filename("BV1xx411c7mD.m4s.downloading"),
+            "BV1xx411c7mD.m4s.downloading"
+        );
     }
 }

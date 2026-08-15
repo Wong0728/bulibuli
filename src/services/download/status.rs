@@ -196,16 +196,20 @@ impl DownloadManager {
     /// 计算当前 bvid 下载流程的步骤信息。
     /// 手动下载：视频(含音频) + 封面 = 2 步
     /// 返回 (current_step, total_steps, step_label)
-    fn compute_step_info(task: &download_task::Model) -> (i32, i32, String) {
-        if matches!(task.stage.as_str(), "muxing" | "finalizing" | "done") {
+    fn compute_step_info_for(stage: &str, task_type: &str) -> (i32, i32, String) {
+        if matches!(stage, "muxing" | "finalizing" | "done") {
             return (2, 2, "合并与整理".to_string());
         }
-        let label = match task.task_type.as_str() {
+        let label = match task_type {
             "audio" => "音频",
             "cover" => "封面",
             _ => "视频",
         };
         (1, 2, label.to_string())
+    }
+
+    fn compute_step_info(task: &download_task::Model) -> (i32, i32, String) {
+        Self::compute_step_info_for(&task.stage, &task.task_type)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -274,5 +278,26 @@ impl DownloadManager {
         if let Err(error) = self.ws.broadcast_download_progress(payload).await {
             warn!("推送下载进度失败 bvid={bvid}: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DownloadManager;
+
+    #[test]
+    fn progress_steps_describe_download_and_finalize_stages() {
+        assert_eq!(
+            DownloadManager::compute_step_info_for("downloading", "video"),
+            (1, 2, "视频".to_string())
+        );
+        assert_eq!(
+            DownloadManager::compute_step_info_for("downloading", "audio"),
+            (1, 2, "音频".to_string())
+        );
+        assert_eq!(
+            DownloadManager::compute_step_info_for("finalizing", "video"),
+            (2, 2, "合并与整理".to_string())
+        );
     }
 }

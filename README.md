@@ -30,13 +30,16 @@ chmod +x bulibuli resources/aria2c resources/ffmpeg
 
 ### Windows 一键安装
 
-从 Release 解压出 `install.ps1` 后，可显式指定本地目录或归档；安装器会校验 package manifest 和 SHA-256，按 `Auto` 顺序选择本地完整包、可验证运行时加 `core`，最后回退 `portable`：
+从仓库下载 `deploy/windows/install.ps1`（或在源码 checkout 中直接运行）后，可显式指定本地目录或归档；安装器会校验 package manifest 和 SHA-256，按 `Auto` 顺序选择本地完整包、可验证运行时加 `core`，最后回退 `portable`：
 
 ```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/windows/install.ps1 -OutFile .\install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1 `
-  -PackagePath .\bulibuli-windows-x86_64-portable-v2.0.0-alpha.3.zip `
+  -PackagePath .\bulibuli-windows-x86_64-portable-vX.Y.Z.zip `
   -InstallDir "$env:LOCALAPPDATA\bulibuli" -Variant Auto
 ```
+
+其中 `vX.Y.Z` 替换为目标 Release 版本；归档必须与当前安装器一起提供 `bulibuli.package.json` 和同名 `.sha256`。
 
 也可以从仓库中的 `deploy/windows/install.ps1` 安装固定版本；不传 `-PackagePath` 时优先读取 Release 的 `latest.json`，没有稳定版本时回退读取包含 Alpha 的 Releases 清单。PATH 修改为用户级设置，完成后请重新打开终端。
 
@@ -58,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh \
-  | BULIBULI_VERSION=v2.0.0-alpha.3 bash
+  | BULIBULI_VERSION=vX.Y.Z bash
 ```
 
 安装器支持 `install`、`run`、`service`、`unservice` 和 `status`。`service` 会优先使用用户级 systemd；root 安装会创建独立服务用户。自定义数据目录时使用绝对路径，例如：

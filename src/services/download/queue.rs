@@ -1,5 +1,6 @@
 use crate::domain::{DownloadStage, DownloadStatus};
 use crate::models::{blogger, download_task};
+use crate::services::file_safety::sanitize_filename;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
@@ -145,8 +146,9 @@ impl DownloadManager {
                     )));
                 }
                 let default_filename = format!("{stem}.{default_ext}");
-                let filename = existing.filename.as_deref().unwrap_or(&default_filename);
-                if dir.join(filename).exists() {
+                let filename =
+                    sanitize_filename(existing.filename.as_deref().unwrap_or(&default_filename));
+                if dir.join(&filename).exists() {
                     // 下载到 .downloading 临时文件，完成后由 monitor_loop
                     // 调用 dedupe_and_finalize_file 进行 SHA-256 比对，避免覆盖原文件。
                     let temp_filename = format!("{stem}.{default_ext}.downloading");
@@ -185,11 +187,8 @@ impl DownloadManager {
                     .await;
             } else {
                 let default_filename = format!("{stem}.{default_ext}");
-                let filename = existing
-                    .filename
-                    .as_deref()
-                    .unwrap_or(&default_filename)
-                    .to_string();
+                let filename =
+                    sanitize_filename(existing.filename.as_deref().unwrap_or(&default_filename));
                 return self
                     .reset_and_dispatch_existing_task(
                         existing,
@@ -352,6 +351,7 @@ impl DownloadManager {
         bump_generation: bool,
         message: &str,
     ) -> Result<TaskOutcome> {
+        let filename = sanitize_filename(&filename);
         self.cleanup_task_caches(&existing.bvid, existing.cid).await;
         let download_id = existing.id;
         let (gid, permit) = self

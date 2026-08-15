@@ -12,6 +12,13 @@ use tracing::warn;
 
 use super::{pay_reason_to_state, MonitorService};
 
+fn next_download_index(time_points: &[Value], hours_since: f64) -> i32 {
+    time_points
+        .iter()
+        .position(|point| point.as_f64().unwrap_or(0.0) > hours_since)
+        .unwrap_or(time_points.len()) as i32
+}
+
 impl MonitorService {
     pub(super) async fn add_video_to_queue(
         &self,
@@ -375,10 +382,7 @@ impl MonitorService {
             self.do_download_danmaku(uid, bvid, title, cookies, &dc, None)
                 .await?;
 
-            let next_index = time_points
-                .iter()
-                .position(|p| p.as_f64().unwrap_or(0.0) > hours_since)
-                .unwrap_or(time_points.len()) as i32;
+            let next_index = next_download_index(&time_points, hours_since);
             self.set_history_next_index(uid, bvid, title, next_index, pub_timestamp)
                 .await?;
         } else {
@@ -669,5 +673,22 @@ impl MonitorService {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_download_index;
+    use serde_json::json;
+
+    #[test]
+    fn next_download_index_skips_completed_points_and_handles_invalid_values() {
+        let points = vec![json!(1), json!(6), json!(24)];
+        assert_eq!(next_download_index(&points, 0.5), 0);
+        assert_eq!(next_download_index(&points, 6.0), 2);
+        assert_eq!(next_download_index(&points, 48.0), 3);
+
+        let invalid = vec![json!("later"), json!(2)];
+        assert_eq!(next_download_index(&invalid, 0.0), 1);
     }
 }

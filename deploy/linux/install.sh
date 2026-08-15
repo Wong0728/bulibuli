@@ -4,7 +4,7 @@
 # 远程安装：
 #   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | bash
 #   # 固定版本（可复现）：
-#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | BULIBULI_VERSION=v2.0.0-alpha.3 bash
+#   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | BULIBULI_VERSION=vX.Y.Z bash
 #
 # 本地发布包：
 #   ./install.sh [install|run|service|unservice|status]
@@ -73,8 +73,7 @@ resolve_latest_version() {
     local tag
     tag="$(download_text "https://github.com/${REPO}/releases/latest/download/latest.json" 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
     if ! [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-        command -v python3 >/dev/null 2>&1 || die "找不到 latest.json，且系统没有 python3 读取预发布 Release；请用 BULIBULI_VERSION=vX.Y.Z 固定版本重试"
-        tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null | python3 -c 'import json,sys; releases=json.load(sys.stdin); print(next((item.get("tag_name", "") for item in releases if not item.get("draft")), ""))' || true)"
+        tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
     fi
     [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || \
         die "无法读取 Release 发布清单；请用 BULIBULI_VERSION=vX.Y.Z 固定版本重试"

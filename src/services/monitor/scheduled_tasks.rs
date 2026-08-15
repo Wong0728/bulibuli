@@ -13,6 +13,23 @@ use super::active_window;
 use super::scheduled_helpers::*;
 use super::MonitorService;
 
+fn activity_interval(
+    last_pub_ts: Option<i64>,
+    now_ts: i64,
+    min_interval: i32,
+    max_interval: i32,
+) -> (i32, i32, &'static str) {
+    match last_pub_ts {
+        Some(ts) if now_ts - ts < 3 * 24 * 3600 => (
+            min_interval.min(max_interval),
+            min_interval.max(max_interval),
+            "active",
+        ),
+        Some(ts) if now_ts - ts < 30 * 24 * 3600 => (900, 900, "semi-active"),
+        _ => (1800, 1800, "inactive"),
+    }
+}
+
 impl MonitorService {
     pub(super) async fn check_scheduled_danmaku(&self) -> Result<()> {
         let settings = self.settings_cached().await?;
@@ -533,30 +550,12 @@ impl MonitorService {
                     .flatten()
             });
 
-        let (lo, hi, tier) = match last_pub_ts {
-            Some(ts) if now_ts - ts < 3 * 24 * 3600 => {
-                // 活跃：3 天内有投稿，使用配置间隔
-                let lo = if blogger.min_interval <= blogger.max_interval {
-                    blogger.min_interval
-                } else {
-                    blogger.max_interval
-                };
-                let hi = if blogger.min_interval <= blogger.max_interval {
-                    blogger.max_interval
-                } else {
-                    blogger.min_interval
-                };
-                (lo, hi, "active")
-            }
-            Some(ts) if now_ts - ts < 30 * 24 * 3600 => {
-                // 半活跃：30 天内有投稿
-                (900, 900, "semi-active")
-            }
-            _ => {
-                // 不活跃：30 天以上无投稿或无检查记录
-                (1800, 1800, "inactive")
-            }
-        };
+        let (lo, hi, tier) = activity_interval(
+            last_pub_ts,
+            now_ts,
+            blogger.min_interval,
+            blogger.max_interval,
+        );
 
         debug!(uid, tier, lo, hi, "Monitor 退避: 博主活跃度分级");
         (lo, hi)
@@ -582,5 +581,27 @@ impl MonitorService {
         )
         .await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::activity_interval;
+
+    #[test]
+    fn activity_interval_clamps_tiers_and_reversed_configuration() {
+        let now = 1_000_000;
+        assert_eq!(
+            activity_interval(Some(now - 60), now, 120, 60),
+            (60, 120, "active")
+        );
+        assert_eq!(
+            activity_interval(Some(now - 4 * 24 * 3600), now, 60, 120),
+            (900, 900, "semi-active")
+        );
+        assert_eq!(
+            activity_interval(None, now, 60, 120),
+            (1800, 1800, "inactive")
+        );
     }
 }

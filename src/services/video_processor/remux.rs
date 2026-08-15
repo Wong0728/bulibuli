@@ -144,3 +144,18 @@ impl VideoProcessor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::VideoProcessor;
+
+    #[test]
+    fn remux_progress_parser_handles_ffmpeg_lines_and_noise() {
+        assert_eq!(
+            VideoProcessor::extract_time("frame=12 time=00:01:02.25 bitrate=1k"),
+            Some(62.25)
+        );
+        assert_eq!(VideoProcessor::extract_time("ffmpeg failed"), None);
+        assert_eq!(VideoProcessor::extract_time("time=00:60:00"), None);
+    }
+}
