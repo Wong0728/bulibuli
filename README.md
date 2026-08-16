@@ -6,7 +6,7 @@
   <img src="docs/hero/bulibuli_hero_preview.svg" alt="补哩补哩 bulibuli Hero 矢量预览" width="100%">
 </p>
 
-补哩补哩是一个基于 Rust/Axum 的 B 站视频监控、补档下载、直播监控与直播录制工具。当前主线是 Rust v2 Alpha，支持 Windows、Linux、macOS Intel、macOS Apple Silicon，以及单独的 Termux 源码安装方式。
+补哩补哩是一个基于 Rust/Axum 的 B 站视频监控、补档下载、直播监控与直播录制工具。当前主线是 Rust v2 Alpha，支持 Windows、Linux、macOS Intel、macOS Apple Silicon，以及 Android arm64/Termux 云端预编译包。
 
 ## 从 Releases 安装
 
@@ -19,8 +19,9 @@
 | Linux x86_64 | `bulibuli-linux-x86_64-portable-*.tar.gz` | 解压后运行 `./bulibuli`，或执行 `./install.sh run` |
 | macOS Intel | `bulibuli-macos-x86_64-portable-*.tar.gz` | 解压后运行 `./bulibuli` |
 | macOS Apple Silicon | `bulibuli-macos-arm64-portable-*.tar.gz` | 解压后运行 `./bulibuli` |
+| Termux Android arm64 | `bulibuli-termux-arm64-portable-*.tar.gz` | 解压后运行 `bash install.sh`；依赖由 `pkg` 提供 |
 
-GitHub 页面上的 `portable` 包是完整自包含包：包含程序、前端、GeoIP 数据、对应平台的 aria2c、FFmpeg 及必要的非系统动态库，不要求用户另行安装 Rust、Node.js、aria2 或 FFmpeg。若系统另有可用的 `ffprobe`，程序也会优先使用它；没有时会用包内 FFmpeg 完成媒体探测。Linux/macOS 如果系统阻止执行新文件，请先执行：
+桌面平台的 `portable` 包是完整自包含包：包含程序、前端、GeoIP 数据、对应平台的 aria2c、FFmpeg 及必要的非系统动态库，不要求用户另行安装 Rust、Node.js、aria2 或 FFmpeg。若系统另有可用的 `ffprobe`，程序也会优先使用它；没有时会用包内 FFmpeg 完成媒体探测。Termux 包只包含 Android/Termux 的 bulibuli 和前端，aria2/FFmpeg 由 `pkg` 提供。Linux/macOS 如果系统阻止执行新文件，请先执行：
 
 ```bash
 chmod +x bulibuli resources/aria2c resources/ffmpeg
@@ -83,15 +84,15 @@ BULIBULI_DATA_DIR=/srv/bulibuli-data ~/.local/share/bulibuli/install.sh service
 
 没有 sudo、systemd 或图形桌面也不影响便携包前台运行；只有缺少包内运行时且需要系统包管理器补齐时才需要安装权限。
 
-### Termux
+### Termux Android arm64
 
-Termux 使用源码构建并通过 `pkg` 安装 Rust、aria2 和 FFmpeg：
+Termux 现在优先下载 GitHub Actions 云端编译好的预编译包，再通过 `pkg` 安装 curl、Python、aria2 和 FFmpeg：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | bash
 ```
 
-首次构建需要网络和一定时间；后台运行使用 `bash install.sh start`，开机自启还需要 Termux:Boot。
+脚本会校验 Release 的 SHA-256 和包内文件清单，不需要 Rust、Node.js 或本机编译。后台运行使用 `bash install.sh start`，开机自启还需要 Termux:Boot。只有需要源码构建时才设置 `BULIBULI_SOURCE_BUILD=1`。
 
 ## 首次设置与常用操作
 
@@ -150,7 +151,7 @@ python build.py --check
 python build.py --portable
 ```
 
-`python build.py --portable` 会生成完整自包含包，拒绝组装缺少 aria2c、FFmpeg 或必要动态库的 Unix 包；`python build.py --core` 生成不含媒体运行时的轻量命令包。每个包都会生成 `bulibuli.package.json`，记录版本、平台、架构、包类型和文件 SHA-256。每个 Release 由 tag 触发 GitHub Actions，GitHub 页面上传 `portable` 包、Windows/Linux `core` 包及 `latest.json`。
+`python build.py --portable` 会生成桌面平台完整自包含包，或生成不内置媒体运行时的 Termux Android arm64 包；桌面 Unix 包缺少 aria2c、FFmpeg 或必要动态库时会拒绝组装。`python build.py --core` 生成不含媒体运行时的轻量命令包。每个包都会生成 `bulibuli.package.json`，记录版本、平台、架构、包类型和文件 SHA-256。每个 Release 由 tag 触发 GitHub Actions，GitHub 页面上传 Windows/Linux/macOS `portable` 包、Termux arm64 包、Windows/Linux `core` 包及 `latest.json`。
 
 ## 文档与贡献
 

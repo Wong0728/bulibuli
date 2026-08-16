@@ -161,10 +161,56 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  termux-portable:
+    name: Portable artifact (termux / arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Build platform-neutral frontend bundle
+        working-directory: static/js
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+      - name: Build and smoke-test Termux package
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod -R a+rwX "${GITHUB_WORKSPACE}"
+          docker run --rm --platform linux/arm64 --security-opt seccomp=unconfined \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            termux/termux-docker:aarch64 \
+            bash -lc '
+              set -euo pipefail
+              pkg update -y
+              pkg install -y python rust binutils clang
+              cargo build --release
+              python build.py --portable --skip-frontend --skip-rust-build --platform termux
+              package_dir="$(find dist -maxdepth 1 -type d -name "bulibuli-termux-*portable-*" -print -quit)"
+              test -n "${package_dir}"
+              "${package_dir}/bulibuli" --version
+              test ! -e "${package_dir}/resources/aria2c"
+              test ! -e "${package_dir}/resources/ffmpeg"
+            '
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bulibuli-termux-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
   publish-release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [rust, frontend-and-policy, dependency-audit, portable-artifacts]
+    needs: [rust, frontend-and-policy, dependency-audit, portable-artifacts, termux-portable]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -180,12 +226,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find dist -maxdepth 1 -type f \( -name '*portable*.zip' -o -name '*portable*.tar.gz' \) | wc -l)" -eq 4
-          test "$(find dist -maxdepth 1 -type f -name '*portable*.sha256' | wc -l)" -eq 4
+          test "$(find dist -maxdepth 1 -type f \( -name '*portable*.zip' -o -name '*portable*.tar.gz' \) | wc -l)" -eq 5
+          test "$(find dist -maxdepth 1 -type f -name '*portable*.sha256' | wc -l)" -eq 5
           test "$(find dist -maxdepth 1 -type f -name '*linux*x86_64*core*.tar.gz' | wc -l)" -eq 1
           test "$(find dist -maxdepth 1 -type f -name '*linux*x86_64*core*.sha256' | wc -l)" -eq 1
           test "$(find dist -maxdepth 1 -type f -name '*windows*x86_64*core*.zip' | wc -l)" -eq 1
           test "$(find dist -maxdepth 1 -type f -name '*windows*x86_64*core*.zip.sha256' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*termux*arm64*portable*.tar.gz' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*termux*arm64*portable*.tar.gz.sha256' | wc -l)" -eq 1
           for file in dist/bulibuli-*portable-*; do
             case "${file}" in
               *"${GITHUB_REF_NAME}"*) ;;

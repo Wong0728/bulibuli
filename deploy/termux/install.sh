@@ -1,5 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # 补哩补哩 bulibuli Termux 一键部署脚本。
+# 默认下载 GitHub Release 的 Termux/arm64 预编译包；需要源码构建时显式设置 BULIBULI_SOURCE_BUILD=1。
 #
 # 远程安装：
 #   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | bash
@@ -7,7 +8,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | BULIBULI_VERSION=vX.Y.Z bash
 #
 # 用法：
-#   bash install.sh            安装依赖 + 本机编译
+#   bash install.sh            安装依赖 + 下载预编译包
 #   bash install.sh start      后台启动（nohup + wake-lock）
 #   bash install.sh stop       停止后台实例
 #   bash install.sh run        前台运行
@@ -37,6 +38,7 @@ BOOT_SCRIPT="${BOOT_DIR}/${APP_SLUG}.sh"
 PID_FILE="${HOME}/.${APP_SLUG}.pid"
 LOG_FILE="${HOME}/.${APP_SLUG}.nohup.log"
 REMOTE_SOURCE_DIR="${PREFIX}/opt/${APP_SLUG}"
+CACHE_DIR="${HOME}/.cache/${APP_SLUG}"
 APP_DIR=""
 BIN_PATH=""
 MODE=""
@@ -56,6 +58,24 @@ download_text() {
     fi
 }
 
+download_file() {
+    local url="$1" destination="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 3 --connect-timeout 15 "${url}" -o "${destination}"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -O "${destination}" "${url}"
+    else
+        die "需要 curl 或 wget 才能下载 Release"
+    fi
+}
+
+termux_architecture() {
+    case "$(uname -m)" in
+        aarch64|arm64) printf 'arm64\n' ;;
+        *) die "当前 Termux 架构暂不支持：$(uname -m)，目前提供 arm64 预编译包" ;;
+    esac
+}
+
 resolve_latest_version() {
     local tag=""
     tag="$(download_text "https://github.com/${REPO}/releases/latest/download/latest.json" 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
@@ -64,6 +84,57 @@ resolve_latest_version() {
     fi
     [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || die "无法解析最新 Release 版本"
     printf '%s\n' "${tag}"
+}
+
+verify_checksum() {
+    local archive="$1" manifest="$2"
+    if command -v sha256sum >/dev/null 2>&1; then
+        (cd "$(dirname "${archive}")" && sha256sum -c "$(basename "${manifest}")")
+        return
+    fi
+    if command -v shasum >/dev/null 2>&1; then
+        local expected actual
+        expected="$(awk '{print $1}' "${manifest}")"
+        actual="$(shasum -a 256 "${archive}" | awk '{print $1}')"
+        [ "${expected}" = "${actual}" ] || die "SHA-256 校验失败：${archive}"
+        return
+    fi
+    die "系统没有 sha256sum 或 shasum，拒绝安装未校验的归档"
+}
+
+verify_package_manifest() {
+    local package_dir="$1" expected_version="${2:-}"
+    command -v python3 >/dev/null 2>&1 || die "需要 Python 校验 Termux 包清单"
+    python3 - "${package_dir}" "${expected_version#v}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+expected = sys.argv[2]
+manifest_path = root / "bulibuli.package.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+if manifest.get("schema_version") != 1:
+    raise SystemExit("unsupported package manifest")
+if manifest.get("platform") != "termux" or manifest.get("architecture") != "arm64":
+    raise SystemExit("package is not a Termux arm64 build")
+if expected and manifest.get("app_version") != expected:
+    raise SystemExit("package version mismatch")
+for required in (root / "bulibuli", root / "install.sh", root / "static" / "index.html"):
+    if not required.is_file():
+        raise SystemExit(f"missing package file: {required.relative_to(root)}")
+for entry in manifest.get("files", []):
+    relative = pathlib.PurePosixPath(str(entry["path"]))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise SystemExit("unsafe package manifest path")
+    file_path = root.joinpath(*relative.parts).resolve()
+    if root not in file_path.parents or not file_path.is_file():
+        raise SystemExit("package manifest file missing")
+    digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    if digest.lower() != str(entry.get("sha256", "")).lower():
+        raise SystemExit(f"package file checksum mismatch: {relative}")
+PY
 }
 
 detect_layout() {
@@ -84,17 +155,67 @@ detect_layout() {
     fi
 
     APP_DIR="${REMOTE_SOURCE_DIR}"
-    BIN_PATH="${APP_DIR}/target/release/${BIN_NAME}"
-    MODE="remote-source"
+    BIN_PATH="${APP_DIR}/${BIN_NAME}"
+    if [ "${BULIBULI_SOURCE_BUILD:-0}" = "1" ]; then
+        BIN_PATH="${APP_DIR}/target/release/${BIN_NAME}"
+        MODE="remote-source"
+    else
+        MODE="remote-package"
+    fi
 }
 
 install_deps() {
-    log "安装 Termux 依赖（git、Rust、aria2、FFmpeg）..."
+    log "安装 Termux 运行依赖（curl、Python、aria2、FFmpeg）..."
     pkg update -y
-    pkg install -y git rust binutils aria2 ffmpeg
+    pkg install -y curl python aria2 ffmpeg
+}
+
+install_source_deps() {
+    log "安装源码构建依赖（git、Rust、binutils）..."
+    pkg install -y git rust binutils
+}
+
+ensure_remote_package() {
+    [ "${MODE}" = "remote-package" ] || return
+    local arch package_name base_url archive checksum stage root child
+    arch="$(termux_architecture)"
+    [ "${APP_VERSION}" != "latest" ] || APP_VERSION="$(resolve_latest_version)"
+    package_name="${APP_SLUG}-termux-${arch}-portable-${APP_VERSION}.tar.gz"
+    base_url="https://github.com/${REPO}/releases/download/${APP_VERSION}"
+    archive="${CACHE_DIR}/${package_name}"
+    checksum="${archive}.sha256"
+
+    if [ -x "${APP_DIR}/${BIN_NAME}" ] && [ -f "${APP_DIR}/bulibuli.package.json" ] && \
+        verify_package_manifest "${APP_DIR}" "${APP_VERSION}" >/dev/null 2>&1; then
+        BIN_PATH="${APP_DIR}/${BIN_NAME}"
+        log "已找到 Termux 预编译包：${APP_DIR}"
+        return
+    fi
+
+    mkdir -p "${CACHE_DIR}"
+    log "下载 Termux 预编译包：${APP_VERSION}"
+    download_file "${base_url}/${package_name}" "${archive}"
+    download_file "${base_url}/${package_name}.sha256" "${checksum}"
+    verify_checksum "${archive}" "${checksum}"
+
+    stage="$(mktemp -d "${PREFIX}/tmp/${APP_SLUG}.XXXXXX")"
+    tar -xzf "${archive}" -C "${stage}"
+    root="$(find "${stage}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+    [ -n "${root}" ] || die "Termux 归档目录缺失"
+    verify_package_manifest "${root}" "${APP_VERSION}"
+    mkdir -p "${APP_DIR}"
+    for child in "${root}"/*; do
+        [ "$(basename "${child}")" = "data" ] && continue
+        cp -a "${child}" "${APP_DIR}/"
+    done
+    mkdir -p "${APP_DIR}/data"
+    verify_package_manifest "${APP_DIR}" "${APP_VERSION}"
+    rm -rf -- "${stage}"
+    BIN_PATH="${APP_DIR}/${BIN_NAME}"
 }
 
 ensure_source() {
+    [ "${MODE}" = "source" ] || [ "${MODE}" = "remote-source" ] || return
     [ "${MODE}" = "remote-source" ] || return
     if [ -f "${APP_DIR}/Cargo.toml" ]; then
         if [ "${APP_VERSION}" != "latest" ]; then
@@ -117,13 +238,15 @@ ensure_source() {
 }
 
 ensure_binary() {
+    ensure_remote_package
     ensure_source
     if [ -x "${BIN_PATH}" ]; then
         log "已找到二进制：${BIN_PATH}"
         return
     fi
+    install_source_deps
     command -v cargo >/dev/null 2>&1 || die "未找到 cargo，请先运行 bash install.sh"
-    log "首次使用需在 Termux 本机编译一次..."
+    log "开始在 Termux 本机编译..."
     (cd "${APP_DIR}" && cargo build --release)
     [ -x "${BIN_PATH}" ] || die "编译完成但未找到产物：${BIN_PATH}"
     log "编译完成：${BIN_PATH}"

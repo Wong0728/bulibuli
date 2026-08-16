@@ -37,7 +37,7 @@ APP_SLOGAN = "下架之前，先下为敬。"
 with (ROOT / "Cargo.toml").open("rb") as _cargo_file:
     APP_VERSION = tomllib.load(_cargo_file)["package"]["version"]
 PORTABLE_RESOURCE_DIRS = ("geo",)
-PLATFORM_NAMES = {"windows", "linux", "macos"}
+PLATFORM_NAMES = {"windows", "linux", "macos", "termux"}
 PACKAGE_MANIFEST_NAME = "bulibuli.package.json"
 
 
@@ -394,12 +394,12 @@ def validate_package_tree(package_dir, platform_name, variant):
         package_dir / "static" / "index.html",
         package_dir / PACKAGE_MANIFEST_NAME,
     ]
-    if platform_name == "linux":
+    if platform_name in {"linux", "termux"}:
         required.append(package_dir / "install.sh")
     elif platform_name == "windows" and (package_dir / "install.ps1").exists():
         raise RuntimeError("Windows Release 不应嵌入 install.ps1；安装器由仓库单独提供")
     runtime_names = ("aria2c.exe", "ffmpeg.exe") if platform_name == "windows" else ("aria2c", "ffmpeg")
-    if variant == "portable":
+    if variant == "portable" and platform_name != "termux":
         for name in runtime_names:
             runtime = package_dir / "resources" / name
             required.extend((runtime, runtime.with_name(f"{runtime.name}.sha256")))
@@ -453,7 +453,7 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
                 shutil.copy2(source, destination)
                 copied_resources.append(name)
 
-        if variant == "portable":
+        if variant == "portable" and platform_name != "termux":
             runtime_names = (
                 ("aria2c.exe", "ffmpeg.exe")
                 if platform_name == "windows"
@@ -521,8 +521,9 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     (package_dir / "data").mkdir(exist_ok=True)
     print("  已创建: data/")
 
-    if platform_name == "linux":
-        installer_src = ROOT / "deploy" / "linux" / "install.sh"
+    if platform_name in {"linux", "termux"}:
+        installer_dir = "linux" if platform_name == "linux" else "termux"
+        installer_src = ROOT / "deploy" / installer_dir / "install.sh"
         if installer_src.is_file():
             installer_dst = package_dir / "install.sh"
             shutil.copy2(installer_src, installer_dst)
@@ -825,7 +826,7 @@ def main():
     parser.add_argument("--skip-rust-build", action="store_true", help="复用已有 release 二进制")
     parser.add_argument(
         "--platform",
-        choices=("auto", "windows", "linux", "macos"),
+        choices=("auto", "windows", "linux", "macos", "termux"),
         default="auto",
         help="便携包平台（默认按当前系统判断）",
     )
