@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.0-alpha.6
+
+- Termux 默认始终使用 GitHub Actions 云端预编译包；只有显式设置 `BULIBULI_SOURCE_BUILD=1` 才会从源码构建。
+- 修正 Termux 远程安装后的后台启动路径，并同步 README、Release 说明和 Hero 页面。
+- 修复 Hero 窄屏横向溢出，保证手机浏览器可正常浏览和操作。
+
 ## v2.0.0-alpha.5
 
 - Termux Android arm64 改为 GitHub Actions 云端编译并发布预编译包；安装器默认下载、校验并复用该包，不再要求本机编译 Rust。

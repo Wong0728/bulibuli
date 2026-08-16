@@ -40,10 +40,14 @@ cd bulibuli-termux-arm64-portable-__TAG__
 bash install.sh
 ```
 
-`install.sh` 会通过 Termux `pkg` 安装 curl、Python、aria2 和 FFmpeg，然后直接运行云端编译好的 bulibuli。需要自动下载当前版本时，也可以执行：
+`install.sh` 会通过 Termux `pkg` 安装 curl、Python、aria2 和 FFmpeg，然后直接运行云端编译好的 bulibuli。需要自动下载当前版本时，也可以执行下面的命令；安装完成后，使用 `$PREFIX/opt/bulibuli/install.sh` 管理后台进程：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | bash
+```
+
+```bash
+bash "$PREFIX/opt/bulibuli/install.sh" start
 ```
 
 ### Linux 一键安装

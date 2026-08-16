@@ -147,7 +147,8 @@ detect_layout() {
 
     local repo_root
     repo_root="$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || true)"
-    if [ -f "${repo_root}/Cargo.toml" ] && [ -f "${repo_root}/static/index.html" ]; then
+    if [ "${BULIBULI_SOURCE_BUILD:-0}" = "1" ] &&
+        [ -f "${repo_root}/Cargo.toml" ] && [ -f "${repo_root}/static/index.html" ]; then
         APP_DIR="${repo_root}"
         BIN_PATH="${repo_root}/target/release/${BIN_NAME}"
         MODE="source"
@@ -335,7 +336,7 @@ main() {
     ensure_binary
     case "${action}" in
         install)
-            log "安装完成。后台启动：bash install.sh start；开机自启：bash install.sh boot"
+            log "安装完成。后台启动：bash \"${APP_DIR}/install.sh\" start；开机自启：bash \"${APP_DIR}/install.sh\" boot"
             ;;
         run)
             log "前台启动（Ctrl+C 退出）"

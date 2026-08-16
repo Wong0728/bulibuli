@@ -92,7 +92,7 @@ Termux 现在优先下载 GitHub Actions 云端编译好的预编译包，再通
 curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | bash
 ```
 
-脚本会校验 Release 的 SHA-256 和包内文件清单，不需要 Rust、Node.js 或本机编译。后台运行使用 `bash install.sh start`，开机自启还需要 Termux:Boot。只有需要源码构建时才设置 `BULIBULI_SOURCE_BUILD=1`。
+脚本会校验 Release 的 SHA-256 和包内文件清单，不需要 Rust、Node.js 或本机编译。远程一键安装完成后，后台运行使用 `bash "$PREFIX/opt/bulibuli/install.sh" start`；如果是手动解压包，则使用解压目录中的 `bash install.sh start`。开机自启还需要 Termux:Boot。只有需要源码构建时才设置 `BULIBULI_SOURCE_BUILD=1`。
 
 ## 首次设置与常用操作
 
