@@ -9,7 +9,7 @@ repository = "https://github.com/Wong0728/bulibuli"
 keywords = ["bilibili", "downloader", "live-recording", "rust"]
 categories = ["multimedia", "web-programming::http-server"]
 publish = false
-rust-version = "1.85"
+rust-version = "1.97.1"
 
 [[bin]]
 name = "bulibuli"

@@ -105,6 +105,9 @@ pub enum AppError {
     #[error("未找到: {0}")]
     NotFound(String),
 
+    #[error("禁止访问: {0}")]
+    Forbidden(String),
+
     #[error("参数错误: {0}")]
     BadRequest(String),
 
@@ -227,7 +230,16 @@ impl AppError {
                     "B站服务响应异常，请稍后重试".to_string(),
                 )
             }
-            Self::Config(message) => (StatusCode::INTERNAL_SERVER_ERROR, 500, message.clone()),
+            Self::Config(message) => {
+                // 配置错误消息通常含本地路径（security.toml 等）：完整信息进日志，
+                // 响应只回固定文案，避免向客户端泄漏文件系统布局。
+                error!(error = %message, "配置错误");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    500,
+                    "配置无效，请检查设置后重试".to_string(),
+                )
+            }
             Self::HeaderValue(err) => (StatusCode::BAD_REQUEST, 400, err.to_string()),
             Self::Io(err) => {
                 error!(error = %err, "IO错误");
@@ -238,13 +250,23 @@ impl AppError {
                 )
             }
             Self::NotFound(message) => (StatusCode::NOT_FOUND, 404, message.clone()),
+            Self::Forbidden(message) => (StatusCode::FORBIDDEN, 403, message.clone()),
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, 400, message.clone()),
             Self::Conflict(message) => (StatusCode::CONFLICT, 409, message.clone()),
             Self::Unauthorized(message) => (StatusCode::UNAUTHORIZED, 401, message.clone()),
             Self::RiskControl(message) => (StatusCode::FORBIDDEN, 403, message.clone()),
             Self::AiSkillDisabled(message) => (StatusCode::FORBIDDEN, 403, message.clone()),
             Self::BiliNotLoggedIn(message) => (StatusCode::UNAUTHORIZED, 401, message.clone()),
-            Self::ExternalProcess(message) => (StatusCode::BAD_GATEWAY, 502, message.clone()),
+            Self::ExternalProcess(message) => {
+                // aria2/FFmpeg 诊断可能含 RPC endpoint、URL 签名或本地路径：
+                // 脱敏后回传（保留 filter 不支持等有价值的非敏感诊断），全文进日志。
+                error!(error = %message, "外部进程错误");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    502,
+                    crate::services::live_recorder::ffmpeg_session::redact_diagnostics(message),
+                )
+            }
             Self::Internal(message) => {
                 error!(error = %message, "内部错误");
                 (

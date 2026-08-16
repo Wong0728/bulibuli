@@ -107,7 +107,7 @@ impl DanmuCollector {
     ) {
         let mut reconnect_attempts = 0u32;
         let dropped = Arc::new(AtomicU64::new(0));
-        let mut seen = HashSet::new();
+        let mut seen = SeenKeys::default();
 
         loop {
             if cancellation.is_cancelled() {
@@ -159,14 +159,37 @@ impl DanmuCollector {
                             (Some(bili_api), Some(cookies)) => {
                                 match bili_api.live_danmu_conf(room_id, cookies).await {
                                     Ok(conf) if !conf.host_server_list.is_empty() => {
+                                        // 鉴权刷新路径同样计入重连预算：账号被持续拒绝
+                                        // （封禁/风控）时若归零计数并立即重连，会形成
+                                        // 连接→鉴权失败→刷新→重连的无限循环。
+                                        reconnect_attempts += 1;
+                                        if reconnect_attempts > MAX_RECONNECT_ATTEMPTS {
+                                            warn!(
+                                                room_id,
+                                                attempts = reconnect_attempts,
+                                                "弹幕鉴权失败刷新后重试仍持续失败，熔断本次会话"
+                                            );
+                                            let _ = tx.try_send(connection_status(
+                                                "unavailable",
+                                                Some(e.to_string()),
+                                            ));
+                                            return;
+                                        }
                                         token = conf.token;
                                         hosts = conf
                                             .host_server_list
                                             .into_iter()
                                             .map(|host| (host.host, host.wss_port))
                                             .collect();
-                                        reconnect_attempts = 0;
-                                        info!(room_id, "弹幕鉴权失败后立即刷新 token 与服务器列表");
+                                        warn!(
+                                            room_id,
+                                            attempts = reconnect_attempts,
+                                            "弹幕鉴权失败后刷新 token 与服务器列表，退避后重连"
+                                        );
+                                        tokio::time::sleep(std::time::Duration::from_secs(
+                                            5u64.min(reconnect_attempts as u64 * 5),
+                                        ))
+                                        .await;
                                         continue;
                                     }
                                     Ok(_) => {
@@ -191,7 +214,7 @@ impl DanmuCollector {
                         let _ = tx.try_send(connection_status("unavailable", Some(e.to_string())));
                         return;
                     }
-                    if reconnect_attempts as usize % hosts.len() == 0 {
+                    if (reconnect_attempts as usize).is_multiple_of(hosts.len()) {
                         match (bili_api.as_ref(), cookies.as_deref()) {
                             (Some(bili_api), Some(cookies)) => {
                                 match bili_api.live_danmu_conf(room_id, cookies).await {
@@ -249,7 +272,7 @@ impl DanmuCollector {
         cancellation: &CancellationToken,
         tx: &mpsc::Sender<IncomingLiveCommand>,
         dropped: &Arc<AtomicU64>,
-        seen: &mut HashSet<String>,
+        seen: &mut SeenKeys,
     ) -> Result<()> {
         // 先从 URL 构造请求，让 tungstenite 补齐 WebSocket 握手所需的请求头，
         // 尤其是 Sec-WebSocket-Key。
@@ -315,7 +338,7 @@ impl DanmuCollector {
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("");
                     let key = history_key(&item, uid, text);
-                    if insert_seen_key(seen, key) {
+                    if seen.insert(key) {
                         let mut incoming = IncomingLiveCommand::from_json(serde_json::json!({
                             "cmd":"DANMU_MSG", "info":[[], text, [uid, name]], "history_id":item.get("id_str")
                         }));
@@ -360,7 +383,7 @@ impl DanmuCollector {
                                             }
                                             let cmd = IncomingLiveCommand::from_json(cmd_json);
                                             if let commands::LiveCommand::Danmaku { uid, text, .. } = &cmd.command {
-                                                if !insert_seen_key(seen, history_key(&cmd.raw, *uid, text)) { continue; }
+                                                if !seen.insert(history_key(&cmd.raw, *uid, text)) { continue; }
                                             }
                                             let low_priority = cmd.command.is_low_priority()
                                                 && !commands::is_link_command(&cmd.cmd);
@@ -414,13 +437,29 @@ fn websocket_url(host: &str, wss_port: i32) -> Option<String> {
         .map(|url| url.to_string())
 }
 
-fn insert_seen_key(seen: &mut HashSet<String>, key: String) -> bool {
-    if seen.len() >= MAX_SEEN_EVENT_KEYS {
-        if let Some(oldest) = seen.iter().next().cloned() {
-            seen.remove(&oldest);
+/// 去重集合：HashSet 判重 + VecDeque 记录插入顺序。
+/// 满容量时按最旧插入淘汰——此前按 HashSet 迭代序随机淘汰，
+/// 可能淘汰刚插入的 key 使去重立即失效。
+#[derive(Default)]
+pub(super) struct SeenKeys {
+    set: HashSet<String>,
+    order: std::collections::VecDeque<String>,
+}
+
+impl SeenKeys {
+    /// 插入并返回是否为新 key。容量超限时先淘汰最旧条目。
+    fn insert(&mut self, key: String) -> bool {
+        if self.set.len() >= MAX_SEEN_EVENT_KEYS {
+            while let Some(oldest) = self.order.pop_front() {
+                self.set.remove(&oldest);
+                if self.set.len() < MAX_SEEN_EVENT_KEYS {
+                    break;
+                }
+            }
         }
+        self.order.push_back(key.clone());
+        self.set.insert(key)
     }
-    seen.insert(key)
 }
 
 fn reconnect_backoff(attempt: u32) -> Duration {
@@ -467,7 +506,9 @@ fn history_key(value: &serde_json::Value, uid: i64, text: &str) -> String {
     {
         return format!("id:{id}");
     }
-    format!("msg:{uid}:{text}:{}", chrono::Utc::now().timestamp() / 10)
+    // 无服务端 id 时的近似去重：加宽时间桶到 3 秒，降低同用户短时间重发相同
+    // 弹幕被误丢的概率（此前 10 秒桶在刷屏场景明显丢计数）。
+    format!("msg:{uid}:{text}:{}", chrono::Utc::now().timestamp() / 3)
 }
 
 fn connection_status(status: &str, error: Option<String>) -> IncomingLiveCommand {
@@ -524,7 +565,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(8);
         let cancellation = CancellationToken::new();
         let dropped = Arc::new(AtomicU64::new(0));
-        let mut seen = HashSet::new();
+        let mut seen = SeenKeys::default();
         let url = format!("{host}:{port}/sub");
         let run = DanmuCollector::connect_and_receive(
             1,
@@ -579,7 +620,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let cancellation = CancellationToken::new();
         let dropped = Arc::new(AtomicU64::new(0));
-        let mut seen = HashSet::new();
+        let mut seen = SeenKeys::default();
         let error = DanmuCollector::connect_and_receive(
             1,
             7,

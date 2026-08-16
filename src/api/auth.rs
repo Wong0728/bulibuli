@@ -54,16 +54,26 @@ async fn auth_state(
 
 async fn create_operator_invitation(
     State(state): State<SharedState>,
-    Extension(session): Extension<SessionAuth>,
+    Extension(session): Extension<Option<SessionAuth>>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    // auth_bypass_ips 命中时中间件不产生会话：显式提示而非 MissingExtension 500。
+    let session = session.ok_or_else(|| {
+        AppError::Unauthorized("认证跳过白名单模式下无会话上下文，无法创建邀请".to_string())
+    })?;
     if !session.role.is_owner() {
         return Err(AppError::Unauthorized(
             "只有 Owner 可以创建 Operator 邀请".to_string(),
         ));
     }
     let code = state.bili.auth.open_operator_invitation().await;
+    // 按字符边界安全切分（不依赖 generate_code 恒为 8 字节 ASCII 的隐式约定）。
+    let split = code
+        .char_indices()
+        .nth(4)
+        .map(|(index, _)| index)
+        .unwrap_or(code.len());
     Ok(Json(ApiResponse::with_message(
-        json!({"role": "operator", "pairing_code": format!("{}-{}", &code[..4], &code[4..])}),
+        json!({"role": "operator", "pairing_code": format!("{}-{}", &code[..split], &code[split..])}),
         "Operator 邀请已创建，10 分钟内有效且只能使用一次",
     )))
 }
@@ -101,8 +111,11 @@ async fn pair(
 
 async fn logout(
     State(state): State<SharedState>,
-    Extension(session): Extension<SessionAuth>,
+    Extension(session): Extension<Option<SessionAuth>>,
 ) -> Result<Response, AppError> {
+    let session = session.ok_or_else(|| {
+        AppError::Unauthorized("认证跳过白名单模式下无会话上下文，无需注销".to_string())
+    })?;
     state.bili.auth.revoke(&session.id).await?;
     state
         .infra

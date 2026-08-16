@@ -329,6 +329,8 @@ default_struct!(BoardSettings {
     path_display_mode: String = "hidden".to_string(),
     // 旧版兼容字段；新代码以 path_display_mode 为准。
     show_relative_path: bool = false,
+    // 下载管理抽屉：允许把服务器上的视频产物通过浏览器保存到本机（默认开启）。
+    browser_download_enabled: bool = true,
 });
 default_struct!(MonitorSettings {
     detect_reupload: bool = true,

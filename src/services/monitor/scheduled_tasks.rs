@@ -269,6 +269,13 @@ impl MonitorService {
         }
 
         let settings = self.settings_cached().await?;
+        // 旧版配置可能缺 mode 字段，回退 auto 保持与历史行为兼容。
+        let ffmpeg_mode = settings
+            .get("ffmpeg")
+            .and_then(|f| f.get("mode"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("auto")
+            .to_string();
         let custom_ffmpeg = settings
             .get("ffmpeg")
             .and_then(|f| f.get("custom_path"))
@@ -286,6 +293,7 @@ impl MonitorService {
             .unwrap_or_default();
         let burner = SubtitleBurner::with_burn_config(
             self.video_processor.clone(),
+            ffmpeg_mode,
             custom_ffmpeg,
             burn_config,
         );

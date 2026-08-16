@@ -26,7 +26,10 @@ async fn main() -> anyhow::Result<()> {
     install_crypto_provider()?;
     if let Err(e) = run(args).await {
         // 在 tracing 初始化之前用 eprintln 确保错误可见
-        eprintln!("应用启动失败: {:#}", e);
+        eprintln!(
+            "{}",
+            app::term_style::error(&format!("应用启动失败: {e:#}"))
+        );
         return Err(e);
     }
     Ok(())
@@ -160,11 +163,24 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
         println!("═══════════════════════════════════════════════════════");
         println!("  补哩补哩 bulibuli v{}", env!("CARGO_PKG_VERSION"));
         let main_url = app::server::main_url(&state);
-        println!("  网页管理: {main_url}");
-        println!("  监听模式: {mode_text} | AI 模式: {ai_text} | B站: {bili_text}");
+        println!("  网页管理: {}", app::term_style::url(&main_url));
+        println!(
+            "  监听模式: {} | AI 模式: {} | B站: {}",
+            app::term_style::ok(mode_text),
+            if startup_state.ai_skill_enabled {
+                app::term_style::ok(ai_text)
+            } else {
+                app::term_style::dim(ai_text)
+            },
+            if startup_state.bili_logged_in_uid.is_some() {
+                app::term_style::ok(&bili_text)
+            } else {
+                app::term_style::dim(&bili_text)
+            },
+        );
         println!();
-        println!("  正在自动打开浏览器...");
-        println!("  Ctrl+C 停止服务");
+        println!("  {}", app::term_style::dim("正在自动打开浏览器..."));
+        println!("  {}", app::term_style::dim("Ctrl+C 停止服务"));
         println!("═══════════════════════════════════════════════════════");
 
         app::onboarding::open_browser_safe(&main_url);
@@ -186,7 +202,6 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     if let Some(handle) = tui_handle.take() {
         handle.join();
     }
-    server_result?;
     state.media.download_manager.stop_monitor().await;
     state.business.monitor_service.stop().await;
     state.business.refresh_service.stop().await;
@@ -198,6 +213,8 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     }
     state.infra.db.clone().close().await?;
     info!("shutdown complete");
+    // 清理完成后再传播 serve 的错误：出错路径同样需要停止 aria2/录制并正常关闭数据库。
+    server_result?;
     Ok(())
 }
 

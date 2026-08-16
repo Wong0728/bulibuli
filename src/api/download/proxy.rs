@@ -50,18 +50,17 @@ pub(super) async fn download_proxy(
     use axum::body::Body;
     use axum::http::{header, StatusCode};
 
-    // SSRF 防护：仅允许 B 站相关域名。
-    if crate::services::bili_url_policy::validate(&q.url)
-        .await
-        .is_err()
-    {
+    // SSRF 防护：BiliResourceClient::get 内部执行完整校验（域名白名单 + DNS 私网
+    // 检查 + 逐跳重定向复验）。此前此处又 validate 一次，同一 URL 做两次 DNS 解析，
+    // 浪费且扩大 TOCTOU 窗口——移除重复调用，仅保留语法预检以给出更友好的拒绝文案。
+    if !crate::api::download::is_allowed_proxy_url(&q.url) {
         return Response::builder()
             .status(StatusCode::FORBIDDEN)
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
                 json!({
                     "success": false,
-                    "message": "不支持的下载域名，仅允许 bilibili.com / bilivideo.com"
+                    "message": "不支持的下载域名，仅允许 bilibili.com / bilivideo.com / hdslb.com"
                 })
                 .to_string(),
             ))
@@ -80,7 +79,8 @@ pub(super) async fn download_proxy(
     let body = Body::from_stream(stream);
 
     let filename = q.filename.unwrap_or_else(|| "download".to_string());
-    let disposition = if filename.is_ascii() {
+    let disposition = if filename.is_ascii() && !filename.contains('"') && !filename.contains('\\')
+    {
         format!("attachment; filename=\"{filename}\"")
     } else {
         format!(

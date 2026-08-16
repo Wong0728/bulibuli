@@ -22,6 +22,7 @@ clippy_output*.txt
 
 # External reference material is local-only and must never enter the public repo.
 【EXAMPLE】*/
+【example】*/
 
 # Local review, migration, and release-analysis notes.
 AUDIT_REPORT.md

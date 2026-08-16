@@ -109,6 +109,18 @@ function Read-Package([string]$Path) {
         $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actual -ne ([string]$entry.sha256).ToLowerInvariant()) { throw "包内文件校验失败：$relative" }
     }
+    # 额外文件检查：manifest 只校验"列出"的文件，若包内还有 manifest 未记录的
+    # 可执行文件（.exe/.dll/.ps1/.bat/.cmd），说明包被篡改或结构异常——这些文件
+    # 之后可能被执行（Test-Executable 直接运行包内 runtime）。
+    $listed = @($manifest.files | ForEach-Object { ([string]$_.path).Replace("/", "\").ToLowerInvariant() })
+    $extraExecutables = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $rel = $($_.FullName.Substring($rootPrefix.Length)).ToLowerInvariant()
+            ($_.Extension -in ".exe", ".dll", ".ps1", ".bat", ".cmd") -and ($listed -notcontains $rel)
+        }
+    if ($extraExecutables) {
+        throw "包内存在 manifest 未记录的可执行文件：$($extraExecutables[0].Name)（共 $($extraExecutables.Count) 个）"
+    }
     return [pscustomobject]@{ Root = $root; Manifest = $manifest }
 }
 
@@ -257,6 +269,15 @@ function Read-LocalPackage([string]$Path) {
             $checksum = "$resolved.sha256"
             if (-not (Test-Path -LiteralPath $checksum -PathType Leaf)) { return $null }
             Assert-Sha256 $resolved $checksum
+        } else {
+            # 目录包无法用归档级 .sha256 校验，至少要求存在 sidecar 校验文件
+            #（完整包内含 aria2c.exe.sha256 / ffmpeg.exe.sha256），
+            # 否则拒绝将其作为可信本地包（此前目录包完全跳过校验）。
+            $sidecars = Get-ChildItem -LiteralPath $resolved -Recurse -Filter "*.sha256" -File -ErrorAction Stop
+            if (-not $sidecars) {
+                Write-Warning "本地目录包缺少任何 .sha256 sidecar，跳过该候选：$resolved"
+                return $null
+            }
         }
         return Read-Package $resolved
     } catch {

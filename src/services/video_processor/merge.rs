@@ -145,6 +145,15 @@ impl VideoProcessor {
             if let Err(panic_payload) = AssertUnwindSafe(fut).catch_unwind().await {
                 error!("合并任务 [{tid}] panic: {panic_payload:?}");
                 tasks.lock().await.remove(&tid);
+                // panic 路径同样释放调用方的幂等键（on_complete 已随 fut 被 drop，
+                // 无法再调用——只能记录并依赖调用方的兜底超时；至少移除 tasks 条目
+                // 避免状态卡死）。
+                let payload = panic_payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".to_string());
+                error!("合并任务 [{tid}] 因 panic 终止，幂等键由调用方兜底: {payload}");
             }
         });
 
@@ -215,6 +224,16 @@ impl VideoProcessor {
     ) {
         let Some(stderr) = child.stderr.take() else {
             error!("合并任务 [{task_id}] 无法读取 ffmpeg stderr");
+            // 早退路径同样必须释放调用方的幂等键（on_complete），
+            // 否则该 bvid 的后续合并会被永久跳过。
+            if let Some(cb) = on_complete {
+                cb(MergeResult {
+                    success: false,
+                    task_id: task_id.to_string(),
+                    output_path: None,
+                    message: "无法读取 ffmpeg stderr".to_string(),
+                });
+            }
             return;
         };
         let reader = BufReader::new(stderr);

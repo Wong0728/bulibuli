@@ -2553,6 +2553,23 @@ async fn serve_ipc(state: SharedState) -> AppResult<()> {
             }
             // 控制通道只允许当前用户访问。运行时目录通常已经是 0700，
             // 这里对我们创建的后备目录也明确设置权限。
+            // /tmp 兜底目录可能被其他用户预置（create_dir_all 对已存在目录静默成功）：
+            // 目录属主与数据目录属主（即本进程用户）不一致，或组/其他位仍有权限时
+            // 拒绝使用，防止攻击者替换 socket 劫持 ctl 命令。
+            if let (Ok(metadata), Ok(data_metadata)) = (
+                std::fs::metadata(parent),
+                std::fs::metadata(&state.infra.paths.data_dir),
+            ) {
+                use std::os::unix::fs::MetadataExt;
+                let mode = metadata.permissions().mode();
+                if metadata.uid() != data_metadata.uid() || (mode & 0o077) != 0 {
+                    bind_errors.push(format!(
+                        "{label}: 目录属主/权限异常（uid={}, mode={mode:o}），拒绝使用",
+                        metadata.uid()
+                    ));
+                    continue;
+                }
+            }
             let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
         }
         match std::fs::symlink_metadata(&path) {

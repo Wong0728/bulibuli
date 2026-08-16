@@ -183,16 +183,21 @@ pub async fn run(
 
 /// 首次启动终端输出：打印 Setup URL + 提示。
 fn print_first_launch(port: u16) {
+    use crate::app::term_style;
+    let setup_url = format!("http://127.0.0.1:{port}");
     println!("═══════════════════════════════════════════════════════");
     println!("  补哩补哩 bulibuli v{}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("  请在浏览器中完成初始设置：");
-    println!("  → http://127.0.0.1:{port}");
+    println!("  → {}", term_style::url(&setup_url));
     println!();
-    println!("  正在自动打开浏览器...");
-    println!("  如果未能自动打开，请手动复制上面的地址到浏览器");
+    println!("  {}", term_style::dim("正在自动打开浏览器..."));
+    println!(
+        "  {}",
+        term_style::dim("如果未能自动打开，请手动复制上面的地址到浏览器")
+    );
     println!();
-    println!("  Ctrl+C 停止服务");
+    println!("  {}", term_style::dim("Ctrl+C 停止服务"));
     println!("═══════════════════════════════════════════════════════");
 }
 
@@ -232,6 +237,14 @@ pub fn write_pairing_code(data_dir: &std::path::Path, code: &str) -> anyhow::Res
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
     }
+    #[cfg(windows)]
+    {
+        // 显式收紧为仅当前用户/SYSTEM/管理员可读：便携目录若被解压到共享位置，
+        // 继承 ACL 可能让其他本机用户读到可换取 Owner 会话的配对码。
+        if let Err(error) = crate::services::file_safety::restrict_windows_file_acl(&temp) {
+            tracing::warn!(%error, "收紧 pair-code.txt ACL 失败，依赖目录继承权限");
+        }
+    }
     let _ = std::fs::remove_file(&path);
     std::fs::rename(&temp, &path)?;
     Ok(())
@@ -252,11 +265,17 @@ pub fn clear_pairing_code(data_dir: &std::path::Path) {
 /// 成功后回写 `startup_state.json` 的 `bili_logged_in_uid`，供下次启动摘要展示。
 pub async fn run_qr_login(state: &SharedState, paths: &AppPaths) {
     if let Err(error) = run_qr_login_inner(state, paths).await {
-        eprintln!("扫码登录失败：{error:#}（不阻塞启动，可稍后用前端网页登录）");
+        eprintln!(
+            "{}",
+            crate::app::term_style::error(&format!(
+                "扫码登录失败：{error:#}（不阻塞启动，可稍后用前端网页登录）"
+            ))
+        );
     }
 }
 
 async fn run_qr_login_inner(state: &SharedState, paths: &AppPaths) -> Result<()> {
+    use crate::app::term_style;
     let qrcode = state
         .bili
         .bili_api
@@ -265,7 +284,7 @@ async fn run_qr_login_inner(state: &SharedState, paths: &AppPaths) -> Result<()>
         .context("获取扫码登录二维码失败")?;
     println!("\n—— B 站扫码登录 ——");
     println!("请用 B 站 App 扫描以下 URL 对应的二维码（在浏览器打开该链接即可显示二维码图片）：");
-    println!("  {}", qrcode.url);
+    println!("  {}", term_style::url(&qrcode.url));
     println!("（或启动完成后，用前端网页 /settings 扫码）");
     println!("正在等待扫码确认...（最多 180 秒）\n");
 
@@ -273,7 +292,10 @@ async fn run_qr_login_inner(state: &SharedState, paths: &AppPaths) -> Result<()>
     let deadline = std::time::Instant::now() + Duration::from_secs(180);
     loop {
         if std::time::Instant::now() >= deadline {
-            println!("扫码登录超时，已跳过。可稍后用前端网页登录。");
+            println!(
+                "{}",
+                term_style::warn("扫码登录超时，已跳过。可稍后用前端网页登录。")
+            );
             return Ok(());
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -304,14 +326,20 @@ async fn run_qr_login_inner(state: &SharedState, paths: &AppPaths) -> Result<()>
                         .context("保存扫码登录凭证失败")?;
                     state.bili.bili_api.invalidate_session_caches().await;
                 }
-                println!("✓ 扫码登录成功");
+                println!("{}", term_style::ok("✓ 扫码登录成功"));
                 refresh_bili_uid(state, paths).await;
                 return Ok(());
             }
-            86090 => println!("已扫描，请在 B 站 App 确认登录..."),
-            86038 => println!("二维码已失效，请稍后用前端网页重新扫码。"),
+            86090 => println!("{}", term_style::ok("已扫描，请在 B 站 App 确认登录...")),
+            86038 => println!(
+                "{}",
+                term_style::warn("二维码已失效，请稍后用前端网页重新扫码。")
+            ),
             code if code < 0 => {
-                println!("扫码登录失败：{}", poll.message);
+                println!(
+                    "{}",
+                    term_style::error(&format!("扫码登录失败：{}", poll.message))
+                );
                 return Ok(());
             }
             _ => {}

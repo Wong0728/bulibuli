@@ -612,9 +612,19 @@
                         <select id="setting-path-display-mode" class="form-control">
                             <option value="hidden">隐藏路径</option>
                             <option value="relative">复制/显示相对路径</option>
-                            <option value="absolute">复制/显示绝对路径（仅可信本机）</option>
+                            <option value="absolute">复制/显示绝对路径（本机访问时生效）</option>
                         </select>
-                        <div class="form-note">打开文件夹始终作为独立操作；绝对路径可能泄露服务端文件系统信息。</div>
+                        <div class="form-note">绝对路径与“打开所在目录”仅对与服务同机的客户端（本机浏览器）生效；局域网远程设备仍显示相对路径，避免泄露服务端文件系统信息。</div>
+                    </div>
+                    <div class="form-group form-full">
+                        <div class="switch-group">
+                            <span class="switch-label">抽屉浏览器下载</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="setting-browser-download-enabled" aria-label="抽屉浏览器下载" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="form-note">开启后，在下载管理页点击视频打开的抽屉里，可勾选服务器上已下载的视频、音频、弹幕、评论等产物并保存到本机（服务器到本机）；关闭后隐藏入口且接口拒绝访问。</div>
                     </div>
                 </div>
             </div>
@@ -635,7 +645,7 @@
                 <div id="ai-skill-path-box" class="form-group form-full settings-ai-skill-path" hidden>
                     <span class="form-label">AI Skill 文件路径</span>
                     <div class="path-preview-box settings-path-preview">
-                        <code id="ai-skill-path-text">docs/skill.md</code>
+                        <code id="ai-skill-path-text">正在获取路径...</code>
                         <button class="btn btn-sm" id="copy-ai-skill-path-btn"><i class="fa-solid fa-copy"></i> 复制路径</button>
                     </div>
                     <div class="form-note settings-ai-skill-note">复制路径 → 发给 AI → 让它阅读该文件并学习如何使用</div>

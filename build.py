@@ -123,7 +123,11 @@ def _kill_processes_by_name(exe_name, expected_path=None):
             capture_output=True,
             check=False,
         )
-        text = out.stdout.decode("gbk", errors="ignore")
+        # tasklist 输出使用控制台 OEM 代码页：非中文 Windows 上按 GBK 解码会乱码。
+        try:
+            text = out.stdout.decode("oem", errors="replace")
+        except LookupError:  # 非 Windows 环境无 "oem" 编码
+            text = out.stdout.decode("gbk", errors="ignore")
     except FileNotFoundError:
         return 0
 
@@ -187,7 +191,7 @@ def build_frontend_bundle():
 def build_release(platform_name, target=None):
     """cargo build --release for the requested platform/target."""
     print(f"[2/5] 编译 Rust 项目 (release, {platform_name})...")
-    command = ["cargo", "build", "--release"]
+    command = ["cargo", "build", "--locked", "--release"]
     if target:
         command.extend(["--target", target])
     run(command, cwd=str(ROOT))
@@ -687,6 +691,9 @@ def run_quality_checks():
         playwright_bin = ROOT / "static" / "js" / "node_modules" / ".bin" / "playwright"
     if playwright_bin.is_file():
         commands.append(([npm_command, "run", "test:smoke"], ROOT / "static" / "js"))
+    else:
+        print("  [警告] 未找到 Playwright 可执行文件，跳过前端冒烟测试"
+              "（先在 static/js 下执行 npm ci 后重跑可获得完整检查）")
     for command, cwd in commands:
         run(command, cwd=str(cwd))
 
@@ -716,6 +723,10 @@ def run_quality_checks():
         line_count = len(path.read_text(encoding="utf-8").splitlines())
         if line_count > 800:
             advisory(f"{path.relative_to(ROOT)} has {line_count} lines (limit 800)")
+    import shutil
+    if shutil.which("node") is None:
+        print("  [错误] 未找到 node 可执行文件，无法执行 JavaScript 语法检查")
+        raise SystemExit(1)
     for path in sorted((ROOT / "static" / "js").glob("*.js")):
         result = subprocess.run(
             ["node", "--input-type=module", "--check"],

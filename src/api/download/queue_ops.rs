@@ -184,6 +184,11 @@ pub(super) async fn start_download(
     }
     let cookies = state.infra.settings_service.cookie_header().await?;
     let qn = req.qn.unwrap_or(80);
+    // B 站画质 code 为有限集合（16/32/64/74/80/112/116/120/125），
+    // 拒绝任意值直进 playurl 参数（负数/超大值会原样透传给上游）。
+    if !matches!(qn, 16 | 32 | 64 | 74 | 80 | 112 | 116 | 120 | 125) {
+        return Err(AppError::BadRequest(format!("不支持的视频画质代码: {qn}")));
+    }
     let default_fnval = state.infra.settings_service.current().query.video_format;
     let media_type = req.media_type.as_deref().unwrap_or("video");
 

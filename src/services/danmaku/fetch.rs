@@ -7,7 +7,7 @@ use chrono::{DateTime, Local};
 use futures::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::archive::archive_sidecar_files;
 use super::{cookie_header, cookie_map, DanmakuService, SidecarArchivePolicy, SEGMENT_DURATION};
@@ -116,7 +116,12 @@ impl DanmakuService {
                     match read_limited_response(resp, MAX_DANMAKU_SEGMENT_BYTES).await {
                         Ok(bytes) => {
                             if bytes.is_empty() {
-                                warn!("弹幕分段 {index} 返回空数据");
+                                // B 站对无弹幕分段通常返回 200 + 空 body：
+                                // 视为成功空段，否则稀疏弹幕视频会恒报 partial 并被
+                                // 计划任务反复重试。
+                                debug!("弹幕分段 {index} 返回空数据，按无弹幕处理");
+                                successful_segments += 1;
+                                failed_segments.retain(|failed| *failed != index);
                                 continue;
                             }
                             list.extend(dm_proto::parse_danmaku_bytes(&bytes));

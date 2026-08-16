@@ -141,6 +141,26 @@ impl LogBuffer {
             total,
         )
     }
+
+    /// 日志行级别样式：错误红色加粗、警告黄色、配对码等凭证青色加粗、命令回显弱化。
+    fn line_style(line: &str) -> Option<Style> {
+        if line.contains(" ERROR ") || line.starts_with("ERROR ") || line.contains("命令失败：")
+        {
+            Some(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+        } else if line.contains(" WARN ") || line.starts_with("WARN ") {
+            Some(Style::default().fg(Color::Yellow))
+        } else if line.contains("配对码") {
+            Some(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else if line.starts_with("> ") {
+            Some(Style::default().fg(Color::DarkGray))
+        } else {
+            None
+        }
+    }
 }
 
 /// tracing 控制台层的 writer：日志始终进缓冲区；界面未接管时同步写 stdout。
@@ -190,7 +210,8 @@ pub fn console_line(message: String) {
         buffer.push_line(message.clone());
     }
     if !TUI_ACTIVE.load(Ordering::Relaxed) {
-        println!("{message}");
+        // 直写 stdout 时高亮配对码等重点行；TUI 内由 render_log_area 按级别着色。
+        println!("{}", crate::app::term_style::code_line(&message));
     }
 }
 
@@ -251,7 +272,14 @@ impl Drop for TerminalGuard {
         TUI_ACTIVE.store(false, Ordering::Relaxed);
         let summary = self.buffer.exit_summary(&self.log_dir);
         let mut stdout = std::io::stdout().lock();
-        std::io::Write::write_all(&mut stdout, summary.as_bytes()).ok();
+        // 退出摘要中的警告/错误按级别着色，退出后仍能一眼定位重点。
+        let styled = summary
+            .lines()
+            .map(crate::app::term_style::log_line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::io::Write::write_all(&mut stdout, styled.as_bytes()).ok();
+        std::io::Write::write_all(&mut stdout, b"\n").ok();
         std::io::Write::flush(&mut stdout).ok();
     }
 }
@@ -545,7 +573,10 @@ fn render_log_area(
     let (log_lines, _) = buffer.view(*scroll, visible);
     let mut logs: Vec<Line> = log_lines
         .iter()
-        .map(|line| Line::raw(line.as_str()))
+        .map(|line| match LogBuffer::line_style(line) {
+            Some(style) => Line::styled(line.as_str(), style),
+            None => Line::raw(line.as_str()),
+        })
         .collect();
     if *scroll > 0 {
         logs.push(Line::styled(
@@ -605,6 +636,17 @@ mod tests {
         assert!(!LogBuffer::is_important_line(
             "2026-08-10T00:00:00Z  INFO request complete"
         ));
+    }
+
+    #[test]
+    fn log_line_styles_match_severity_and_credentials() {
+        let styled = |line: &str| LogBuffer::line_style(line).is_some();
+        assert!(styled("2026-08-10T00:00:00Z ERROR parse failed"));
+        assert!(styled("2026-08-10T00:00:00Z  WARN request failed"));
+        assert!(styled("命令失败：参数无效"));
+        assert!(styled("首次设备配对码：ABCD-1234（10 分钟内有效）"));
+        assert!(styled("> status"));
+        assert!(!styled("2026-08-10T00:00:00Z  INFO request complete"));
     }
 
     #[test]

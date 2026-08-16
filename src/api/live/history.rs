@@ -1,12 +1,13 @@
 use super::{EventsQuery, HistoryQuery};
 use crate::error::{ApiResponse, AppError};
+use crate::services::auth::ClientInfo;
 use crate::services::danmu_collector::commands::{
     command_base, is_link_command, is_stats_command, is_system_command, system_event_label,
 };
 use crate::services::live_recorder::ArchivedLiveEvent;
 use crate::services::security_config::can_open_directory;
 use crate::state::SharedState;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::Json;
 use futures::{stream, StreamExt};
 use serde_json::{json, Value};
@@ -16,6 +17,9 @@ pub(super) async fn events(
     State(state): State<SharedState>,
     Query(query): Query<EventsQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    if query.room_id <= 0 {
+        return Err(AppError::BadRequest("直播间号必须为正整数".into()));
+    }
     let limit = query.limit.unwrap_or(100).clamp(1, 100);
     let current_recording_id = state
         .media
@@ -274,9 +278,10 @@ fn event_display_text(event: &ArchivedLiveEvent) -> String {
 
 pub(super) async fn history(
     State(state): State<SharedState>,
+    Extension(client): Extension<ClientInfo>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let can_open_directory = can_open_directory(&state.bili.security.current().mode);
+    let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
     let rows = state
         .media
         .live_recorder
@@ -292,9 +297,10 @@ pub(super) async fn history(
 
 pub(super) async fn history_item(
     State(state): State<SharedState>,
+    Extension(client): Extension<ClientInfo>,
     Path(recording_id): Path<i32>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let can_open_directory = can_open_directory(&state.bili.security.current().mode);
+    let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
     let row = state
         .media
         .live_recorder
@@ -315,9 +321,10 @@ pub(super) async fn recovery(
 
 pub(super) async fn open_history_directory(
     State(state): State<SharedState>,
+    Extension(client): Extension<ClientInfo>,
     Path(recording_id): Path<i32>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    if !can_open_directory(&state.bili.security.current().mode) {
+    if !can_open_directory(&state.bili.security.current().mode, client.ip) {
         return Err(AppError::BadRequest("仅本机访问支持打开所在目录".into()));
     }
     let row = state

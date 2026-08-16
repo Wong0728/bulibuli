@@ -175,7 +175,9 @@ impl DownloadManager {
                 .bili_api
                 .get_audio_url(
                     &bvid,
-                    None,
+                    // 必须传任务自身的 cid：None 会解析为视频默认 cid（P1），
+                    // 多P分P音频失败重试会拿到 P1 音频合并出错轨的成品。
+                    audio_task.cid,
                     &cookies,
                     &self
                         .settings_service

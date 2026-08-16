@@ -132,7 +132,8 @@ export async function loadHistoryBoard(tab, { append = false } = {}) {
     } catch (e) {
         if (e?.name === 'AbortError') return;
         console.error('加载看板失败:', e);
-        showToast('加载看板失败', 'error');
+        // 离线时 apiRequest 已展示统一的持续提示，这里不再叠加其他弹窗。
+        if (!e.offline) showToast('加载看板失败', 'error');
     } finally {
         if (requestId === _state.historyBoardRequestId) {
             _state.historyBoardInFlight = false;

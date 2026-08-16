@@ -7,6 +7,8 @@ use aes_gcm::{
 #[cfg(not(windows))]
 use rand::RngCore;
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
+#[cfg(target_os = "macos")]
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -241,7 +243,9 @@ fn macos_master_key() -> AppResult<Vec<u8>> {
     let mut key = [0u8; 32];
     rand::rng().fill_bytes(&mut key);
     let encoded = URL_SAFE_NO_PAD.encode(key);
-    let status = Command::new("security")
+    // 使用 stdin 传入密钥而非 argv：`security -w` 从 stdin 读取可避免密钥短暂暴露于
+    // `ps` 进程列表（虽然密钥是随机值而非用户口令，且写入仅一次）。
+    let mut child = Command::new("security")
         .args([
             "add-generic-password",
             "-a",
@@ -249,10 +253,17 @@ fn macos_master_key() -> AppResult<Vec<u8>> {
             "-s",
             SERVICE,
             "-w",
-            &encoded,
+            "-",
             "-U",
         ])
-        .status()?;
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(encoded.as_bytes())?;
+    }
+    let status = child.wait()?;
     if !status.success() {
         return Err(AppError::Internal(
             "无法在 macOS Keychain 中创建 SecretStore 主密钥".to_string(),

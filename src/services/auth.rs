@@ -61,6 +61,26 @@ struct AttemptBook {
 struct FailedAttempts {
     failures: u32,
     blocked_until: i64,
+    last_seen: i64,
+}
+
+/// 每 IP 跟踪表容量上限：两处限流 map 的条目此前永不删除，
+/// IPv6 源地址轮换可无限耗尽内存。
+const MAX_TRACKED_IPS: usize = 10_000;
+
+/// 总量达到上限时淘汰最久未活动的 IP 条目（近似 LRU；仅在超限时执行，
+/// 全局限流约束下触发频率低，O(n) 扫描可接受）。
+fn evict_stalest_ip<V>(map: &mut HashMap<IpAddr, V>, last_seen_of: impl Fn(&V) -> i64) {
+    while map.len() >= MAX_TRACKED_IPS {
+        let Some(stalest) = map
+            .iter()
+            .min_by_key(|(ip, value)| (last_seen_of(value), *ip))
+            .map(|(ip, _)| *ip)
+        else {
+            return;
+        };
+        map.remove(&stalest);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -462,6 +482,11 @@ impl AuthService {
         // 检查每 IP 登录速率限制（每分钟最多 LOGIN_RATE_LIMIT_PER_IP 次）
         {
             let mut login_attempts = self.login_attempts.lock().await;
+            // /api/auth/pair 是公开端点：攻击者轮换 IPv6 源地址可让 map 无限增长，
+            // 插入前先淘汰最久未活动的 IP，总量有上界。
+            evict_stalest_ip(&mut login_attempts, |timestamps| {
+                timestamps.back().copied().unwrap_or(0)
+            });
             let timestamps = login_attempts.entry(ip).or_default();
             while timestamps
                 .front()
@@ -506,7 +531,9 @@ impl AuthService {
 
     async fn record_failure(&self, ip: IpAddr, now: i64) {
         let mut attempts = self.attempts.lock().await;
+        evict_stalest_ip(&mut attempts.per_ip, |failed| failed.last_seen);
         let failed = attempts.per_ip.entry(ip).or_default();
+        failed.last_seen = now;
         failed.failures = failed.failures.saturating_add(1);
         if failed.failures >= 5 {
             let delay = 1i64

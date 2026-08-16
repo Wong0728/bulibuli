@@ -39,7 +39,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-const DANMU_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+// 互动归档收尾是两遍全量扫描（上限 50 万条 / 512 MB），数小时直播轻松超过旧值 5 秒；
+// 超时 abort 会在写出中途截断 legacy JSON / XML，因此按最坏工作量放宽预算。
+const DANMU_STOP_TIMEOUT: Duration = Duration::from_secs(120);
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 const URL_REFRESH_MARGIN_SECS: i64 = 60;
 const CONSERVATIVE_URL_REFRESH: Duration = Duration::from_secs(15 * 60);
@@ -136,6 +138,9 @@ enum SessionEntry {
     Starting {
         snapshot: Arc<Mutex<RecordingInfo>>,
         cancellation: CancellationToken,
+        /// 启动代际：stop()/start_with_options 跨 await 操作 sessions 时，
+        /// 只允许移除自己创建的那一代 Starting，防止误删用户随后发起的新会话。
+        generation: u64,
     },
     Active(RecordingSessionHandle),
     Stopping {
@@ -143,6 +148,9 @@ enum SessionEntry {
         job_id: String,
     },
 }
+
+/// 全局启动代际计数器（单调递增）。
+static START_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Clone)]
 struct RecordingSessionHandle {
@@ -263,18 +271,25 @@ impl LiveRecorder {
             if sessions.contains_key(&room_id) {
                 return Err(anyhow!("直播间 {room_id} 已在录制中或正在启动"));
             }
+            let generation =
+                START_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             sessions.insert(
                 room_id,
                 SessionEntry::Starting {
                     snapshot: startup_snapshot,
                     cancellation: CancellationToken::new(),
+                    generation,
                 },
             );
         }
-        let startup_cancellation = {
+        let (startup_cancellation, startup_generation) = {
             let sessions = self.inner.sessions.lock().await;
             match sessions.get(&room_id) {
-                Some(SessionEntry::Starting { cancellation, .. }) => cancellation.clone(),
+                Some(SessionEntry::Starting {
+                    cancellation,
+                    generation,
+                    ..
+                }) => (cancellation.clone(), *generation),
                 _ => return Err(anyhow!("直播录制启动已取消")),
             }
         };
@@ -289,7 +304,17 @@ impl LiveRecorder {
             )
             .await;
         if result.is_err() {
-            self.inner.sessions.lock().await.remove(&room_id);
+            // 仅移除本次启动创建的 Starting 条目：若失败前用户已 stop() 并对同房间
+            // 发起新录制，map 中是新一代条目，不能误删。
+            let mut sessions = self.inner.sessions.lock().await;
+            if matches!(
+                sessions.get(&room_id),
+                Some(SessionEntry::Starting {
+                    generation: g, ..
+                }) if *g == startup_generation
+            ) {
+                sessions.remove(&room_id);
+            }
         }
         result
     }
@@ -653,6 +678,27 @@ impl LiveRecorder {
             .await;
             return Err(error.into());
         }
+        // 最后一次取消检查：上面的 DB 更新等 await 期间，stop() 可能已取消启动令牌
+        // 并移除 Starting 条目。此检查之后到 insert/spawn 之间不再有 await，
+        // 消除“已向用户返回取消，录制却复活为 Active 会话”的 TOCTOU 竞态。
+        if startup_cancellation.is_cancelled() {
+            collector_cancel.cancel();
+            if let Some(handle) = danmu_collector_monitor.take() {
+                handle.abort();
+            }
+            if let Some(handle) = danmu_write_handle.take() {
+                handle.abort();
+            }
+            let _ = ffmpeg.stop_with_timeout(STOP_TIMEOUT).await;
+            mark_startup_recording(
+                &self.inner.db,
+                recording.id,
+                RecordingStatus::Cancelled,
+                "启动已由用户取消".to_owned(),
+            )
+            .await;
+            return Err(anyhow!("直播录制启动已取消"));
+        }
         let (command_tx, command_rx) = mpsc::channel(8);
         let handle = RecordingSessionHandle {
             snapshot: snapshot.clone(),
@@ -720,9 +766,10 @@ impl LiveRecorder {
                 Some(SessionEntry::Starting {
                     snapshot,
                     cancellation,
+                    generation,
                 }) => {
                     cancellation.cancel();
-                    Some(snapshot.clone())
+                    Some((snapshot.clone(), *generation))
                 }
                 Some(SessionEntry::Stopping { snapshot, .. }) => {
                     let snapshot = snapshot.clone();
@@ -733,14 +780,23 @@ impl LiveRecorder {
             }
         };
 
-        if let Some(snapshot) = startup {
+        if let Some((snapshot, generation)) = startup {
             let result = {
                 let mut info = snapshot.lock().await;
                 info.status = RecordingStatus::Cancelled;
                 info.error_msg = Some("启动已由用户取消".to_owned());
                 info.clone()
             };
-            self.inner.sessions.lock().await.remove(&room_id);
+            // 仅移除自己取消的那一代 Starting：跨 await 期间用户可能已发起同房间的新启动。
+            let mut sessions = self.inner.sessions.lock().await;
+            if matches!(
+                sessions.get(&room_id),
+                Some(SessionEntry::Starting {
+                    generation: g, ..
+                }) if *g == generation
+            ) {
+                sessions.remove(&room_id);
+            }
             return Ok(result);
         }
         let handle = {
@@ -1379,6 +1435,10 @@ impl RecordingWorker {
                             self.stop_requested = true;
                             self.stop_reason = Some(STOP_REASON_MANUAL);
                             let result = self.finalize(None).await;
+                            // worker 自行清理会话条目：stop() 只等 reply 30 秒，
+                            // 而 finalize 含分段合并可达数分钟，超时路径无人清理。
+                            // 调用方成功路径的 remove 与此幂等。
+                            self.sessions.lock().await.remove(&self.room_id);
                             let _ = reply.send(result);
                             return;
                         }
@@ -1450,7 +1510,11 @@ impl RecordingWorker {
                             let _ = reply.send(job_id);
                             return;
                         }
-                        None => return,
+                        None => {
+                            // 命令通道关闭（所有 handle 已释放）：同样清理会话条目。
+                            self.sessions.lock().await.remove(&self.room_id);
+                            return;
+                        }
                     }
                 }
                 reload = self.reload_rx.recv(), if self.reload_channel_open => {
@@ -1559,6 +1623,9 @@ impl RecordingWorker {
                         ))
                         .await;
                         let _ = self.finalize(None).await;
+                        // 与磁盘不足/文件超限/异常退出路径一致：移除会话条目，
+                        // 否则房间会占用并发额度且无法再次录制，直到进程重启。
+                        self.sessions.lock().await.remove(&self.room_id);
                         return;
                     }
                 }

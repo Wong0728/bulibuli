@@ -4,6 +4,7 @@ import { checkNetworkBeforeAction, apiPost, apiGet } from './core.js';
 import { switchTab } from './bootstrap.js';
 import { loadHistoryBoard } from './history.js';
 import { showToast, confirmDialog } from './download-status.js';
+import { showNetworkToast } from './network.js';
 
 // --- 博主管理（从服务器加载） ---
 export async function loadBloggersFromServer() {
@@ -67,7 +68,11 @@ export async function saveBloggers() {
         await loadBloggersFromServer();
         showToast(`已刷新 ${_state.bloggers.length} 个博主`, 'success');
     } catch (e) {
-        showToast('刷新列表失败，请检查网络', 'error');
+        if (e.offline) {
+            showNetworkToast();
+        } else {
+            showToast('刷新列表失败', 'error');
+        }
     }
 }
 

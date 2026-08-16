@@ -1,5 +1,6 @@
 use crate::error::{ApiResponse, AppError};
 use crate::models::burn::BurnTask;
+use crate::services::auth::ClientInfo;
 use crate::services::live_recorder::RecordingTrigger;
 use crate::services::live_source::{
     schedule_from_json, CaptureMode, NewLiveSource, UpdateLiveSource, WeeklySchedule,
@@ -10,7 +11,7 @@ use crate::state::SharedState;
 use axum::{
     extract::{Query, State},
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -169,6 +170,9 @@ async fn stop_recording(
     State(state): State<SharedState>,
     Json(body): Json<RoomBody>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    if body.room_id <= 0 {
+        return Err(AppError::BadRequest("直播间号必须为正整数".into()));
+    }
     let session_key = match state.infra.settings_service.cookie_header().await {
         Ok(cookies) => state
             .bili
@@ -216,7 +220,11 @@ async fn stop_recording(
                         .await;
                 }
             }
-            return Err(AppError::BadRequest(error.to_string()));
+            return Err(AppError::BadRequest(
+                crate::services::live_recorder::ffmpeg_session::redact_diagnostics(
+                    &error.to_string(),
+                ),
+            ));
         }
     };
     Ok(Json(ApiResponse::with_message(
@@ -236,8 +244,9 @@ async fn recording_status(
 
 async fn dashboard(
     State(state): State<SharedState>,
+    Extension(client): Extension<ClientInfo>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let can_open_directory = can_open_directory(&state.bili.security.current().mode);
+    let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
     let (sources, runtime, sessions, monitor, risk_notice, merge_jobs, recovery) = tokio::join!(
         state.business.live_source_service.list(),
         state.business.live_monitor.runtime_snapshot(),
@@ -361,6 +370,9 @@ async fn delete_source(
     State(state): State<SharedState>,
     Json(body): Json<RoomBody>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    if body.room_id <= 0 {
+        return Err(AppError::BadRequest("直播间号必须为正整数".into()));
+    }
     if state
         .media
         .live_recorder
@@ -419,66 +431,51 @@ async fn burn_recording_danmaku(
         .ok_or_else(|| AppError::BadRequest("该录制没有互动归档，无法烧录弹幕".into()))?
         .to_path_buf();
     let task_key = format!("live-recording-{recording_id}");
-    {
-        let tasks = state.media.burn_tasks.lock().await;
-        if tasks.values().any(|task| {
-            task.bvid == task_key && matches!(task.status.as_str(), "queued" | "running")
+    // 去重检查与插入之间不再释放锁：否则两个并发请求都能通过检查各自 spawn
+    // 一个 ffmpeg（对照 download/burn.rs 的实现——先插占位再 spawn，无此窗口）。
+    // items 的读取放在持锁期间完成，load_live_burn_items 是本地文件解析，耗时可预期。
+    let (items, task_id, task_guard) = {
+        let mut task_guard = state.media.burn_tasks.lock().await;
+        crate::models::burn::prune_burn_tasks(&mut task_guard);
+        if task_guard.values().any(|task| {
+            task.bvid == task_key && crate::models::burn::burn_status_active(&task.status)
         }) {
             return Err(AppError::Conflict("该录制的烧录任务已在进行中".into()));
         }
-    }
-    let items = load_live_burn_items(&events_path)
-        .await
-        .map_err(|error| AppError::BadRequest(format!("读取互动归档失败: {error}")))?;
-    if items.is_empty() {
-        return Err(AppError::BadRequest("互动归档中没有弹幕或 SC".into()));
-    }
+        let items = load_live_burn_items(&events_path)
+            .await
+            .map_err(|error| AppError::BadRequest(format!("读取互动归档失败: {error}")))?;
+        if items.is_empty() {
+            return Err(AppError::BadRequest("互动归档中没有弹幕或 SC".into()));
+        }
+        let task_id: String = uuid::Uuid::new_v4().to_string().chars().take(8).collect();
+        task_guard.insert(
+            task_id.clone(),
+            BurnTask {
+                bvid: task_key.clone(),
+                status: "queued".to_string(),
+                message: "烧录任务已排队".to_string(),
+                output_path: None,
+                created_at: chrono::Utc::now().timestamp(),
+                updated_at: chrono::Utc::now().timestamp(),
+            },
+        );
+        (items, task_id, task_guard)
+    };
     let settings = state.infra.settings_service.current();
     let burn_config = settings.burn.to_burn_config();
     let custom_path = settings.ffmpeg.custom_path.trim().to_string();
     let custom_ffmpeg = (!custom_path.is_empty()).then_some(custom_path);
     let burner = SubtitleBurner::with_burn_config(
         state.media.video_processor.clone(),
+        settings.ffmpeg.mode.clone(),
         custom_ffmpeg,
         burn_config,
     );
     let burn_tasks = state.media.burn_tasks.clone();
     let burn_semaphore = state.media.burn_semaphore.clone();
-    let task_id = uuid::Uuid::new_v4()
-        .to_string()
-        .chars()
-        .take(8)
-        .collect::<String>();
     let response_task_id = task_id.clone();
     let download_dir = state.infra.paths.download_dir.clone();
-    let now = chrono::Utc::now().timestamp();
-    let mut task_guard = burn_tasks.lock().await;
-    task_guard.retain(|_, task| {
-        matches!(task.status.as_str(), "queued" | "running")
-            || now.saturating_sub(task.updated_at.max(task.created_at)) <= 60 * 60
-    });
-    if task_guard.len() >= 200 {
-        let mut terminal = task_guard
-            .iter()
-            .filter(|(_, task)| !matches!(task.status.as_str(), "queued" | "running"))
-            .map(|(id, task)| (id.clone(), task.updated_at))
-            .collect::<Vec<_>>();
-        terminal.sort_by_key(|(_, updated_at)| *updated_at);
-        for (id, _) in terminal.into_iter().take(task_guard.len() - 199) {
-            task_guard.remove(&id);
-        }
-    }
-    task_guard.insert(
-        task_id.clone(),
-        BurnTask {
-            bvid: task_key,
-            status: "queued".to_string(),
-            message: "烧录任务已排队".to_string(),
-            output_path: None,
-            created_at: chrono::Utc::now().timestamp(),
-            updated_at: chrono::Utc::now().timestamp(),
-        },
-    );
     drop(task_guard);
     tokio::spawn(async move {
         let Ok(_permit) = burn_semaphore.acquire_owned().await else {

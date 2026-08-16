@@ -21,9 +21,21 @@ pub enum AccessMode {
     Proxy,
 }
 
-/// 文件夹打开只对运行服务的本机有意义；远程访问只能复制/显示安全路径。
-pub fn can_open_directory(mode: &AccessMode) -> bool {
-    matches!(mode, AccessMode::Local)
+/// 客户端是否与服务同机：环回地址视为同机（IPv4-mapped IPv6 归一化后再判断，
+/// Windows 双栈监听下 127.0.0.1 连接可能呈现为 ::ffff:127.0.0.1）。
+pub fn is_local_client(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback(),
+        IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+    }
+}
+
+/// 打开所在目录/显示绝对路径只对与服务同机的客户端有意义；远程访问只能复制/显示安全路径。
+/// Local 模式只监听环回，天然同机；Lan/Proxy 模式下按实际客户端 IP 判断。
+pub fn can_open_directory(mode: &AccessMode, client_ip: IpAddr) -> bool {
+    matches!(mode, AccessMode::Local) || is_local_client(client_ip)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -397,10 +409,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn directory_open_is_local_only() {
-        assert!(can_open_directory(&AccessMode::Local));
-        assert!(!can_open_directory(&AccessMode::Lan));
-        assert!(!can_open_directory(&AccessMode::Proxy));
+    fn directory_open_follows_client_ip() {
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+        let loopback_v6: IpAddr = "::1".parse().unwrap();
+        let loopback_mapped: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        let remote: IpAddr = "192.168.1.10".parse().unwrap();
+        assert!(can_open_directory(&AccessMode::Local, remote));
+        assert!(can_open_directory(&AccessMode::Lan, loopback));
+        assert!(can_open_directory(&AccessMode::Lan, loopback_v6));
+        assert!(can_open_directory(&AccessMode::Lan, loopback_mapped));
+        assert!(!can_open_directory(&AccessMode::Lan, remote));
+        assert!(!can_open_directory(&AccessMode::Proxy, remote));
     }
 
     #[test]

@@ -7,13 +7,14 @@ import {
     onNetworkRecovered,
     dismissNetworkToast,
     setBackendAvailability,
+    showNetworkToast,
 } from './network.js';
 import { checkCookiesStatus, dismissCookieWarning, updateLoginCard, refreshLoginInfo } from './auth-card.js';
-export { updateNetworkBanner, updateNetworkDisabledButtons, checkNetworkBeforeAction, onNetworkRecovered, dismissNetworkToast, setBackendAvailability } from './network.js';
+export { updateNetworkBanner, updateNetworkDisabledButtons, checkNetworkBeforeAction, onNetworkRecovered, dismissNetworkToast, setBackendAvailability, showNetworkToast } from './network.js';
 export { checkCookiesStatus, dismissCookieWarning, updateLoginCard, refreshLoginInfo } from './auth-card.js';
 import { switchTab, showQRCodeLogin, refreshQRCode, closeQRCodeModal, toggleManualCookie, saveManualCookie, logoutAccount } from './bootstrap.js';
 import { loadMoreManualQuery, doManualResolve } from './manual.js';
-import { getDownloadLinks, downloadAudioWithQuality, downloadVideoWithQuality, downloadDanmaku, downloadComments } from './media-links.js';
+import { getDownloadLinks, downloadAudioWithQuality, downloadVideoWithQuality, downloadDanmaku, downloadComments, browserDownloadSelected, toggleBrowserDownloadSelect, updateBrowserDownloadCount } from './media-links.js';
 import {
     showAddBloggerModal,
     closeBloggerModal,
@@ -38,7 +39,7 @@ import { switchBoardTab, loadHistoryBoard, updateDownloadProgressInList } from '
 import { startProgressUpdates, showToast, confirmDialog, closeConfirmDialog } from './download-status.js';
 import { addTimePoint, removeTimePoint, browseFFmpegPath, testFFmpeg, saveSettings, resetSettings, loadSettings, testDownload, restartAria2 } from './settings.js';
 import { openVideoDrawer, closeVideoDrawer, openVideoDrawerFromManual } from './drawer.js';
-import { burnMedia, deleteVideoRecord, refreshVideoInfo, loadBvidLogs, selectQualityPill, startVideoDownload, retryVideoDownload, startVideoDownloadFromManual, toggleAllPages, openVideoPage, downloadCover, startSeasonDownload, toggleAllEpisodes } from './media-actions.js';
+import { burnMedia, deleteVideoRecord, refreshVideoInfo, loadBvidLogs, selectQualityPill, startVideoDownload, retryVideoDownload, startVideoDownloadFromManual, saveManualToLocal, toggleAllPages, openVideoPage, downloadCover, startSeasonDownload, toggleAllEpisodes } from './media-actions.js';
 import { loadDrawerComments, loadDrawerDanmaku } from './drawer-sidecars.js';
 import { openHistoryDirectory } from './directory-actions.js';
 import './live.js';
@@ -146,16 +147,20 @@ const _declarativeActions = {
     'burn-media': el => burnMedia(el.dataset.bvid, el.dataset.kind, el, el.dataset.historyId ? Number(el.dataset.historyId) : undefined),
     'select-quality': el => selectQualityPill(el, Number(el.dataset.qn)),
     'start-manual-video': el => startVideoDownloadFromManual(el.dataset.bvid),
+    'save-manual-to-local': el => saveManualToLocal(el.dataset.bvid, el.dataset.title),
     'toggle-all-pages': () => toggleAllPages(),
     'resolve-link': () => doManualResolve(),
     'start-season-download': el => startSeasonDownload(el.dataset.mediaType, el.dataset.seasonTitle),
     'toggle-all-episodes': () => toggleAllEpisodes(),
     'show-add-blogger-modal': () => showAddBloggerModal(),
+    'browser-download-selected': el => browserDownloadSelected(el.dataset.bvid),
 };
 
 const _declarativeChangeActions = {
     'toggle-active-window-mode': el => toggleActiveWindowMode(el.dataset.scope || 'blogger'),
     'load-known-blogger-config': () => loadKnownBloggerIntoAddForm(),
+    'browser-download-master': el => toggleBrowserDownloadSelect(el.checked),
+    'browser-download-check': () => updateBrowserDownloadCount(),
 };
 
 document.addEventListener('click', event => {
@@ -506,7 +511,8 @@ export async function apiRequest(url, options = {}) {
         _state.isNetworkOnline = false;
         updateNetworkBanner();
         updateNetworkDisabledButtons();
-        showToast(_NETWORK_ERR_MSG, 'error', 5000);
+        // 离线期间只保留一条持续提示，避免不同入口的弹窗堆叠。
+        showNetworkToast();
         throw new ApiError(0, _NETWORK_ERR_MSG, { offline: true, cause: error });
     } finally {
         const index = _state.currentControllers.indexOf(controller);

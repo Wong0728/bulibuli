@@ -1,10 +1,11 @@
 //! 历史记录读写接口：按博主查询、删除单条记录与关键字搜索。
 
 use crate::error::{ApiResponse, AppError};
+use crate::services::auth::ClientInfo;
 use crate::services::file_safety::ensure_existing_within_root;
 use crate::services::security_config::can_open_directory;
 use crate::state::SharedState;
-use axum::{extract::Query, extract::State, Json};
+use axum::{extract::Query, extract::State, Extension, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -48,9 +49,10 @@ pub(super) struct OpenDirectoryRequest {
 
 pub(super) async fn open_directory(
     State(state): State<SharedState>,
+    Extension(client): Extension<ClientInfo>,
     Json(req): Json<OpenDirectoryRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    if !can_open_directory(&state.bili.security.current().mode) {
+    if !can_open_directory(&state.bili.security.current().mode, client.ip) {
         return Err(AppError::BadRequest(
             "仅本机访问支持打开所在目录".to_string(),
         ));
@@ -95,10 +97,18 @@ pub(super) async fn open_directory(
     if !tokio::fs::try_exists(&target).await.unwrap_or(false) {
         return Err(AppError::NotFound("文件不存在".to_string()));
     }
-    let directory = target
-        .parent()
-        .filter(|path| path.is_dir())
-        .ok_or_else(|| AppError::NotFound("文件所在目录不存在".to_string()))?;
+    let directory = target.parent().map(|path| path.to_path_buf());
+    let directory = match directory {
+        Some(path)
+            if tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false) =>
+        {
+            path
+        }
+        _ => return Err(AppError::NotFound("文件所在目录不存在".to_string())),
+    };
     open::that(directory)
         .map_err(|_| AppError::Internal("open download directory failed".to_string()))?;
     Ok(Json(ApiResponse::with_message(
@@ -123,6 +133,8 @@ pub(super) async fn delete_history(
     if bvid.is_empty() {
         return Err(AppError::BadRequest("请提供视频BV号".to_string()));
     }
+    // 有意的产品契约：省略 delete_files 时默认连带删除本地文件（与前端"删除"按钮
+    // 的预期一致）。API 文档已声明；需要仅删记录的调用方必须显式传 false。
     let delete_files = req.delete_files.unwrap_or(true);
 
     match state

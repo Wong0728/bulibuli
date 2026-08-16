@@ -2,6 +2,7 @@
 
 use crate::error::{ApiResponse, AppError};
 use crate::models::burn::BurnTask;
+use crate::services::file_safety::strip_verbatim_prefix;
 use crate::services::subtitle_burner::SubtitleBurner;
 use crate::state::business::BusinessState;
 use crate::state::infra::InfraState;
@@ -11,13 +12,9 @@ use axum::extract::State;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::error;
 use uuid::Uuid;
-
-const BURN_TASK_TTL_SECONDS: i64 = 60 * 60;
-const MAX_BURN_TASKS: usize = 200;
 
 #[derive(Deserialize)]
 pub(super) struct BurnRequest {
@@ -82,7 +79,7 @@ async fn spawn_burn(
     };
     let video_path =
         resolve_burn_video_path(infra, business, bvid, video_path, history.as_ref()).await?;
-    if !video_path.exists() {
+    if !tokio::fs::try_exists(&video_path).await.unwrap_or(false) {
         return Err(AppError::NotFound("视频文件不存在".to_string()));
     }
 
@@ -91,15 +88,36 @@ async fn spawn_burn(
         .chars()
         .take(8)
         .collect::<String>();
-    let custom_ffmpeg = {
+    let (ffmpeg_mode, custom_ffmpeg) = {
         let settings = infra.settings_service.current();
         let path = settings.ffmpeg.custom_path.trim().to_string();
-        (!path.is_empty()).then_some(path)
+        (
+            settings.ffmpeg.mode.clone(),
+            (!path.is_empty()).then_some(path),
+        )
     };
+    // 前置拦截：FFmpeg 不具备烧录能力时直接拒绝，不再创建任务。
+    // 前端抽屉会依据 can_burn 置灰按钮，这里兜底防止绕过 UI 的直接调用。
+    if !crate::services::subtitle_burner::ffmpeg_supports_burn(
+        media.video_processor.clone(),
+        &ffmpeg_mode,
+        custom_ffmpeg.as_deref(),
+    )
+    .await
+    {
+        return Err(AppError::Forbidden(
+            "当前 FFmpeg 不支持烧录（缺少 ass 滤镜或视频编码器）。建议下载完整版 FFmpeg，或在“设置 → FFmpeg”中更换自定义路径"
+                .to_string(),
+        ));
+    }
     // 烧录参数从 settings 读取，未配置时使用 BurnConfig::default()（行为与迭代前一致）。
     let burn_config = infra.settings_service.current().burn.to_burn_config();
-    let burner =
-        SubtitleBurner::with_burn_config(media.video_processor.clone(), custom_ffmpeg, burn_config);
+    let burner = SubtitleBurner::with_burn_config(
+        media.video_processor.clone(),
+        ffmpeg_mode,
+        custom_ffmpeg,
+        burn_config,
+    );
     let burn_tasks = media.burn_tasks.clone();
     let burn_semaphore = media.burn_semaphore.clone();
     let history_service = business.history_service.clone();
@@ -110,7 +128,7 @@ async fn spawn_burn(
 
     {
         let mut tasks = burn_tasks.lock().await;
-        prune_burn_tasks(&mut tasks);
+        crate::models::burn::prune_burn_tasks(&mut tasks);
         let now = chrono::Utc::now().timestamp();
         tasks.insert(
             task_id.clone(),
@@ -252,16 +270,26 @@ async fn resolve_burn_video_path(
     if let Some(p) = video_path.filter(|p| !p.is_empty()) {
         // 安全校验：用户指定的路径必须位于 download_dir 之下，防止路径遍历
         let user_path = std::path::PathBuf::from(&p);
-        let canonical = std::fs::canonicalize(&user_path)
+        // canonicalize 是可能阻塞的 syscall（网络盘/慢速盘），用 spawn_blocking
+        // 避免卡住 tokio worker 线程。
+        let canonical = tokio::task::spawn_blocking(move || std::fs::canonicalize(&user_path))
+            .await
+            .map_err(|_| AppError::Internal("路径校验任务失败".to_string()))?
             .map_err(|_| AppError::BadRequest("视频路径无效或不存在".to_string()))?;
-        let download_dir_canonical = std::fs::canonicalize(&infra.paths.download_dir)
-            .unwrap_or_else(|_| infra.paths.download_dir.clone());
+        let download_dir_canonical = tokio::task::spawn_blocking({
+            let dir = infra.paths.download_dir.clone();
+            move || std::fs::canonicalize(&dir).unwrap_or(dir)
+        })
+        .await
+        .unwrap_or_else(|_| infra.paths.download_dir.clone());
         if !canonical.starts_with(&download_dir_canonical) {
             return Err(AppError::BadRequest(
                 "视频路径不在允许的下载目录范围内".to_string(),
             ));
         }
-        return Ok(canonical);
+        // canonicalize 在 Windows 返回 `\\?\` verbatim 路径，去掉前缀再流入烧录/存储，
+        // 否则烧录输出路径会带着前缀写进 history.file_path，导致后续路径比较失配。
+        return Ok(strip_verbatim_prefix(&canonical));
     }
     if let Some(h) = history {
         if let Some(fp) = h.file_path.as_deref() {
@@ -269,7 +297,7 @@ async fn resolve_burn_video_path(
                 let root = std::fs::canonicalize(&infra.paths.download_dir)
                     .unwrap_or_else(|_| infra.paths.download_dir.clone());
                 if canonical.starts_with(root) {
-                    return Ok(canonical);
+                    return Ok(strip_verbatim_prefix(&canonical));
                 }
             }
         }
@@ -287,7 +315,7 @@ pub(super) async fn burn_status(
     axum::extract::Path(task_id): axum::extract::Path<String>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let mut tasks = state.media.burn_tasks.lock().await;
-    prune_burn_tasks(&mut tasks);
+    crate::models::burn::prune_burn_tasks(&mut tasks);
     let task = tasks.get(&task_id).cloned();
     drop(tasks);
 
@@ -344,25 +372,4 @@ fn safe_relative_path(root: &Path, path: &Path) -> Option<String> {
 
 fn redact_burn_message(message: &str) -> String {
     crate::services::live_recorder::ffmpeg_session::redact_diagnostics(message)
-}
-
-fn prune_burn_tasks(tasks: &mut HashMap<String, BurnTask>) {
-    let now = chrono::Utc::now().timestamp();
-    tasks.retain(|_, task| {
-        task.status == "queued"
-            || task.status == "processing"
-            || now.saturating_sub(task.updated_at.max(task.created_at)) <= BURN_TASK_TTL_SECONDS
-    });
-    if tasks.len() <= MAX_BURN_TASKS {
-        return;
-    }
-    let mut terminal = tasks
-        .iter()
-        .filter(|(_, task)| !matches!(task.status.as_str(), "queued" | "processing"))
-        .map(|(id, task)| (id.clone(), task.updated_at))
-        .collect::<Vec<_>>();
-    terminal.sort_by_key(|(_, updated_at)| *updated_at);
-    for (id, _) in terminal.into_iter().take(tasks.len() - MAX_BURN_TASKS) {
-        tasks.remove(&id);
-    }
 }

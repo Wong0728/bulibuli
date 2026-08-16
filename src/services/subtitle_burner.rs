@@ -17,7 +17,9 @@ mod subtitle_convert;
 
 use crate::services::video_processor::VideoProcessor;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 // us-danmaku 的内部参考画布尺寸（不可配置的算法常量）。
 const PLAY_RES_X: f64 = 560.0;
@@ -66,19 +68,23 @@ impl Default for BurnConfig {
 #[derive(Clone)]
 pub struct SubtitleBurner {
     video_processor: Arc<VideoProcessor>,
+    ffmpeg_mode: String,
     custom_ffmpeg_path: Option<String>,
     burn_config: BurnConfig,
 }
 
 impl SubtitleBurner {
-    /// 构造带烧录参数的实例；`config` 来自 settings，调用方需自行做范围校验。
+    /// 构造带烧录参数的实例；`ffmpeg_mode`/`custom_path` 来自 settings，
+    /// 调用方需自行做范围校验。
     pub fn with_burn_config(
         video_processor: Arc<VideoProcessor>,
+        ffmpeg_mode: String,
         custom_path: Option<String>,
         burn_config: BurnConfig,
     ) -> Self {
         Self {
             video_processor,
+            ffmpeg_mode,
             custom_ffmpeg_path: custom_path,
             burn_config,
         }
@@ -108,4 +114,54 @@ struct PositionedDanmaku {
     posd_x: f64,
     posd_y: f64,
     font_size: i32,
+}
+
+/// FFmpeg 烧录能力缓存：按“可执行文件路径 + 修改时间”记忆探测结果。
+/// 抽屉每次打开都会读取 can_burn，缓存可避免重复拉起 ffmpeg 探测进程。
+type BurnCapabilityKey = (PathBuf, Option<u64>);
+type BurnCapabilityCache = Mutex<HashMap<BurnCapabilityKey, bool>>;
+static BURN_CAPABILITY_CACHE: OnceLock<BurnCapabilityCache> = OnceLock::new();
+
+fn burn_capability_cache() -> &'static Mutex<HashMap<(PathBuf, Option<u64>), bool>> {
+    BURN_CAPABILITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 当前生效的 FFmpeg 是否支持烧录（需要 ass 滤镜 + libx264/mpeg4 之一）。
+/// `mode`/`custom_ffmpeg_path` 与实际烧录执行保持一致（均来自 settings.ffmpeg），
+/// 避免探测与执行解析到不同的二进制导致按钮状态和烧录结果对不上。
+/// 未找到 FFmpeg 时返回 false，调用方据此禁用烧录入口。
+pub async fn ffmpeg_supports_burn(
+    video_processor: Arc<VideoProcessor>,
+    mode: &str,
+    custom_ffmpeg_path: Option<&str>,
+) -> bool {
+    let Some(ffmpeg) = video_processor
+        .detect_ffmpeg(mode, custom_ffmpeg_path)
+        .await
+        .0
+    else {
+        return false;
+    };
+    let mtime = std::fs::metadata(&ffmpeg)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+    let key = (ffmpeg.clone(), mtime);
+    let cache = burn_capability_cache();
+    if let Some(cached) = cache
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(&key)
+    {
+        return *cached;
+    }
+    let capable = burn::ffmpeg_listing_contains(&ffmpeg, "-filters", "ass").await
+        && (burn::ffmpeg_listing_contains(&ffmpeg, "-encoders", "libx264").await
+            || burn::ffmpeg_listing_contains(&ffmpeg, "-encoders", "mpeg4").await);
+    cache
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(key, capable);
+    capable
 }

@@ -1,7 +1,7 @@
 import { _state, _NETWORK_ERR_MSG } from './state.js';
 import { escapeHtml } from './utils.js';
 import { checkNetworkBeforeAction, apiPost, apiGet } from './core.js';
-import { downloadDanmaku, downloadComments } from './media-links.js';
+import { downloadDanmaku, downloadComments, downloadToBrowser, formatAudioQuality } from './media-links.js';
 import { updateDownloadLists } from './download-queue.js';
 import { loadHistoryBoard, formatViewCount } from './history.js';
 import { showToast, confirmDialog } from './download-status.js';
@@ -276,16 +276,17 @@ export function renderDrawerContentForManualQuery(video, bvid) {
                     <i class="fa-solid fa-download"></i>
                     开始下载
                 </button>
+                <button class="drawer-btn drawer-btn-ghost" data-action="save-manual-to-local" data-bvid="${bvid}"
+                    data-title="${escapeHtml(video.title || bvid)}" title="用服务器登录态经代理把视频流和音频流直接保存到本机，不占用服务器存储">
+                    <i class="fa-solid fa-desktop"></i>
+                    保存到本机
+                </button>
             </div>
         </div>
 
         <div class="drawer-section">
             <div class="drawer-section-title">更多选项</div>
             <div class="drawer-extras">
-                <button class="drawer-extra-btn" data-action="download-cover" data-bvid="${bvid}">
-                    <i class="fa-solid fa-image"></i>
-                    下载封面
-                </button>
                 <button class="drawer-extra-btn" data-action="open-video-page" data-bvid="${bvid}">
                     <i class="fa-solid fa-external-link-alt"></i>
                     原视频链接
@@ -687,9 +688,79 @@ export async function retryVideoDownload(bvid) {
     await startVideoDownload(bvid);
 }
 
-// 从手动查询界面开始视频下载
-export async function startVideoDownloadFromManual(bvid) {
+// 从可用画质中挑选目标流：优先精确匹配已选画质，其次不超过它的最高档，最后退回最高可用档。
+function pickVideoQuality(qualities, acceptQuality, preferredQn) {
+    const available = qualities.filter(q => acceptQuality.has(q.quality) && q.url);
+    if (!available.length) return null;
+    return available.find(q => q.quality === preferredQn)
+        || available.filter(q => q.quality <= preferredQn).sort((a, b) => b.quality - a.quality)[0]
+        || [...available].sort((a, b) => b.quality - a.quality)[0];
+}
+
+// 手动抽屉“保存到本机”：用服务器登录态经代理把视频流+音频流直接下到浏览器，不落盘服务器。
+// B 站为 DASH 分离流，浏览器端无法合并，因此保存为两个文件（视频 + 音频）。
+export async function saveManualToLocal(bvid, title) {
     if (!bvid) return;
+    if (!checkNetworkBeforeAction()) return;
+
+    const gate = await gateDownloadCheck(bvid);
+    if (gate.blocked) {
+        showToast(gate.message || '该视频无法下载，已跳过', 'warning');
+        return;
+    }
+
+    const safeTitle = (title || bvid).replace(/[^\w\u4e00-\u9fff\-_. ]/g, '');
+    showToast('正在获取下载链接...', 'info');
+    try {
+        const [videoRequest, audioRequest] = await Promise.allSettled([
+            apiPost('/api/video/get-video-urls', { bvid }),
+            apiPost('/api/video/get-audio-url', { bvid }),
+        ]);
+        const videoResult = videoRequest.status === 'fulfilled'
+            ? videoRequest.value
+            : { code: -1, message: '视频链接获取失败' };
+        const audioResult = audioRequest.status === 'fulfilled'
+            ? audioRequest.value
+            : { code: -1, message: '音频链接获取失败' };
+        if (videoResult.code !== 0 && audioResult.code !== 0) {
+            showToast(videoResult.message || audioResult.message || '获取下载链接失败', 'error');
+            return;
+        }
+
+        let saved = 0;
+        if (videoResult.code === 0) {
+            const qualities = videoResult.data?.qualities || [];
+            const accept = new Set(videoResult.data?.accept_quality || []);
+            const target = pickVideoQuality(qualities, accept, _state.selectedQuality || 80);
+            if (target) {
+                const qualityTag = String(target.quality_name || target.quality).replace(/\s+/g, '_');
+                downloadToBrowser(target.url, `${safeTitle}_${bvid}_${qualityTag}.${target.format || 'mp4'}`);
+                saved++;
+            } else {
+                showToast('无可用视频流（可能需要登录或大会员）', 'warning');
+            }
+        }
+        if (audioResult.code === 0) {
+            const aq = (audioResult.data?.qualities || [])[0];
+            if (aq?.url) {
+                const ext = audioResult.data?.ext || 'm4a';
+                const kbps = Math.round((aq.bandwidth || 0) / 1000);
+                const tag = formatAudioQuality(aq.id, kbps).replace(/\s+/g, '_');
+                // 错开触发，避免浏览器忽略连续的 iframe 下载。
+                setTimeout(() => downloadToBrowser(aq.url, `${safeTitle}_${bvid}_音频_${tag}.${ext}`), 800);
+                saved++;
+            }
+        }
+        if (saved > 0) {
+            showToast('已开始保存到本机：视频与音频为两个文件，请查看浏览器下载栏', 'success', 5000);
+        }
+    } catch (e) {
+        showToast(e?.message || '保存到本机失败', 'error');
+    }
+}
+
+// 从手动查询界面开始视频下载
+export async function startVideoDownloadFromManual(bvid) {    if (!bvid) return;
     if (!checkNetworkBeforeAction()) return;
 
     const gate = await gateDownloadCheck(bvid);

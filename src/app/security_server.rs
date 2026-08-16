@@ -41,12 +41,21 @@ pub async fn serve(
         warn!("LAN 模式使用 HTTP，仅适用于可信局域网；公网访问请使用 proxy + HTTPS");
     }
     let app = build_router(state.clone()).await?;
-    axum::serve(
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal(state.infra.cancellation.clone()))
-    .await?;
+    .with_graceful_shutdown(shutdown_signal(state.infra.cancellation.clone()));
+    // graceful shutdown 会等待所有在途连接（含 Socket.IO WebSocket 长连接）结束且无超时；
+    // 浏览器页面开着就会让 Ctrl+C 后的进程永久挂起。给一个有限宽限期，超时后放弃
+    // 等待（连接随 serve future 被 drop 而关闭），让 main 的清理链路得以执行。
+    const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+    match tokio::time::timeout(SHUTDOWN_GRACE, server).await {
+        Ok(result) => result?,
+        Err(_) => {
+            warn!("优雅关机宽限期（10 秒）已到，仍有活跃连接，强制关闭服务");
+        }
+    }
     Ok(())
 }
 
@@ -295,6 +304,10 @@ async fn enforce_request_security(
             }
         }
     }
+    // 总是注入 Option<SessionAuth>：auth_bypass_ips 命中时没有 SessionAuth，
+    // 依赖会话上下文的 handler（logout/邀请）以 Extension<Option<SessionAuth>> 提取，
+    // 避免 axum MissingExtension 直接 500。
+    request.extensions_mut().insert(session.clone());
     let bypassed_auth = config.should_bypass_auth(client_ip);
     if path.starts_with("/socket.io/") {
         // Socket.IO 轮询/升级请求无法附带自定义 CSRF 头，改用同源校验兜底：
@@ -492,7 +505,12 @@ fn validate_browser_write(
         .get("x-csrf-token")
         .and_then(|value| value.to_str().ok())
         .ok_or("缺少 CSRF Token")?;
-    if csrf != session.csrf_token {
+    // 恒定时间比较（与配对码的 ct_eq 一致）：长度先归一再逐字节比较，
+    // 避免短路比较理论上泄露前缀匹配长度。
+    use subtle::ConstantTimeEq;
+    if csrf.len() != session.csrf_token.len()
+        || !bool::from(csrf.as_bytes().ct_eq(session.csrf_token.as_bytes()))
+    {
         return Err("CSRF Token 无效");
     }
     Ok(())

@@ -161,7 +161,7 @@ impl WbiKeysCache {
             .to_string();
         if !content_type.is_empty() && !content_type.to_ascii_lowercase().contains("json") {
             return Err(anyhow!(
-                "WBI keys 鍝嶅簲 Content-Type 闈炴湁鏁?JSON: {content_type}"
+                "WBI keys 响应 Content-Type 非有效 JSON: {content_type}"
             ));
         }
         let mut body = Vec::new();

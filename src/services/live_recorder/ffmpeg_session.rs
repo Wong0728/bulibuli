@@ -338,22 +338,37 @@ async fn verify_merged_output(
 
 async fn probe_media(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
     let probe = ffprobe_path(ffmpeg_path);
-    let result = Command::new(&probe)
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration:stream=codec_type",
-            "-of",
-            "json",
-        ])
-        .arg(input)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .output()
-        .await;
+    // ffprobe 挂起（损坏文件/异常 IO）会让 finalize 永久停留在 Finalizing：
+    // 与合并的 15 分钟超时对齐设一个探测超时。
+    const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+    let result = match tokio::time::timeout(
+        PROBE_TIMEOUT,
+        Command::new(&probe)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:stream=codec_type",
+                "-of",
+                "json",
+            ])
+            .arg(input)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            return Err(anyhow!(
+                "ffprobe 校验超时（{} 秒）",
+                PROBE_TIMEOUT.as_secs()
+            ));
+        }
+    };
     match result {
         Ok(result) if result.status.success() => parse_probe_json(&result.stdout),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

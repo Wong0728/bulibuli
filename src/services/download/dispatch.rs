@@ -59,10 +59,12 @@ impl DownloadManager {
         // CDN 过滤：如果 URL 来自劣质 MCDN/PCDN 节点，记录警告但不阻塞下载
         // （B 站有时只返回单个 URL，无法换源，只能记录并依赖 aria2 重试）。
         if is_mcdn_url(url) {
+            // 字符边界安全截断：URL 是外部输入，字节切片可能切开多字节字符导致 panic
+            // （release 为 panic=abort，会直接杀死进程）。
+            let prefix: String = url.chars().take(80).collect();
             warn!(
-                "[CDN] {bvid} 使用了劣质 MCDN/PCDN 节点: {}...。\
-                   可能导致 SSL 错误或速度不稳定，aria2 将自动重试",
-                &url[..url.len().min(80)]
+                "[CDN] {bvid} 使用了劣质 MCDN/PCDN 节点: {prefix}...。\
+                   可能导致 SSL 错误或速度不稳定，aria2 将自动重试"
             );
         }
 

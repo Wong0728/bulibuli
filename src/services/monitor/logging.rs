@@ -89,7 +89,7 @@ impl MonitorService {
         }
         // 每写入 N 条日志才触发一次清理，避免每条日志都执行 count+delete
         let count = self.log_counter.fetch_add(1, Ordering::SeqCst) + 1;
-        if count % LOG_CLEANUP_INTERVAL == 0 {
+        if count.is_multiple_of(LOG_CLEANUP_INTERVAL) {
             if let Err(error) = self.cleanup_logs().await {
                 warn!("清理监控日志失败: {error}");
             }

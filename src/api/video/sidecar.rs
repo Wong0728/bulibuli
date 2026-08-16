@@ -153,20 +153,23 @@ async fn resolve_sidecar_dir(
     history_id: Option<i32>,
     page: Option<i32>,
 ) -> Option<std::path::PathBuf> {
+    // DB 错误（锁超时/磁盘故障）不应与"记录不存在"混淆：失败时记日志并按无记录
+    // 处理（sidecar 目录解析有多个候选来源，降级而非 500 对用户更友好）。
     let h = match history_id {
-        Some(id) => business
-            .history_service
-            .find_by_id(id)
-            .await
-            .ok()
-            .flatten()
-            .filter(|history| history.bvid == bvid),
-        None => business
-            .history_service
-            .find_by_bvid(bvid)
-            .await
-            .ok()
-            .flatten(),
+        Some(id) => match business.history_service.find_by_id(id).await {
+            Ok(value) => value.filter(|history| history.bvid == bvid),
+            Err(error) => {
+                tracing::warn!(%error, "按 id 查询历史记录失败，跳过侧车目录解析");
+                None
+            }
+        },
+        None => match business.history_service.find_by_bvid(bvid).await {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, "按 bvid 查询历史记录失败，跳过侧车目录解析");
+                None
+            }
+        },
     };
     // When the caller explicitly selects a source, do not let a history row
     // from the other source redirect the sidecar into the wrong artifact dir.
@@ -178,7 +181,15 @@ async fn resolve_sidecar_dir(
             if let Some(fp) = h.file_path.as_deref() {
                 if let Some(parent) = std::path::Path::new(fp).parent() {
                     if parent.exists() {
-                        return Some(parent.to_path_buf());
+                        let download_dir = media.download_manager.download_dir(None).await;
+                        // DB 中的 file_path 可能被污染（security.toml 注入等纵深场景），
+                        // 与 cover.rs 对 cover_local_path 的防御一致：校验写入目录在 download_dir 内。
+                        if ensure_existing_within_root(parent, &download_dir)
+                            .await
+                            .is_ok()
+                        {
+                            return Some(parent.to_path_buf());
+                        }
                     }
                 }
             }
@@ -257,19 +268,20 @@ async fn find_download_file(
     history_id: Option<i32>,
 ) -> Option<std::path::PathBuf> {
     let history = match history_id {
-        Some(id) => business
-            .history_service
-            .find_by_id(id)
-            .await
-            .ok()
-            .flatten()
-            .filter(|history| history.bvid == bvid),
-        None => business
-            .history_service
-            .find_by_bvid(bvid)
-            .await
-            .ok()
-            .flatten(),
+        Some(id) => match business.history_service.find_by_id(id).await {
+            Ok(value) => value.filter(|history| history.bvid == bvid),
+            Err(error) => {
+                tracing::warn!(%error, "按 id 查询历史记录失败，跳过侧车文件查找");
+                None
+            }
+        },
+        None => match business.history_service.find_by_bvid(bvid).await {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, "按 bvid 查询历史记录失败，跳过侧车文件查找");
+                None
+            }
+        },
     };
     if let Some(history) = history {
         if let Some(parent) = history
@@ -413,19 +425,20 @@ async fn resolve_scanned_sidecar(
     history_id: Option<i32>,
 ) -> Option<std::path::PathBuf> {
     let history = match history_id {
-        Some(id) => business
-            .history_service
-            .find_by_id(id)
-            .await
-            .ok()
-            .flatten()
-            .filter(|history| history.bvid == bvid),
-        None => business
-            .history_service
-            .find_by_bvid(bvid)
-            .await
-            .ok()
-            .flatten(),
+        Some(id) => match business.history_service.find_by_id(id).await {
+            Ok(value) => value.filter(|history| history.bvid == bvid),
+            Err(error) => {
+                tracing::warn!(%error, "按 id 查询历史记录失败，跳过扫描侧车查找");
+                None
+            }
+        },
+        None => match business.history_service.find_by_bvid(bvid).await {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, "按 bvid 查询历史记录失败，跳过扫描侧车查找");
+                None
+            }
+        },
     };
     let files = business
         .history_service

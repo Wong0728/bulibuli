@@ -16,6 +16,8 @@ pub fn router() -> Router<SharedState> {
 struct FoundationStatus {
     configuration_status: &'static str,
     ai_skill_enabled: bool,
+    /// AI Skill 文件的绝对路径：发给 AI 前可直接复制使用。
+    ai_skill_path: String,
     access_mode: &'static str,
     setup_access: &'static str,
     restart_required: bool,
@@ -37,6 +39,14 @@ async fn status(State(state): State<SharedState>) -> Json<ApiResponse<Foundation
     Json(ApiResponse::success(FoundationStatus {
         configuration_status: "normal",
         ai_skill_enabled: state.infra.ai_skill_enabled.load(Ordering::Relaxed),
+        ai_skill_path: state
+            .infra
+            .paths
+            .app_root
+            .join("docs")
+            .join("skill.md")
+            .to_string_lossy()
+            .replace('\\', "/"),
         access_mode,
         // Setup 监听器按设计只绑定回环地址；未来的短时签名 Setup URL
         // 可以在不扩大主 API 暴露面的前提下改变这一点。

@@ -17,6 +17,11 @@ export function renderDrawerContent(video, bvid) {
     const blogger = video.blogger || (video.blogger_uid ? { uid: video.blogger_uid } : null) || null;
     const artifactSource = video.source === 'manual' ? 'manual' : 'auto';
     const canOpenDirectory = video.can_open_directory === true;
+    // 服务器上的产物是否允许通过浏览器保存到本机（设置 board.browser_download_enabled）。
+    const canBrowserDownload = video.can_browser_download === true;
+    // 当前 FFmpeg 是否支持烧录（缺 ass 滤镜/编码器时按钮置灰并给出提示）。
+    const canBurn = video.can_burn !== false;
+    const primaryFiles = primaryArtifactFiles(video.files);
 
     // 封面统一走 /api/cover/{bvid}（本地优先 + 兜底下载）
     const coverQuery = historyId == null ? '' : `?history_id=${encodeURIComponent(historyId)}`;
@@ -166,15 +171,16 @@ export function renderDrawerContent(video, bvid) {
         <div class="drawer-section">
             <div class="drawer-section-title">全部产物</div>
             ${renderArtifactOverview(primaryArtifactFiles(video.files))}
+            ${renderBrowserDownloadToolbar(bvid, historyId, primaryFiles, canBrowserDownload)}
             <div class="drawer-file-list" id="drawer-file-list">
-                ${renderDrawerFiles(video.files, bvid, video.burned, sidecar, canOpenDirectory, historyId)}
+                ${renderDrawerFiles(video.files, bvid, video.burned, sidecar, canOpenDirectory, historyId, canBrowserDownload, canBurn)}
             </div>
         </div>
 
         <!-- 历史弹幕与评论浏览器。 -->
         <div class="drawer-section">
             <div class="drawer-section-title">弹幕与评论历史</div>
-            ${renderSidecarBrowser(video.files, bvid, historyId)}
+            ${renderSidecarBrowser(video.files, bvid, historyId, canBrowserDownload)}
             <div id="drawer-sidecar-viewer" class="drawer-comments">
                 <div class="drawer-comments-hint">选择上方任一弹幕或评论版本查看本地内容</div>
             </div>
@@ -243,7 +249,28 @@ function primaryArtifactFiles(files) {
     return files.filter(file => !['danmaku', 'comment'].includes(file.file_type || file.type));
 }
 
-export function renderDrawerFiles(files, bvid, burned, sidecar, canOpenDirectory = false, historyId = null) {
+// 服务器到本机：勾选产物后经浏览器保存（数据由服务器提供，不额外占用服务器存储）。
+// 主勾选框开启选择模式并全选下方文件；可手动取消部分后点“下载所选”。
+function renderBrowserDownloadToolbar(bvid, historyId, primaryFiles, canBrowserDownload) {
+    if (!canBrowserDownload || !primaryFiles.length) return '';
+    const safeBvid = escapeHtml(bvid || '');
+    const safeHistoryId = historyId == null ? '' : escapeHtml(String(historyId));
+    return `
+        <div class="drawer-browser-download-bar">
+            <label class="drawer-browser-master" title="勾选后可挑选下方要保存到本机的产物，默认全选">
+                <input type="checkbox" data-change-action="browser-download-master">
+                <span><i class="fa-solid fa-desktop"></i> 服务器到本机</span>
+            </label>
+            <button class="btn btn-sm btn-primary" id="drawer-browser-download-btn"
+                data-action="browser-download-selected" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}"
+                disabled hidden title="把勾选的产物通过浏览器保存到本机">
+                <i class="fa-solid fa-download"></i> 下载所选
+            </button>
+        </div>
+    `;
+}
+
+export function renderDrawerFiles(files, bvid, burned, sidecar, canOpenDirectory = false, historyId = null, canBrowserDownload = false, canBurn = true) {
     burned = burned || {};
     const primaryFiles = primaryArtifactFiles(files);
     // 优先使用后端返回的真实文件列表
@@ -260,7 +287,7 @@ export function renderDrawerFiles(files, bvid, burned, sidecar, canOpenDirectory
                     <span><i class="fa-solid fa-folder"></i> ${escapeHtml(locationLabel(location))}</span>
                     <span>${entries.length} 个文件</span>
                 </div>
-                ${entries.map(file => renderDrawerFileItem(file, bvid, burned, canOpenDirectory, historyId)).join('')}
+                ${entries.map(file => renderDrawerFileItem(file, bvid, burned, canOpenDirectory, historyId, canBrowserDownload, canBurn)).join('')}
             </div>
         `).join('');
     }
@@ -274,7 +301,7 @@ export function renderDrawerFiles(files, bvid, burned, sidecar, canOpenDirectory
     return `<div class="drawer-files-empty"><i class="fa-solid fa-inbox"></i> 暂无本地文件记录</div>`;
 }
 
-export function renderDrawerFileItem(f, bvid, burned, canOpenDirectory = false, historyId = null) {
+export function renderDrawerFileItem(f, bvid, burned, canOpenDirectory = false, historyId = null, canBrowserDownload = false, canBurn = true) {
     // `file_type` 是当前接口字段，`type` 用于读取已有缓存数据。
     const type = f.file_type || f.type || 'other';
     const safeBvid = escapeHtml(bvid || '');
@@ -304,6 +331,10 @@ export function renderDrawerFileItem(f, bvid, burned, canOpenDirectory = false, 
 
     let actions = f.display_path
         ? `<button class="btn btn-sm btn-ghost" data-copy-path="${path}" title="复制文件路径"><i class="fa-solid fa-copy"></i> 路径</button>` : '';
+    if (canBrowserDownload && f.path) {
+        // 选择模式勾选框（默认隐藏，主勾选框开启后显示并全选）。
+        actions = `<label class="drawer-file-check" title="勾选后随“下载所选”保存到本机"><input type="checkbox" checked data-change-action="browser-download-check" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-path="${internalPath}" data-name="${name}"></label>${actions}`;
+    }
     if (canOpenDirectory && f.path) {
         actions += `<button class="btn btn-sm btn-ghost" data-action="open-history-directory" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-path="${internalPath}" title="打开所在目录"><i class="fa-solid fa-folder-open"></i> 打开</button>`;
     }
@@ -314,12 +345,13 @@ export function renderDrawerFileItem(f, bvid, burned, canOpenDirectory = false, 
         if (burned.subtitle) {
             actions += `<span class="burn-badge burned" title="字幕已烧录"><i class="fa-solid fa-check"></i> 字幕已烧录</span>`;
         }
-        // 烧录按钮：未烧录时才显示
+        // 烧录按钮：未烧录时才显示；FFmpeg 不支持烧录时置灰并悬停提示。
+        const burnDisabledAttr = canBurn ? '' : ' disabled title="当前 FFmpeg 不支持烧录（精简版缺少 ass 滤镜或视频编码器）。建议下载完整版 FFmpeg，或在 设置 → FFmpeg 中更换自定义路径"';
         if (!burned.danmaku) {
-            actions += `<button class="btn btn-sm btn-primary" data-action="burn-media" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-kind="danmaku" title="将弹幕烧录进视频"><i class="fa-solid fa-fire"></i> 烧录弹幕</button>`;
+            actions += `<button class="btn btn-sm btn-primary"${burnDisabledAttr} data-action="burn-media" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-kind="danmaku"${canBurn ? ' title="将弹幕烧录进视频"' : ''}><i class="fa-solid fa-fire"></i> 烧录弹幕</button>`;
         }
         if (!burned.subtitle) {
-            actions += `<button class="btn btn-sm btn-primary" data-action="burn-media" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-kind="subtitle" title="将 CC 字幕烧录进视频"><i class="fa-solid fa-closed-captioning"></i> 烧录字幕</button>`;
+            actions += `<button class="btn btn-sm btn-primary"${burnDisabledAttr} data-action="burn-media" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-kind="subtitle"${canBurn ? ' title="将 CC 字幕烧录进视频"' : ''}><i class="fa-solid fa-closed-captioning"></i> 烧录字幕</button>`;
         }
     }
 
@@ -371,7 +403,7 @@ function renderArtifactOverview(files) {
     `;
 }
 
-function renderSidecarBrowser(files, bvid, historyId = null) {
+function renderSidecarBrowser(files, bvid, historyId = null, canBrowserDownload = false) {
     if (!Array.isArray(files)) files = [];
     const safeBvid = escapeHtml(bvid || '');
     const safeHistoryId = historyId == null ? '' : escapeHtml(String(historyId));
@@ -381,11 +413,15 @@ function renderSidecarBrowser(files, bvid, historyId = null) {
         ? entries.map(file => {
             const location = locationLabel(file.location || 'other');
             const version = file.version ? formatArchiveVersion(file.version) : (file.is_current ? '当前最新版' : '最新副本');
-            return `<button class="sidecar-version-btn" data-action="${action}" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-path="${escapeHtml(file.path || '')}" title="${escapeHtml(file.path || '')}">
+            const viewButton = `<button class="sidecar-version-btn" data-action="${action}" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-path="${escapeHtml(file.path || '')}" title="${escapeHtml(file.path || '')}">
                 <i class="fa-solid ${icon}"></i>
                 <span>${escapeHtml(version)}</span>
                 <small>${escapeHtml(location)} · ${escapeHtml((file.format || '').toUpperCase())}</small>
             </button>`;
+            const downloadCheck = canBrowserDownload && file.path
+                ? `<label class="drawer-file-check" title="勾选后随“下载所选”保存到本机"><input type="checkbox" checked data-change-action="browser-download-check" data-bvid="${safeBvid}" data-history-id="${safeHistoryId}" data-path="${escapeHtml(file.path)}" data-name="${escapeHtml(file.name || '')}"></label>`
+                : '';
+            return `<div class="sidecar-version-row">${viewButton}${downloadCheck}</div>`;
         }).join('')
         : '<div class="drawer-comments-hint">暂无本地版本</div>';
     return `

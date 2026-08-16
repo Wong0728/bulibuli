@@ -1230,8 +1230,13 @@ function initLiveTab() {
     window.setInterval(() => {
         if (liveState.liveTabActive) refreshDashboard(true);
     }, 30000);
-    window.setInterval(pollEvents, 2000);
-    window.setInterval(tickUi, 1000);
+    // 直播页未激活时暂停事件轮询与 UI tick，避免后台空转请求。
+    window.setInterval(() => {
+        if (liveState.liveTabActive) pollEvents();
+    }, 2000);
+    window.setInterval(() => {
+        if (liveState.liveTabActive) tickUi();
+    }, 1000);
 }
 
 if (document.readyState === 'loading') {

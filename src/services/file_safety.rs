@@ -39,6 +39,20 @@ pub(crate) fn validate_uid(raw: &str) -> AppResult<ValidatedUid> {
     ValidatedUid::parse(raw)
 }
 
+/// 去掉 Windows `canonicalize` 产生的 verbatim 前缀（`\\?\C:\...` / `\\?\UNC\server\...`）。
+/// 该前缀只对 Win32 API 有意义，写入数据库或与普通路径做前缀比较会失配，
+/// 因此路径在离开安全校验、流向存储/展示之前统一去掉该前缀。
+pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.as_os_str().to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest.to_string());
+    }
+    path.to_path_buf()
+}
+
 pub fn sanitize_filename(name: &str) -> String {
     let sanitized: String = name
         .trim()
@@ -166,6 +180,38 @@ pub fn ensure_within_root(root: &Path, candidate: &Path) -> AppResult<()> {
     let normalized_candidate = normalize_without_io(candidate)?;
     if !normalized_candidate.starts_with(&normalized_root) {
         return Err(AppError::BadRequest("目标路径超出下载根目录".to_string()));
+    }
+    Ok(())
+}
+
+/// Windows：将文件 DACL 收紧为仅当前用户、SYSTEM 与 Administrators 可访问。
+/// 用于配对码等敏感文件——便携目录解压到共享位置时，继承 ACL 可能放宽到其他本机用户。
+/// 通过 icacls 实现（系统自带），失败时由调用方决定是否仅告警。
+#[cfg(windows)]
+pub fn restrict_windows_file_acl(path: &Path) -> AppResult<()> {
+    // 移除继承的 ACE，仅保留当前用户完全控制（SYSTEM/管理员按需显式授予）。
+    let username = std::env::var("USERNAME").unwrap_or_default();
+    if username.is_empty() {
+        return Err(AppError::Internal("无法确定当前用户名".to_string()));
+    };
+    let grant_current = format!("{username}:(F)");
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .args([
+            "/inheritance:r",
+            "/grant:r",
+            &grant_current,
+            "/grant:r",
+            "SYSTEM:(F)",
+            "/grant:r",
+            "Administrators:(F)",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|error| AppError::Internal(format!("执行 icacls 失败: {error}")))?;
+    if !status.success() {
+        return Err(AppError::Internal("icacls 收紧文件 ACL 失败".to_string()));
     }
     Ok(())
 }
@@ -307,6 +353,26 @@ mod tests {
         assert_eq!(sanitize_filename("CON.txt"), "untitled");
         assert_eq!(sanitize_filename(" ../a:b?.mp4 "), "_a_b_.mp4");
         assert_eq!(sanitize_filename("\u{0000}"), "untitled");
+    }
+
+    #[test]
+    fn verbatim_prefix_is_stripped() {
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\D:\data\video.mp4")),
+            PathBuf::from(r"D:\data\video.mp4")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\UNC\server\share\a.mp4")),
+            PathBuf::from(r"\\server\share\a.mp4")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"D:\data\video.mp4")),
+            PathBuf::from(r"D:\data\video.mp4")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new("downloads/a.mp4")),
+            PathBuf::from("downloads/a.mp4")
+        );
     }
 
     #[test]

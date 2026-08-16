@@ -3,6 +3,7 @@ import { escapeHtml } from './utils.js';
 import { apiPost, apiGet } from './core.js';
 import { loadManualSeriesList } from './manual.js';
 import { showToast, confirmDialog } from './download-status.js';
+import { showNetworkToast } from './network.js';
 
 // --- 博主搜索与已添加博主管理 ---
 // “已添加博主”与“自动任务”是两个独立集合，前端不做本地持久化。
@@ -16,7 +17,11 @@ export async function loadKnownBloggers() {
         }
         return [];
     } catch (e) {
-        showToast('加载已添加博主失败，请检查网络', 'error');
+        if (e.offline) {
+            showNetworkToast();
+        } else {
+            showToast('加载已添加博主失败', 'error');
+        }
         return [];
     }
 }
@@ -107,7 +112,11 @@ export async function clearKnownBloggers() {
         await renderUidHistorySelect();
         showToast('已清空已添加博主', 'success');
     } catch (e) {
-        showToast('清空失败，请检查网络', 'error');
+        if (e.offline) {
+            showNetworkToast();
+        } else {
+            showToast('清空失败', 'error');
+        }
     }
 }
 

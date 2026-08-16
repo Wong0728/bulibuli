@@ -24,7 +24,8 @@ test('drawer keeps sidecar viewing in the lower browser and filters it from arti
     assert.match(drawer, /!\['danmaku', 'comment'\]\.includes/);
     assert.doesNotMatch(drawer, /if \(type === 'comment'\)/);
     assert.doesNotMatch(drawer, /else if \(type === 'danmaku'\)/);
-    assert.match(drawer, /renderSidecarBrowser\(video\.files, bvid, historyId\)/);
+    // 签名随 canBrowserDownload 开关扩展：断言匹配前三个参数即可，避免与实现文本强耦合。
+    assert.match(drawer, /renderSidecarBrowser\(video\.files, bvid, historyId[^)]*\)/);
 });
 
 test('directory actions are capability-gated in every board renderer', () => {

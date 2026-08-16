@@ -205,6 +205,15 @@ impl DownloadManager {
             // 重新添加到 aria2（保留任务原有来源，存量 NULL 按 auto 处理）
             let task_source = task.source.clone().unwrap_or_else(|| "auto".to_string());
             let page_info = page_info_from_task(&task);
+            // 选出的任务本身就是 downloading（gid 已失效），add_task_inner 的
+            // "正在下载中"去重会把它拒绝。先置回 pending 让重建通过。
+            {
+                let mut model: download_task::ActiveModel = task.clone().into();
+                model.status = Set("pending".to_string());
+                if let Err(error) = model.update(&self.db).await {
+                    warn!("断点续传：重置任务 {} 状态失败: {error}", task.bvid);
+                }
+            }
             match self
                 .add_task(
                     &task.bvid,
@@ -220,7 +229,23 @@ impl DownloadManager {
                 )
                 .await
             {
-                Ok(_) => info!("断点续传：任务 {} 已重新加入队列", task.bvid),
+                Ok(outcome) if outcome.ok => {
+                    info!("断点续传：任务 {} 已重新加入队列", task.bvid)
+                }
+                Ok(outcome) => {
+                    // 去重拒绝（同 bvid/cid/type 已有活跃任务）等业务性失败：
+                    // 恢复流程不再推进，标记 failed 避免滞留 downloading。
+                    warn!(
+                        "断点续传：任务 {} 重新入队被拒绝: {}",
+                        task.bvid, outcome.message
+                    );
+                    let mut model: download_task::ActiveModel = task.into();
+                    model.status = Set("failed".to_string());
+                    model.error = Set(Some(format!("重启后恢复被拒绝: {}", outcome.message)));
+                    if let Err(update_error) = model.update(&self.db).await {
+                        error!("持久化恢复失败状态失败: {update_error}");
+                    }
+                }
                 Err(e) => {
                     error!("断点续传：恢复任务 {} 失败: {e}", task.bvid);
                     let mut model: download_task::ActiveModel = task.into();

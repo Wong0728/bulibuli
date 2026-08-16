@@ -164,7 +164,7 @@ export function onFFmpegModeChange() {
     if (modeNote) {
         switch(mode) {
             case 'auto':
-                modeNote.textContent = '自动检测：自定义路径 > 环境变量 > 系统 PATH > 内置 ffmpeg';
+                modeNote.textContent = '自动检测：自定义路径 > 内置 ffmpeg > 环境变量 > 系统 PATH';
                 break;
             case 'system':
                 modeNote.textContent = '使用系统 PATH 环境变量中找到的 ffmpeg';
@@ -414,6 +414,8 @@ export async function loadSettingsFromServer() {
             if (s.board) {
                 document.getElementById('setting-path-display-mode').value = s.board.path_display_mode
                     || (s.board.show_relative_path ? 'relative' : 'hidden');
+                document.getElementById('setting-browser-download-enabled').checked =
+                    s.board.browser_download_enabled !== false;
             }
 
             // 监控设置
@@ -538,6 +540,8 @@ export async function saveSettings(btn) {
         settings.board.path_display_mode = document.getElementById('setting-path-display-mode').value;
         // 保留旧字段，兼容尚未升级的客户端。
         settings.board.show_relative_path = settings.board.path_display_mode === 'relative';
+        settings.board.browser_download_enabled =
+            document.getElementById('setting-browser-download-enabled').checked !== false;
         settings.live = {
             ...(settings.live || {}),
             max_concurrent: parseInt(document.getElementById('setting-live-max-concurrent').value),
@@ -703,6 +707,9 @@ function loadAiSkillInfo() {
         if (result.code === 0) {
             const data = result.data || {};
             if (pathBox) pathBox.hidden = !data.ai_skill_enabled;
+            // 后端返回绝对路径，复制后可直接发给 AI 使用。
+            const pathText = document.getElementById('ai-skill-path-text');
+            if (pathText && data.ai_skill_path) pathText.textContent = data.ai_skill_path;
         }
     }).catch(() => {});
 

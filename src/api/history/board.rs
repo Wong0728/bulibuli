@@ -2,11 +2,12 @@
 
 use crate::error::{ApiResponse, AppError};
 use crate::models::{blogger, download_task, history};
+use crate::services::auth::ClientInfo;
 use crate::services::security_config::can_open_directory;
 use crate::state::business::BusinessState;
 use crate::state::infra::InfraState;
 use crate::state::SharedState;
-use axum::{extract::Query, extract::State, Json};
+use axum::{extract::Query, extract::State, Extension, Json};
 use chrono::Local;
 use futures::{stream, StreamExt};
 use serde::Deserialize;
@@ -27,16 +28,18 @@ pub(super) struct ListQuery {
 
 pub(super) async fn list_history(
     State(state): State<SharedState>,
+    Extension(client): Extension<ClientInfo>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let server_time = Local::now().timestamp();
 
     // 单视频详情查询：返回该 bvid 的 history、sidecar 和最新 download_task 状态。
     if let Some(bvid) = q.bvid.as_deref() {
-        let can_open_directory = can_open_directory(&state.bili.security.current().mode);
+        let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
         let data = build_single_video_response(
             &state.business,
             &state.infra,
+            state.media.video_processor.clone(),
             bvid.trim(),
             q.history_id,
             server_time,
@@ -49,7 +52,7 @@ pub(super) async fn list_history(
     let tab = q.tab.as_deref().unwrap_or("completed");
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(50).clamp(1, 50);
-    let can_open_directory = can_open_directory(&state.bili.security.current().mode);
+    let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
     let board = build_board_response(
         &state.business,
         &state.infra,
@@ -272,20 +275,22 @@ async fn build_video_list(
 async fn build_single_video_response(
     business: &BusinessState,
     infra: &InfraState,
+    video_processor: std::sync::Arc<crate::services::video_processor::VideoProcessor>,
     bvid: &str,
     history_id: Option<i32>,
     server_time: i64,
     can_open_directory: bool,
 ) -> Result<Value, AppError> {
+    // DB 错误（锁超时/磁盘故障）应返回 500 而非混入 404，避免排障被误导。
     let h = match history_id {
         Some(id) => business
             .history_service
             .find_by_id(id)
             .await
-            .map(|value| value.filter(|history| history.bvid == bvid)),
-        None => business.history_service.find_by_bvid(bvid).await,
+            .map(|value| value.filter(|history| history.bvid == bvid))?,
+        None => business.history_service.find_by_bvid(bvid).await?,
     };
-    let Ok(Some(h)) = h else {
+    let Some(h) = h else {
         return Err(AppError::NotFound("未找到该视频记录".to_string()));
     };
 
@@ -350,6 +355,19 @@ async fn build_single_video_response(
         .await;
 
     let settings = infra.settings_service.current();
+    let can_browser_download = settings.board.browser_download_enabled;
+    // 烧录能力：探测当前 FFmpeg 是否含 ass 滤镜与视频编码器（结果带缓存），
+    // 不支持时抽屉会把烧录按钮置灰，避免点击后才失败。
+    let custom_ffmpeg = {
+        let path = settings.ffmpeg.custom_path.trim().to_string();
+        (!path.is_empty()).then_some(path)
+    };
+    let can_burn = crate::services::subtitle_burner::ffmpeg_supports_burn(
+        video_processor,
+        settings.ffmpeg.mode.as_str(),
+        custom_ffmpeg.as_deref(),
+    )
+    .await;
     let configured_path_display_mode =
         if settings.board.path_display_mode == "hidden" && settings.board.show_relative_path {
             "relative".to_string()
@@ -400,6 +418,8 @@ async fn build_single_video_response(
             "file_path": file_path,
             "relative_path": relative_path,
             "can_open_directory": can_open_directory,
+            "can_browser_download": can_browser_download,
+            "can_burn": can_burn,
             "reupload_of": h.reupload_of,
             "pay_note": h.pay_note,
             "md5": h.md5,

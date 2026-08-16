@@ -1,4 +1,7 @@
-export function showToast(message, type = 'info', duration = 2700, state) {
+import { _state } from './state.js';
+
+// duration <= 0 表示持续显示（如离线提示），恢复后由调用方主动关闭。
+export function showToast(message, type = 'info', duration = 2700, state = _state) {
     const box = document.getElementById('msg-box');
     if (!box) return null;
     const textValue = String(message);
@@ -40,7 +43,9 @@ export function showToast(message, type = 'info', duration = 2700, state) {
         setTimeout(() => toast.remove(), 300);
     };
     closeButton.addEventListener('click', close);
-    timer = setTimeout(close, isError ? Math.max(duration, 5000) : duration);
+    if (duration > 0) {
+        timer = setTimeout(close, isError ? Math.max(duration, 5000) : duration);
+    }
     const handle = { el: toast, close };
     if (isError) state.errorMsgSet.set(textValue, handle);
     return handle;

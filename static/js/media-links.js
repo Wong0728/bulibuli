@@ -42,7 +42,7 @@ function ensureUrlExpiryTicker() {
                     if (expiryContainer) {
                         expiryContainer.innerHTML = `
                             <span class="status-error"><i class="fa-solid fa-exclamation-triangle"></i> 已过期</span>
-                            <button class="btn btn-sm btn-ghost" data-action="get-download-links" data-bvid="${bvid}" data-title="${escapeHtml(storedTitle)}">
+                            <button class="btn btn-sm btn-ghost" data-action="get-download-links" data-bvid="${escapeHtml(bvid)}" data-title="${escapeHtml(storedTitle)}">
                                 <i class="fa-solid fa-sync-alt"></i> 重新获取
                             </button>
                         `;
@@ -269,6 +269,68 @@ export function downloadToBrowser(url, filename) {
 
     // 显示下载中消息
     showToast(`正在下载: ${filename}，请查看浏览器下载栏`, 'success');
+}
+
+// --- 抽屉“服务器到本机”：把服务器上的已下载产物经浏览器保存到本机 ---
+// 数据由 /api/history/file-download 提供（仅命中 scan_files 的产物路径），不额外占用服务器存储。
+export function browserDownloadFile(bvid, path, name, historyId = undefined) {
+    if (!bvid || !path) {
+        showToast('缺少文件信息，无法下载', 'error');
+        return;
+    }
+    const params = new URLSearchParams({ bvid, path });
+    if (historyId != null) params.set('history_id', String(historyId));
+
+    const iframe = document.createElement('iframe');
+    iframe.hidden = true;
+    iframe.src = `/api/history/file-download?${params.toString()}`;
+    document.body.appendChild(iframe);
+    // 下载开始后即移交浏览器下载管理器，iframe 仅作触发，稍后清理即可。
+    setTimeout(() => { iframe.remove(); }, 60000);
+
+    showToast(`服务器到本机：正在下载 ${name || '文件'}，请查看浏览器下载栏`, 'success');
+}
+
+// 主勾选框：开启/关闭选择模式；开启时全选所有可选产物，关闭时收起勾选框。
+export function toggleBrowserDownloadSelect(enabled) {
+    const drawer = document.getElementById('video-drawer');
+    if (!drawer) return;
+    drawer.classList.toggle('browser-select-on', enabled);
+    drawer.querySelectorAll('.drawer-file-check input').forEach(input => { input.checked = enabled; });
+    updateBrowserDownloadCount();
+}
+
+// 勾选变化后刷新“下载所选”按钮的数量与可用状态。
+export function updateBrowserDownloadCount() {
+    const drawer = document.getElementById('video-drawer');
+    const btn = document.getElementById('drawer-browser-download-btn');
+    if (!drawer || !btn) return;
+    const selecting = drawer.classList.contains('browser-select-on');
+    const count = drawer.querySelectorAll('.drawer-file-check input:checked').length;
+    btn.hidden = !selecting;
+    btn.disabled = count === 0;
+    btn.innerHTML = `<i class="fa-solid fa-download"></i> 下载所选${count ? `（${count}）` : ''}`;
+}
+
+// 下载勾选的产物；错开触发避免浏览器拦截连续下载。
+export async function browserDownloadSelected(bvid) {
+    const drawer = document.getElementById('video-drawer');
+    if (!drawer) return;
+    const inputs = [...drawer.querySelectorAll('.drawer-file-check input:checked')];
+    if (!inputs.length) {
+        showToast('请先勾选要保存到本机的文件', 'info');
+        return;
+    }
+    showToast(`开始下载 ${inputs.length} 个文件；如浏览器询问“允许多个文件下载”，请选择允许`, 'info', 5000);
+    for (const input of inputs) {
+        browserDownloadFile(
+            input.dataset.bvid,
+            input.dataset.path,
+            input.dataset.name,
+            input.dataset.historyId ? Number(input.dataset.historyId) : undefined,
+        );
+        await new Promise(resolve => setTimeout(resolve, 600));
+    }
 }
 
 // 下载弹幕

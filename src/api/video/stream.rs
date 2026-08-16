@@ -197,9 +197,11 @@ pub(super) async fn get_videos(
         .query
         .manual_query_limit;
     let limit = req.limit.unwrap_or(default_limit);
-    if !(1..=50).contains(&limit) {
+    // 与 settings.rs 的 manual_query_limit 校验（1..=100）保持一致：
+    // 此前 1..=50 会让把设置调到 51-100 的用户所有默认请求恒 400。
+    if !(1..=100).contains(&limit) {
         return Err(AppError::BadRequest(
-            "视频列表 limit 必须在 1 到 50 之间".to_string(),
+            "视频列表 limit 必须在 1 到 100 之间".to_string(),
         ));
     }
     let offset = req.offset.unwrap_or(0);

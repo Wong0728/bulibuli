@@ -82,7 +82,9 @@ resolve_latest_version() {
 
 verify_package_manifest() {
     local package_dir="$1"
-    command -v python3 >/dev/null 2>&1 || return 1
+    # python3 缺失时显式报错：此前 return 1 会让 set -e 下的命令替换静默退出整个脚本，
+    # 下载解压完成后无声死掉（termux 版的 || die 处理正确，此处对齐）。
+    command -v python3 >/dev/null 2>&1 || die "需要 python3 校验包清单（bulibuli.package.json）"
     python3 - "${package_dir}" "${PACKAGE_MANIFEST_NAME}" <<'PY'
 import hashlib
 import json
@@ -388,6 +390,14 @@ ensure_binary() {
 install_remote_package() {
     [ "${REMOTE_BOOTSTRAP}" -eq 1 ] || return
     local destination="${BULIBULI_INSTALL_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/${APP_SLUG}}"
+    mkdir -p "${destination}"
+    # 先清理旧版本目录再拷贝：cp -a 合并覆盖会残留上一版已删除的文件
+    #（旧二进制/资源可能与新 manifest 校验冲突）。
+    if [ -d "${destination}" ]; then
+        local backup="${destination}.old.$$"
+        mv "${destination}" "${backup}" 2>/dev/null || true
+        rm -rf "${backup}" 2>/dev/null || true
+    fi
     mkdir -p "${destination}"
     cp -a "${APP_DIR}/." "${destination}/"
     APP_DIR="${destination}"

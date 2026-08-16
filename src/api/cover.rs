@@ -63,7 +63,7 @@ async fn get_cover(
                 );
                 match within_root {
                     Ok(()) => {
-                        if path.exists() {
+                        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                             return Ok(serve_image(&path).await);
                         }
                     }
@@ -113,10 +113,16 @@ async fn serve_image(path: &std::path::Path) -> Response {
                 size
             );
             let stream = tokio_util::io::ReaderStream::new(file);
-            Response::builder()
+            let mut builder = Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, content_type)
-                .header(header::CACHE_CONTROL, "public, max-age=86400")
+                .header(header::CACHE_CONTROL, "public, max-age=86400");
+            // 已读取 metadata：直接设置 Content-Length，客户端可显示进度/复用连接
+            //（此前读了长度却仍发 chunked，字段仅用于日志）。
+            if size > 0 {
+                builder = builder.header(header::CONTENT_LENGTH, size);
+            }
+            builder
                 .body(axum::body::Body::from_stream(stream))
                 .unwrap_or_else(|e| {
                     warn!("[cover] 构建图片响应失败: {e}");

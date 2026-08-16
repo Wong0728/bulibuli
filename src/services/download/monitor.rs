@@ -527,14 +527,14 @@ impl DownloadManager {
                 }
             }
 
-            let updated_ids = self.apply_guarded_updates(to_update).await;
+            // 状态/文件名批量写入与进度广播解耦：aria2 任务落库时已是 downloading，
+            // 若以“本轮是否更新”为门槛，稳态下进度推送与 DB 落盘会完全停摆
+            // （DB 进度从 0 直接跳 100，WS 无下载中事件）。进度提交本身已有
+            // generation 守卫与合并去抖，可无条件执行。
+            let _ = self.apply_guarded_updates(to_update).await;
             for (task, status, progress, downloaded, total, speed) in deferred_progress {
-                if updated_ids.contains(&task.id) {
-                    self.broadcast_progress(
-                        &task, &status, progress, downloaded, total, speed, None,
-                    )
+                self.broadcast_progress(&task, &status, progress, downloaded, total, speed, None)
                     .await;
-                }
             }
 
             for (bvid, cid, uid) in completed_bvids {

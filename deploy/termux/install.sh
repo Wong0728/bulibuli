@@ -339,7 +339,11 @@ main() {
     esac
 
     detect_layout
-    install_deps
+    # 依赖安装仅在 install/update 时执行：run/start/boot 不再每次联网
+    # 跑 pkg update（Termux:Boot 开机自启场景下会拖慢启动且依赖网络）。
+    case "${action}" in
+        install|update) install_deps ;;
+    esac
     ensure_binary
     case "${action}" in
         install)

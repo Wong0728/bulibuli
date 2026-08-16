@@ -189,7 +189,12 @@ impl AppPaths {
 
     pub fn database_url(&self) -> String {
         let path = self.database_dir.join("app.db");
-        format!("sqlite://{}?mode=rwc", path.to_string_lossy())
+        // 路径必须百分号编码后拼入连接 URL：Unix 上 data 目录含 `?`、`#` 或空格时，
+        // 未编码的路径会被 sqlx 的 URL 解析截断，mode=rwc 甚至会在错误位置新建数据库。
+        format!(
+            "sqlite://{}?mode=rwc",
+            encode_path_for_url(&path.to_string_lossy())
+        )
     }
 
     pub fn static_dir(&self) -> PathBuf {
@@ -201,6 +206,21 @@ impl AppPaths {
         // 发布目录无法推导时使用工作目录。
         self.app_root.clone()
     }
+}
+
+/// 按 URL path 规则百分号编码（保留 `/`）。sqlx 的 sqlite 解析器对 database 部分
+/// 做 percent-decode，因此编码后的 `\`、`:`、`?`、`#`、空格等都能正确还原。
+fn encode_path_for_url(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 pub fn load_config() -> Result<(AppConfig, AppPaths)> {

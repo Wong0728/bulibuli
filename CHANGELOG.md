@@ -2,11 +2,12 @@
 
 ## v2.0.0-alpha.7
 
+- 完成全量代码审查整改（37 项）：修复直播录制会话条目泄漏、活跃 WebSocket 阻塞优雅关机、多 P 音频重试取错分 P、断点续传恢复失效、aria2 任务进度不更新、弹幕采集鉴权重连无退避等缺陷。
+- 加固安全与健壮性：认证限流内存上限与近似 LRU 淘汰、CSRF 恒定时间比较、私网 IP 识别补全（IPv4-mapped/CGNAT）、安装器拒绝 manifest 外可执行文件、发布流程补齐 `windows-build` 依赖。
+- 工程卫生：MSRV 声明对齐 1.97.1、发布构建启用 `--locked`、前端轮询守卫与属性转义补齐；`clippy -D warnings` 零警告，261 项测试与前端/冒烟测试全部通过。
 - Termux 默认始终使用 GitHub Actions 云端预编译包；只有显式设置 `BULIBULI_SOURCE_BUILD=1` 才会从源码构建。
 - 修正 Termux 远程安装后的后台启动路径，并同步 README、Release 说明和 Hero 页面。
 - 修复 Hero 窄屏横向溢出，保证手机浏览器可正常浏览和操作。
-
-## v2.0.0-alpha.6
 
 ## v2.0.0-alpha.5
 

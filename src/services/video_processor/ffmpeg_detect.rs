@@ -38,15 +38,16 @@ impl VideoProcessor {
                 }
             }
             _ => {
-                // auto: embedded > custom > env > system；完整包优先使用包内版本。
-                if let Some(p) = self.embedded_ffmpeg() {
-                    return (Some(p), "embedded".to_string());
-                }
+                // auto: custom > embedded > env > system。用户显式指定的完整版优先，
+                // 否则用包内版本（发布包自带、合并行为可控），最后才落回环境变量与 PATH。
                 if let Some(p) = custom_path {
                     let pb = PathBuf::from(p);
                     if pb.is_file() {
                         return (Some(pb), "custom".to_string());
                     }
+                }
+                if let Some(p) = self.embedded_ffmpeg() {
+                    return (Some(p), "embedded".to_string());
                 }
                 if let Some(p) = Self::ffmpeg_from_env() {
                     return (Some(p), "env".to_string());
@@ -170,5 +171,31 @@ mod tests {
             Some(binary)
         );
         assert!(VideoProcessor::ffmpeg_path_from_value("missing", "ffmpeg").is_none());
+    }
+
+    #[tokio::test]
+    async fn auto_prefers_custom_path_over_embedded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let binary_name = if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
+        std::fs::create_dir_all(dir.path().join("resources")).expect("resources dir");
+        std::fs::write(dir.path().join("resources").join(binary_name), b"embedded")
+            .expect("embedded ffmpeg");
+        let custom = dir.path().join("full").join(binary_name);
+        std::fs::create_dir_all(custom.parent().unwrap()).expect("custom dir");
+        std::fs::write(&custom, b"custom").expect("custom ffmpeg");
+        let paths = crate::config::AppPaths {
+            app_root: dir.path().to_path_buf(),
+            data_dir: dir.path().to_path_buf(),
+            database_dir: dir.path().to_path_buf(),
+            download_dir: dir.path().to_path_buf(),
+        };
+        let processor = VideoProcessor::new(std::sync::Arc::new(paths));
+        let (path, source) = processor.detect_ffmpeg("auto", custom.to_str()).await;
+        assert_eq!(source, "custom");
+        assert_eq!(path.as_deref(), Some(custom.as_path()));
     }
 }

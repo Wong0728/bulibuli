@@ -3,7 +3,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use crate::services::file_safety::validate_uid;
+use crate::services::file_safety::{strip_verbatim_prefix, validate_uid};
 
 use super::{FileEntry, HistoryService, SidecarStatus};
 
@@ -62,8 +62,9 @@ impl HistoryService {
     }
 
     /// 把绝对路径转成相对 `data/downloads/` 的路径。
+    /// 兼容历史数据里由 `canonicalize` 写入的 `\\?\` verbatim 前缀，去掉后再比较。
     pub fn to_relative_path(&self, abs: &str) -> Option<String> {
-        let path = PathBuf::from(abs);
+        let path = strip_verbatim_prefix(Path::new(abs));
         match path.strip_prefix(&self.paths.download_dir) {
             Ok(relative) => Some(relative.to_string_lossy().replace('\\', "/")),
             Err(_) => None,

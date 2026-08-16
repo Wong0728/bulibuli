@@ -121,15 +121,23 @@ pub async fn validate(raw: &str) -> AppResult<Url> {
 fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
+            let [a, b, _, _] = ip.octets();
+            let cgnat = a == 100 && (64..=127).contains(&b); // 100.64.0.0/10 运营商级 NAT
             !(ip.is_private()
                 || ip.is_loopback()
                 || ip.is_link_local()
                 || ip.is_multicast()
                 || ip.is_broadcast()
                 || ip.is_unspecified()
-                || ip.octets()[0] == 0)
+                || a == 0
+                || cgnat)
         }
         IpAddr::V6(ip) => {
+            // IPv4-mapped（::ffff:a.b.c.d）归一后按 IPv4 规则判定，
+            // 否则 ::ffff:10.0.0.1 会绕过私网检查。
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return is_public_ip(IpAddr::V4(mapped));
+            }
             let octets = ip.octets();
             let unique_local = octets[0] & 0xfe == 0xfc;
             let link_local = octets[0] == 0xfe && octets[1] & 0xc0 == 0x80;

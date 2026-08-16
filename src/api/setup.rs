@@ -33,6 +33,8 @@ struct SetupStatus {
     configured_mode: String,
     restart_required: bool,
     ai_skill_enabled: bool,
+    /// AI Skill 文件绝对路径（复制给 AI 直接可用）。
+    ai_skill_path: String,
     detected_ips: Vec<String>,
     main_port: u16,
     setup_port: u16,
@@ -58,6 +60,14 @@ async fn get_status(state: axum::extract::State<SharedState>) -> Json<ApiRespons
             configured_mode: mode_name(&configured_security.mode).to_string(),
             restart_required: active_security.mode != configured_security.mode,
             ai_skill_enabled: startup.ai_skill_enabled,
+            ai_skill_path: state
+                .infra
+                .paths
+                .app_root
+                .join("docs")
+                .join("skill.md")
+                .to_string_lossy()
+                .replace('\\', "/"),
             detected_ips: ips,
             main_port: endpoints.main_port,
             setup_port: endpoints.setup_port,

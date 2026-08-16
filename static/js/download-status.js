@@ -111,10 +111,11 @@ export function startProgressUpdates() {
 // 全局 HTML 转义工具，避免 XSS。同时用于文本内容与属性值（' 也被转义为 &#039;）。
 export function showToast(msg, type = 'info', duration = 2700) {
     const isNetworkMessage = msg === _NETWORK_ERR_MSG;
-    if (isNetworkMessage && _state.networkToastEl) {
+    // 网络消息统一为一条持续提示，避免离线时不同入口的弹窗堆叠；恢复后自动消失。
+    if (isNetworkMessage && _state.networkToastEl?.isConnected) {
         return { el: _state.networkToastEl, close: dismissNetworkToast };
     }
-    const handle = renderToast(msg, type, duration, _state);
+    const handle = renderToast(msg, type, isNetworkMessage ? 0 : duration, _state);
     if (isNetworkMessage && handle) _state.networkToastEl = handle.el;
     return handle;
 }

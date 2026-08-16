@@ -33,8 +33,8 @@ Get-FileHash -Algorithm SHA256 resources\aria2c.exe, resources\ffmpeg.exe, resou
 ### 在 Linux / macOS 上核对
 
 ```bash
-sha256sum resources/aria2c resources/ffmpeg resources/geo/GeoLite2-Country.mmdb
-
+# 源码仓库只有 Windows 运行时与 GeoIP 数据可核对（Unix 的 aria2c/ffmpeg 仅存在于 Release 归档内）
+sha256sum resources/geo/GeoLite2-Country.mmdb
 ```
 
 源码仓库没有 `resources/aria2c`、`resources/ffmpeg` 和 `resources/ffprobe` 这三个 Unix 文件；前两个只在完整 Release 归档内生成，`ffprobe` 是否随 CI 产物提供取决于 runner，`core` 归档不包含媒体运行时。

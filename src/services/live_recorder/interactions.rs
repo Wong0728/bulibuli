@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, Mutex};
-use tracing::info;
+use tracing::{info, warn};
 
 const MAX_HEAT_BUCKETS: usize = 1_440;
 const MAX_PAID_MARKERS: usize = 4_096;
@@ -373,6 +373,9 @@ async fn archive_legacy_and_xml(
 
 /// 将 events.jsonl 中的弹幕/SC 事件转换为标准 B 站弹幕 XML 格式，供 PotPlayer 挂载。
 async fn write_standard_bilibili_xml(paths: &InteractionPaths) -> Result<()> {
+    // 与 archive_legacy_and_xml 的 MAX_ARCHIVE_EVENTS 对齐：第二遍扫描同样限制事件数，
+    // 避免损坏的 events.jsonl 让归档耗时/输出体积失去上界（超限截断但保证 XML 闭合）。
+    const MAX_STANDARD_XML_EVENTS: usize = 500_000;
     // 重新从头读取 events.jsonl
     let file = tokio::fs::File::open(&paths.events).await?;
     let mut reader = BufReader::new(file).lines();
@@ -387,7 +390,18 @@ async fn write_standard_bilibili_xml(paths: &InteractionPaths) -> Result<()> {
     .await?;
 
     let mut count = 0u64;
+    let mut seen = 0usize;
+    let mut truncated = false;
     while let Some(line) = reader.next_line().await? {
+        if seen >= MAX_STANDARD_XML_EVENTS {
+            truncated = true;
+            warn!(
+                standard_xml = %paths.standard_xml.display(),
+                "标准弹幕 XML 达到事件上限，已截断"
+            );
+            break;
+        }
+        seen += 1;
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;
@@ -469,6 +483,7 @@ async fn write_standard_bilibili_xml(paths: &InteractionPaths) -> Result<()> {
     info!(
         standard_xml = %paths.standard_xml.display(),
         count,
+        truncated,
         "已生成标准 B 站弹幕 XML"
     );
     Ok(())

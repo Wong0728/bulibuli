@@ -85,6 +85,13 @@ function initStep1() {
             } else {
                 remoteOptions.hidden = true;
                 nextBtn.disabled = false;
+                // 回退修正：切回本机/局域网时必须清掉残留的远程方式选择，
+                // 否则第 2 步仍按 proxy 展示域名配置、甚至以 proxy 模式提交。
+                selectedRemote = null;
+                remoteCards.forEach(c => {
+                    c.classList.remove('selected');
+                    c.setAttribute('aria-pressed', 'false');
+                });
             }
     };
     cards.forEach(card => {
@@ -271,6 +278,17 @@ function initStep3() {
             showSetupNotice(`AI Skill 保存失败：${error.message || '请重试'}`, 'error');
         }
     });
+
+    // 填充 AI Skill 绝对路径（后端返回；复制后可直接发给 AI）。
+    const skillPathText = document.getElementById('skill-path-text');
+    fetch(`${API_BASE}/api/setup/status`)
+        .then(readSetupResponse)
+        .then(json => {
+            if (skillPathText && json.data?.ai_skill_path) {
+                skillPathText.textContent = json.data.ai_skill_path;
+            }
+        })
+        .catch(() => {});
 
     document.getElementById('copy-skill-path-btn').addEventListener('click', () => {
         const text = document.getElementById('skill-path-text').textContent;

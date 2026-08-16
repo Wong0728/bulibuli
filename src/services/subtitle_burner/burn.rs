@@ -18,6 +18,31 @@ struct BurnInput {
     stem: String,
 }
 
+/// 解析 `ffmpeg -filters` / `-encoders` 列表：每行格式为“标志 名称 描述”，
+/// 取第二列精确匹配名称，避免子串误判（如 ass 命中 subtitles 等）。
+fn listing_has_named_entry(text: &str, name: &str) -> bool {
+    text.lines()
+        .any(|line| line.split_whitespace().nth(1) == Some(name))
+}
+
+pub(super) async fn ffmpeg_listing_contains(ffmpeg: &Path, flag: &str, name: &str) -> bool {
+    let output = match Command::new(ffmpeg)
+        .arg("-hide_banner")
+        .arg(flag)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+    {
+        Ok(output) => output,
+        Err(_) => return false,
+    };
+    listing_has_named_entry(&String::from_utf8_lossy(&output.stdout), name)
+}
+
+/// 烧录能力不足时的统一指引：内置 FFmpeg 是合并专用精简版，缺 ass 滤镜与视频编码器。
+const FULL_FFMPEG_HINT: &str = "内置 FFmpeg 为下载合并专用的精简版，无法烧录；请在“设置 → FFmpeg”中改为自定义路径，指向完整版 FFmpeg（需包含 libass 与 libx264，例如 gyan.dev 的 full 构建或系统包管理器安装的版本）";
+
 impl SubtitleBurner {
     /// 烧录弹幕到视频（source=danmaku）。
     /// 优先查找 {bvid}_danmaku.xml，其次 .json，转换为 ASS 后烧录。
@@ -289,6 +314,46 @@ impl SubtitleBurner {
         };
         info!("[{operation_name}] 输出路径: {}", output.display());
 
+        // 检查 FFmpeg（与 ffmpeg_supports_burn 用同一套 mode/自定义路径解析）
+        let (ffmpeg, _) = self
+            .video_processor
+            .detect_ffmpeg(&self.ffmpeg_mode, self.custom_ffmpeg_path.as_deref())
+            .await;
+        let ffmpeg = match ffmpeg {
+            Some(p) => {
+                info!("[{operation_name}] 使用 FFmpeg: {}", p.display());
+                p
+            }
+            None => {
+                warn!("[{operation_name}] 未找到 FFmpeg");
+                return Ok((
+                    false,
+                    None,
+                    "未找到 FFmpeg，请安装 FFmpeg 并添加到系统 PATH，或将其放置到 resources 目录"
+                        .to_string(),
+                ));
+            }
+        };
+
+        // 能力探测放在复制视频之前：精简版 FFmpeg 直接走 ASS 侧车导出，
+        // 避免先整卷复制视频再失败，也避免 "Unrecognized option 'preset'" 这类晦涩报错。
+        let has_ass_filter = ffmpeg_listing_contains(&ffmpeg, "-filters", "ass").await;
+        let has_libx264 = ffmpeg_listing_contains(&ffmpeg, "-encoders", "libx264").await;
+        let has_mpeg4 =
+            !has_libx264 && ffmpeg_listing_contains(&ffmpeg, "-encoders", "mpeg4").await;
+        if !has_ass_filter || (!has_libx264 && !has_mpeg4) {
+            warn!(
+                "[{operation_name}] FFmpeg 不支持烧录（ass 滤镜={}，libx264={}，mpeg4={}），降级导出 ASS 字幕: {}",
+                has_ass_filter,
+                has_libx264,
+                has_mpeg4,
+                ffmpeg.display()
+            );
+            return self
+                .export_ass_sidecar(&stem, parent, ass_path, operation_name)
+                .await;
+        }
+
         // 生成临时目录并复制视频/ASS
         let temp_guard = tempfile::Builder::new()
             .prefix("subtitle_burn_")
@@ -308,27 +373,6 @@ impl SubtitleBurner {
             .await
             .context("复制 ASS 到临时目录失败")?;
 
-        // 检查 FFmpeg
-        let (ffmpeg, _) = self
-            .video_processor
-            .detect_ffmpeg("auto", self.custom_ffmpeg_path.as_deref())
-            .await;
-        let ffmpeg = match ffmpeg {
-            Some(p) => {
-                info!("[{operation_name}] 使用 FFmpeg: {}", p.display());
-                p
-            }
-            None => {
-                warn!("[{operation_name}] 未找到 FFmpeg");
-                return Ok((
-                    false,
-                    None,
-                    "未找到 FFmpeg，请安装 FFmpeg 并添加到系统 PATH，或将其放置到 resources 目录"
-                        .to_string(),
-                ));
-            }
-        };
-
         // 烧录字幕
         info!("[{operation_name}] 启动 FFmpeg 烧录进程...");
         let mut command = Command::new(&ffmpeg);
@@ -343,12 +387,20 @@ impl SubtitleBurner {
             .arg("ass=subtitles.ass")
             .arg("-c:a")
             .arg("copy")
-            .arg("-c:v")
-            .arg("libx264")
-            .arg("-preset")
-            .arg("fast")
-            .arg("-crf")
-            .arg("23")
+            .arg("-c:v");
+        if has_libx264 {
+            // x264：preset/crf 是其编码器私有选项，仅在确认存在时传入。
+            command
+                .arg("libx264")
+                .arg("-preset")
+                .arg("fast")
+                .arg("-crf")
+                .arg("23");
+        } else {
+            // 兜底编码器 mpeg4 不支持 preset/crf，用 -q:v 控制质量。
+            command.arg("mpeg4").arg("-q:v").arg("3");
+        }
+        command
             .arg("-y")
             .arg(&temp_output)
             .current_dir(&temp_dir)
@@ -425,6 +477,37 @@ impl SubtitleBurner {
                 Err(anyhow::anyhow!("执行 ffmpeg 失败: {e}"))
             }
         }
+    }
+
+    /// FFmpeg 无法烧录时的降级方案（与 Bili23 Downloader 同思路）：
+    /// 导出与视频同名的 ASS 字幕文件，PotPlayer / mpv 等播放器会自动加载同名 .ass 显示弹幕。
+    /// 返回 success=false：烧录确实未发生（历史记录不标记已烧录），但产物可用且给出清晰指引。
+    async fn export_ass_sidecar(
+        &self,
+        stem: &str,
+        parent: &Path,
+        ass_path: &Path,
+        operation_name: &str,
+    ) -> Result<(bool, Option<PathBuf>, String)> {
+        let ass_output = parent.join(format!("{stem}.ass"));
+        fs::copy(ass_path, &ass_output)
+            .await
+            .with_context(|| format!("导出 ASS 字幕文件失败: {}", ass_output.display()))?;
+        info!(
+            "[{operation_name}] FFmpeg 不支持烧录，已导出 ASS 字幕: {}",
+            ass_output.display()
+        );
+        let name = ass_output
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+        Ok((
+            false,
+            Some(ass_output),
+            format!(
+                "当前 FFmpeg 为精简版，未烧录进视频；已导出同名 ASS 字幕文件（{name}），用 PotPlayer / mpv 等播放器打开视频即可自动加载弹幕。如需真正烧录：{FULL_FFMPEG_HINT}"
+            ),
+        ))
     }
 
     async fn find_danmaku_file(&self, parent: &Path, stem: &str) -> Option<PathBuf> {
@@ -540,4 +623,22 @@ fn extract_bvid(text: &str) -> Option<String> {
     use regex::Regex;
     let re = Regex::new(r"BV[0-9a-zA-Z]+").ok()?;
     re.find(text).map(|m| m.as_str().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listing_has_named_entry;
+
+    #[test]
+    fn ffmpeg_listing_matches_second_column_exactly() {
+        let filters = "Filters:\n T..C. subtitles V->V Render text subtitles...\n T.S.C. ass S->V Render ASS subtitles...";
+        assert!(listing_has_named_entry(filters, "ass"));
+        assert!(listing_has_named_entry(filters, "subtitles"));
+        // 名称必须精确匹配，不能子串命中。
+        assert!(!listing_has_named_entry(filters, "subtitle"));
+        let encoders = "Encoders:\n V....D libx264 libx264 H.264...\n A..... aac AAC encoder";
+        assert!(listing_has_named_entry(encoders, "libx264"));
+        assert!(listing_has_named_entry(encoders, "aac"));
+        assert!(!listing_has_named_entry(encoders, "x264"));
+    }
 }
