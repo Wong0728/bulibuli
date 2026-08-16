@@ -3,6 +3,7 @@
 param(
     [string]$Version,
     [string]$PackagePath,
+    [string]$CacheDir,
     [string]$InstallDir,
     [ValidateSet("Auto", "Core", "Portable")]
     [string]$Variant = "Auto",
@@ -210,6 +211,67 @@ function Download-Package([string]$TargetVersion, [string]$TargetVariant) {
     return $package
 }
 
+function Get-LocalPackagePaths {
+    $roots = New-Object 'System.Collections.Generic.List[string]'
+    $seenRoots = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $seenPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+    $addRoot = {
+        param([string]$Value)
+        if ([string]::IsNullOrWhiteSpace($Value) -or -not (Test-Path -LiteralPath $Value -PathType Container)) {
+            return
+        }
+        $full = (Resolve-Path -LiteralPath $Value).Path
+        if ($seenRoots.Add($full)) { [void]$roots.Add($full) }
+    }
+
+    foreach ($value in @($PWD.Path, $PSScriptRoot, $CacheDir, $env:BULIBULI_CACHE_DIR)) {
+        & $addRoot $value
+    }
+
+    # When the script is saved under deploy\windows, also inspect the checkout root.
+    $parent = $PSScriptRoot
+    for ($level = 0; $level -lt 3 -and $parent; $level++) {
+        & $addRoot $parent
+        $parent = Split-Path -Parent $parent
+    }
+
+    foreach ($root in $roots) {
+        $items = @()
+        $items += Get-Item -LiteralPath $root
+        $items += @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction SilentlyContinue)
+        $items += @(Get-ChildItem -LiteralPath $root -File -Filter "$AppSlug-windows-$Architecture-*.zip" -Force -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending)
+        foreach ($item in $items) {
+            $path = $item.FullName
+            if ($seenPaths.Add($path)) { $path }
+        }
+    }
+}
+
+function Read-LocalPackage([string]$Path) {
+    try {
+        $resolved = (Resolve-Path -LiteralPath $Path).Path
+        if (Test-Path -LiteralPath $resolved -PathType Leaf) {
+            if ([IO.Path]::GetExtension($resolved) -ne ".zip") { return $null }
+            $checksum = "$resolved.sha256"
+            if (-not (Test-Path -LiteralPath $checksum -PathType Leaf)) { return $null }
+            Assert-Sha256 $resolved $checksum
+        }
+        return Read-Package $resolved
+    } catch {
+        return $null
+    }
+}
+
+function Get-LocalPackages {
+    $seenRoots = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in Get-LocalPackagePaths) {
+        $package = Read-LocalPackage $path
+        if ($package -and $seenRoots.Add($package.Root)) { $package }
+    }
+}
+
 function Copy-LocalRuntime([object]$Source, [object]$Target) {
     $sourceResources = Join-Path $Source.Root "resources"
     $targetResources = Join-Path $Target.Root "resources"
@@ -262,13 +324,32 @@ try {
         $explicitPackage = Read-Package $PackagePath
     }
 
-    $targetVersion = if ($explicitPackage -and -not (Normalize-Version $Version)) {
-        Normalize-Version ([string]$explicitPackage.Manifest.app_version)
-    } else { Resolve-Version }
     $localCandidates = @($explicitPackage)
-    foreach ($candidatePath in @($InstallDir, $PSScriptRoot)) {
-        if (-not $candidatePath -or -not (Test-Path -LiteralPath $candidatePath -PathType Container)) { continue }
-        try { $localCandidates += Read-Package $candidatePath } catch { }
+    $downloadedCandidates = @(Get-LocalPackages)
+    $localCandidates += $downloadedCandidates
+    $targetVersion = Normalize-Version $Version
+    if (-not $targetVersion -and $explicitPackage) {
+        $targetVersion = Normalize-Version ([string]$explicitPackage.Manifest.app_version)
+    }
+    if (-not $targetVersion) {
+        $localVersionCandidate = $downloadedCandidates |
+            Where-Object { $_.Manifest.variant -eq "portable" } |
+            Select-Object -First 1
+        if (-not $localVersionCandidate) {
+            $localVersionCandidate = $downloadedCandidates |
+                Where-Object { $_.Manifest.variant -eq "core" } |
+                Select-Object -First 1
+        }
+        if ($localVersionCandidate) {
+            $targetVersion = Normalize-Version ([string]$localVersionCandidate.Manifest.app_version)
+            Write-Info "使用本地包版本：$targetVersion"
+        }
+    }
+    if (-not $targetVersion) { $targetVersion = Resolve-Version }
+
+    if (Test-Path -LiteralPath $InstallDir -PathType Container) {
+        $installedPackage = Read-LocalPackage $InstallDir
+        if ($installedPackage) { $localCandidates += $installedPackage }
     }
 
     $selected = $null
@@ -277,7 +358,7 @@ try {
         if (-not $candidate) { continue }
         if ($Variant -ne "Auto" -and $candidate.Manifest.variant -ne $Variant.ToLowerInvariant()) { continue }
         try { Assert-Package $candidate $targetVersion } catch { continue }
-        if ($candidate -eq $explicitPackage -and $candidate.Manifest.variant -eq "core" -and (Get-SystemRuntime)) {
+        if ($candidate.Manifest.variant -eq "core" -and (Get-SystemRuntime)) {
             $selected = $candidate
             $runtimeSource = "系统 PATH/环境变量"
             break

@@ -30,18 +30,29 @@ chmod +x bulibuli resources/aria2c resources/ffmpeg
 
 ### Windows 一键安装
 
-从仓库下载 `deploy/windows/install.ps1`（或在源码 checkout 中直接运行）后，可显式指定本地目录或归档；安装器会校验 package manifest 和 SHA-256，按 `Auto` 顺序选择本地完整包、可验证运行时加 `core`，最后回退 `portable`：
+`install.ps1` 是独立的 PowerShell 安装器，不嵌入 Windows 发布包。先下载 Windows `portable` 归档和同名 `.sha256`，放到当前目录、安装器目录、源码 checkout 目录，或 `BULIBULI_CACHE_DIR` 指定的缓存目录；安装器会优先发现并校验本地包，找不到时才访问 GitHub Release：
 
 ```powershell
 Invoke-WebRequest https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/windows/install.ps1 -OutFile .\install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+也可以显式指定本地归档：
+
+```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 `
   -PackagePath .\bulibuli-windows-x86_64-portable-vX.Y.Z.zip `
   -InstallDir "$env:LOCALAPPDATA\bulibuli" -Variant Auto
 ```
 
-其中 `vX.Y.Z` 替换为目标 Release 版本；归档必须与当前安装器一起提供 `bulibuli.package.json` 和同名 `.sha256`。
+归档必须保留同名 `.sha256`；包内的 `bulibuli.package.json` 由安装器继续校验。需要指定本地缓存目录时设置 `BULIBULI_CACHE_DIR`，例如：
 
-也可以从仓库中的 `deploy/windows/install.ps1` 安装固定版本；不传 `-PackagePath` 时优先读取 Release 的 `latest.json`，没有稳定版本时回退读取包含 Alpha 的 Releases 清单。PATH 修改为用户级设置，完成后请重新打开终端。
+```powershell
+$env:BULIBULI_CACHE_DIR = 'D:\GitHub\bulibuli'
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+不传 `-PackagePath` 时，本地包会优先于 Release；没有本地包时读取 Release 的 `latest.json`，没有稳定版本时回退读取包含 Alpha 的 Releases 清单。PATH 修改为用户级设置，完成后请重新打开终端。
 
 ### Linux 一键安装
 

@@ -396,8 +396,8 @@ def validate_package_tree(package_dir, platform_name, variant):
     ]
     if platform_name == "linux":
         required.append(package_dir / "install.sh")
-    elif platform_name == "windows":
-        required.append(package_dir / "install.ps1")
+    elif platform_name == "windows" and (package_dir / "install.ps1").exists():
+        raise RuntimeError("Windows Release 不应嵌入 install.ps1；安装器由仓库单独提供")
     runtime_names = ("aria2c.exe", "ffmpeg.exe") if platform_name == "windows" else ("aria2c", "ffmpeg")
     if variant == "portable":
         for name in runtime_names:
@@ -528,12 +528,6 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
             shutil.copy2(installer_src, installer_dst)
             installer_dst.chmod(installer_dst.stat().st_mode | 0o111)
             print("  已复制: install.sh")
-    elif platform_name == "windows":
-        installer_src = ROOT / "deploy" / "windows" / "install.ps1"
-        if installer_src.is_file():
-            shutil.copy2(installer_src, package_dir / "install.ps1")
-            print("  已复制: install.ps1")
-
     write_package_manifest(package_dir, platform_name, target, variant)
     print(f"  已写入: {PACKAGE_MANIFEST_NAME}")
     validate_package_tree(package_dir, platform_name, variant)
