@@ -323,6 +323,13 @@ show_status() {
     [ -f "${BOOT_SCRIPT}" ] && log "开机自启：已配置" || log "开机自启：未配置"
 }
 
+installer_path() {
+    case "${MODE}" in
+        source|remote-source) printf '%s\n' "${APP_DIR}/deploy/termux/install.sh" ;;
+        *) printf '%s\n' "${APP_DIR}/install.sh" ;;
+    esac
+}
+
 main() {
     local action="${1:-install}"
     case "${action}" in
@@ -336,7 +343,8 @@ main() {
     ensure_binary
     case "${action}" in
         install)
-            log "安装完成。后台启动：bash \"${APP_DIR}/install.sh\" start；开机自启：bash \"${APP_DIR}/install.sh\" boot"
+            installer="$(installer_path)"
+            log "安装完成。后台启动：bash \"${installer}\" start；开机自启：bash \"${installer}\" boot"
             ;;
         run)
             log "前台启动（Ctrl+C 退出）"
