@@ -9,6 +9,7 @@
 - [部署安全说明](../../deploy/SECURITY.md)
 - [内置资源清单与校验](../../resources/README.md)
 - [安全策略](../../SECURITY.md)
+- [云端发布架构](RELEASES.md)
 
 ## 项目协作
 

@@ -151,7 +151,7 @@ python build.py --check
 python build.py --portable
 ```
 
-`python build.py --portable` 会生成桌面平台完整自包含包，或生成不内置媒体运行时的 Termux Android arm64 包；桌面 Unix 包缺少 aria2c、FFmpeg 或必要动态库时会拒绝组装。`python build.py --core` 生成不含媒体运行时的轻量命令包。每个包都会生成 `bulibuli.package.json`，记录版本、平台、架构、包类型和文件 SHA-256。每个 Release 由 tag 触发 GitHub Actions，GitHub 页面上传 Windows/Linux/macOS `portable` 包、Termux arm64 包、Windows/Linux `core` 包及 `latest.json`。
+`python build.py --portable` 会生成桌面平台完整自包含包，或生成不内置媒体运行时的 Termux Android arm64 包；桌面 Unix 包缺少 aria2c、FFmpeg 或必要动态库时会拒绝组装。`python build.py --core` 生成不含媒体运行时的轻量命令包。每个包都会生成 `bulibuli.package.json`，记录版本、平台、架构、包类型和文件 SHA-256。推送 `v*` tag 后由独立的 Release 工作流构建并上传 Windows/Linux/macOS `portable` 包、Termux arm64 包、Windows/Linux `core` 包及 `latest.json`；已有 tag 也可以从 Actions 手动补发。详见 [云端发布架构](docs/user/RELEASES.md)。
 
 ## 文档与贡献
 

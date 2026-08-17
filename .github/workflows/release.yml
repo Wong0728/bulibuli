@@ -1,0 +1,285 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的现有 Tag，例如 v2.0.0-alpha.8"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: 1.97.1
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Release quality gates
+    uses: ./.github/workflows/quality.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+    permissions:
+      contents: read
+
+  portable-artifacts:
+    name: Portable artifact (${{ matrix.platform }} / ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            platform: linux
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-intel
+            platform: macos
+            arch: x86_64
+            target: x86_64-apple-darwin
+          - os: macos-14
+            platform: macos
+            arch: arm64
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install macOS runtime tools
+        if: matrix.platform == 'macos'
+        run: brew install aria2 ffmpeg
+      - name: Install Linux runtime tools
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y aria2 ffmpeg
+      - name: Verify tag matches package version
+        if: startsWith(env.RELEASE_TAG, 'v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="v$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          test "${package_version}" = "${RELEASE_TAG}"
+      - name: Build frontend bundle
+        working-directory: static/js
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+      - name: Build portable archive
+        run: python build.py --portable --skip-frontend --platform ${{ matrix.platform }} --target ${{ matrix.target }}
+      - name: Build Windows/Linux core archive
+        if: matrix.platform == 'linux' || matrix.platform == 'windows'
+        run: python build.py --core --skip-frontend --skip-rust-build --platform ${{ matrix.platform }} --target ${{ matrix.target }}
+      - name: Upload archive and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bulibuli-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  termux-portable:
+    name: Portable artifact (termux / arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-linux-android
+      - name: Build platform-neutral frontend bundle
+        working-directory: static/js
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+      - name: Configure Android arm64 cross-compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk_root="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}}"
+          if [[ -z "${ndk_root}" ]]; then
+            ndk_root="$(find "${ANDROID_HOME:?}/ndk" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          fi
+          toolchain_dir="${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          linker="${toolchain_dir}/aarch64-linux-android21-clang"
+          test -x "${linker}"
+          test -x "${toolchain_dir}/llvm-ar"
+          {
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${linker}"
+            echo "CC_aarch64-linux-android=${linker}"
+            echo "CC_aarch64_linux_android=${linker}"
+            echo "AR_aarch64-linux-android=${toolchain_dir}/llvm-ar"
+            echo "AR_aarch64_linux_android=${toolchain_dir}/llvm-ar"
+          } >> "${GITHUB_ENV}"
+      - name: Cross-build and smoke-test Termux package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target aarch64-linux-android
+          python build.py --portable --skip-frontend --skip-rust-build \
+            --platform termux --target aarch64-linux-android
+          test -n "$(find dist -maxdepth 1 -type d -name "bulibuli-termux-*portable-*" -print -quit)"
+          docker run --rm --platform linux/arm64 --security-opt seccomp=unconfined \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            -w /workspace \
+            termux/termux-docker:aarch64 \
+            bash -lc '
+              set -euo pipefail
+              package_dir="$(find dist -maxdepth 1 -type d -name "bulibuli-termux-*portable-*" -print -quit)"
+              test -n "${package_dir}"
+              "${package_dir}/bulibuli" --version
+              test ! -e "${package_dir}/resources/aria2c"
+              test ! -e "${package_dir}/resources/ffmpeg"
+            '
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bulibuli-termux-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    needs: [quality, portable-artifacts, termux-portable]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: bulibuli-*
+          path: dist
+          merge-multiple: true
+      - name: Verify release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find dist -maxdepth 1 -type f \( -name '*portable*.zip' -o -name '*portable*.tar.gz' \) | wc -l)" -eq 5
+          test "$(find dist -maxdepth 1 -type f -name '*portable*.sha256' | wc -l)" -eq 5
+          test "$(find dist -maxdepth 1 -type f -name '*linux*x86_64*core*.tar.gz' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*linux*x86_64*core*.sha256' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*windows*x86_64*core*.zip' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*windows*x86_64*core*.zip.sha256' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*termux*arm64*portable*.tar.gz' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*termux*arm64*portable*.tar.gz.sha256' | wc -l)" -eq 1
+          for file in dist/bulibuli-*portable-*; do
+            case "${file}" in
+              *"${RELEASE_TAG}"*) ;;
+              *) echo "release file version mismatch: ${file}" >&2; exit 1 ;;
+            esac
+          done
+      - name: Create release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          base_url = f"https://github.com/{repository}/releases/download/{tag}"
+          assets = []
+          archives = sorted(Path("dist").glob("bulibuli-*.zip"))
+          archives += sorted(Path("dist").glob("bulibuli-*.tar.gz"))
+          for archive in archives:
+              stem = archive.name.removesuffix(".zip").removesuffix(".tar.gz")
+              parts = stem.split("-")
+              assets.append({
+                  "name": archive.name,
+                  "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                  "platform": parts[1],
+                  "architecture": parts[2],
+                  "variant": parts[3],
+                  "download_url": f"{base_url}/{archive.name}",
+                  "checksum_name": f"{archive.name}.sha256",
+                  "checksum_url": f"{base_url}/{archive.name}.sha256",
+              })
+          Path("dist/latest.json").write_text(json.dumps({
+              "schema_version": 1,
+              "version": tag,
+              "assets": assets,
+          }, indent=2) + "\n", encoding="utf-8")
+          PY
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          notes_file="${RUNNER_TEMP}/bulibuli-release-notes.md"
+          sed "s|__TAG__|${tag}|g" .github/release-body.md > "${notes_file}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" dist/* --clobber
+            gh release edit "${tag}" --title "bulibuli ${tag}" --notes-file "${notes_file}"
+          else
+            prerelease_flag=()
+            [[ "${tag}" == *-alpha* || "${tag}" == *-beta* || "${tag}" == *-rc* ]] && prerelease_flag+=(--prerelease)
+            gh release create "${tag}" dist/* --title "bulibuli ${tag}" --notes-file "${notes_file}" "${prerelease_flag[@]}"
+          fi
+      - name: Verify published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          expected_count="$(find dist -maxdepth 1 -type f | wc -l)"
+          actual_count="$(gh release view "${tag}" --json assets --jq '.assets | length')"
+          test "${actual_count}" -eq "${expected_count}"
+          while IFS= read -r file; do
+            name="$(basename "${file}")"
+            remote_size="$(gh release view "${tag}" --json assets --jq ".assets[] | select(.name == \"${name}\") | .size")"
+            test -n "${remote_size}"
+            test "${remote_size}" -eq "$(stat -c '%s' "${file}")"
+          done < <(find dist -maxdepth 1 -type f -print)
+          # Verify SHA-256 checksums against local dist/ files
+          # (avoids gh release download --pattern which can fail for exact
+          #  asset names on some runner gh versions)
+          for manifest in dist/*.sha256; do
+            (cd dist && sha256sum -c "$(basename "${manifest}")")
+          done
