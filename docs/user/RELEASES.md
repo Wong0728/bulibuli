@@ -14,7 +14,8 @@
 2. 推送 Tag 后，Release 工作流从该 Tag checkout，所有构建和下载资产都使用同一版本。
 3. Alpha、Beta、RC 自动标记为预发布；Release 创建后还会逐个核对资产数量、文件大小和本地 SHA-256 清单。
 4. Release 工作流不会被普通 CI 的并发取消；同一个 Tag 的重复运行会排队，避免半成品覆盖。
-5. 需要补发已有 Tag 时，在 Actions 中手动运行 Release，并填写 Tag，例如 `v2.0.0-alpha.5`。工作流会在同一 Tag 上创建或更新 Release，不需要移动 Tag。
+5. 依赖审计由 `main`/Pull Request 的 CI 门禁执行；Release 复用 Rust、前端和 Windows 质量检查，并用最终资产校验守住发布边界，避免重复下载审计 action 造成发布阻塞。
+6. 需要补发已有 Tag 时，在 Actions 中手动运行 Release，并填写 Tag，例如 `v2.0.0-alpha.5`。工作流会在同一 Tag 上创建或更新 Release，不需要移动 Tag。
 
 ## 下载入口
 
