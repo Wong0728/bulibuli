@@ -252,14 +252,39 @@ jobs:
           tag="${RELEASE_TAG}"
           notes_file="${RUNNER_TEMP}/bulibuli-release-notes.md"
           sed "s|__TAG__|${tag}|g" .github/release-body.md > "${notes_file}"
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" dist/* --clobber
-            gh release edit "${tag}" --title "bulibuli ${tag}" --notes-file "${notes_file}"
-          else
-            prerelease_flag=()
-            [[ "${tag}" == *-alpha* || "${tag}" == *-beta* || "${tag}" == *-rc* ]] && prerelease_flag+=(--prerelease)
-            gh release create "${tag}" dist/* --title "bulibuli ${tag}" --notes-file "${notes_file}" "${prerelease_flag[@]}"
+          prerelease_flag=()
+          [[ "${tag}" == *-alpha* || "${tag}" == *-beta* || "${tag}" == *-rc* ]] && prerelease_flag+=(--prerelease)
+
+          # Create metadata separately from asset upload. This makes a retry
+          # safe when GitHub returns a transient 5xx during a large upload.
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            for attempt in 1 2 3 4 5; do
+              if gh release create "${tag}" --title "bulibuli ${tag}" --notes-file "${notes_file}" "${prerelease_flag[@]}"; then
+                break
+              fi
+              if gh release view "${tag}" >/dev/null 2>&1; then
+                break
+              fi
+              [[ "${attempt}" -eq 5 ]] && exit 1
+              sleep $((attempt * 10))
+            done
           fi
+
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "${tag}" dist/* --clobber; then
+              break
+            fi
+            [[ "${attempt}" -eq 5 ]] && exit 1
+            sleep $((attempt * 15))
+          done
+
+          for attempt in 1 2 3 4 5; do
+            if gh release edit "${tag}" --title "bulibuli ${tag}" --notes-file "${notes_file}"; then
+              break
+            fi
+            [[ "${attempt}" -eq 5 ]] && exit 1
+            sleep $((attempt * 10))
+          done
       - name: Verify published release assets
         env:
           GH_TOKEN: ${{ github.token }}
