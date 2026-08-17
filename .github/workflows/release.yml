@@ -279,8 +279,22 @@ jobs:
             done
           fi
 
+          expected_assets="$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)"
+          release_assets_match() {
+            local actual_assets
+            actual_assets="$(gh release view "${tag}" --json assets --jq '.assets[].name' 2>/dev/null | sort)" || return 1
+            diff -u <(printf '%s\n' "${expected_assets}") <(printf '%s\n' "${actual_assets}") >/dev/null
+          }
+
           for attempt in 1 2 3 4 5; do
             if gh release upload "${tag}" dist/* --clobber; then
+              break
+            fi
+            # GitHub may finish the upload and return 503 while the request
+            # is being finalized. Treat an already-complete remote asset set
+            # as success so a retry does not turn a valid release red.
+            if release_assets_match; then
+              echo "Release assets are already complete after an upload error."
               break
             fi
             [[ "${attempt}" -eq 5 ]] && exit 1
