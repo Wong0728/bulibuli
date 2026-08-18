@@ -83,6 +83,7 @@ async fn apply(State(state): State<SharedState>) -> Result<Json<ApiResponse<Valu
         .map_err(|error| AppError::Internal(format!("替换程序文件失败: {error}")))?;
     let message = match outcome {
         update::ApplyOutcome::Applied => "更新完成，重启程序后生效",
+        #[cfg(windows)]
         update::ApplyOutcome::Staged => {
             "程序正在运行，更新已暂存；退出程序后将自动完成替换，下次启动生效"
         }
