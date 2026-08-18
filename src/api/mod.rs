@@ -13,6 +13,7 @@ mod refresh;
 mod settings;
 pub(crate) mod setup;
 mod task;
+mod update;
 mod video;
 
 use crate::error::AppError;
@@ -53,6 +54,7 @@ pub fn router() -> Router<SharedState> {
         .merge(refresh::router())
         .merge(live::router())
         .merge(foundation::router())
+        .merge(update::router())
 }
 
 #[cfg(test)]

@@ -55,6 +55,14 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 不传 `-PackagePath` 时，本地包会优先于 Release；没有本地包时读取 Release 的 `latest.json`，没有稳定版本时回退读取包含 Alpha 的 Releases 清单。PATH 修改为用户级设置，完成后请重新打开终端。
 
+**升级已有安装**：安装目录已存在时安装器会报错，重跑安装器升级需显式加 `-Force`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force
+```
+
+`-Force` 为合并覆盖：`data/` 目录（数据库、下载、会话、配对状态）始终保留，但旧版本独有的文件可能残留；如遇异常建议手动删除旧安装目录（保留 `data/`）后全新安装。
+
 ### Linux 一键安装
 
 一键安装器会先检查包内运行时（完整包优先），再检查 `ARIA2C_PATH`、`FFMPEG_PATH`/`FFMPEG`/`FFMPEG_HOME`/`FFMPEG_DIR`、`FFPROBE_PATH` 和系统 `PATH`。依赖齐全时下载体积更小的 `core` 包；缺少 aria2c 或 FFmpeg 时才尝试系统包管理器，仍不可用才回退完整 `portable` 包。两种归档都会校验 SHA-256：
@@ -76,7 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux
   | BULIBULI_VERSION=vX.Y.Z bash
 ```
 
-安装器支持 `install`、`run`、`service`、`unservice` 和 `status`。`service` 会优先使用用户级 systemd；root 安装会创建独立服务用户。自定义数据目录时使用绝对路径，例如：
+安装器支持 `install`、`run`、`service`、`unservice` 和 `status`。`service` 会优先使用用户级 systemd；root 安装会创建独立服务用户，`run` 与 `service` 统一使用 `/var/lib/bulibuli` 作为数据目录（可用 `BULIBULI_DATA_DIR` 覆盖），避免一台机器出现两套数据库。自定义数据目录时使用绝对路径，例如：
 
 ```bash
 BULIBULI_DATA_DIR=/srv/bulibuli-data ~/.local/share/bulibuli/install.sh service
@@ -94,6 +102,16 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termu
 
 脚本会校验 Release 的 SHA-256 和包内文件清单，不需要 Rust、Node.js 或本机编译。远程一键安装完成后，后台运行使用 `bash "$PREFIX/opt/bulibuli/install.sh" start`；如果是手动解压包，则使用解压目录中的 `bash install.sh start`。开机自启还需要 Termux:Boot。只有需要源码构建时才设置 `BULIBULI_SOURCE_BUILD=1`。
 
+### 各平台升级方式
+
+| 平台 | 升级方法 |
+| --- | --- |
+| Windows | 重跑安装器并加 `-Force`（见上方 Windows 一节；`data/` 保留，旧版独有文件可能残留） |
+| Linux | 重跑远程一键命令 `curl -fsSL ... deploy/linux/install.sh \| bash`；已安装目录内的 `install.sh` 不自动升级（检测到旧版本会有提示）。升级保留 `data/`，若服务正在运行会提示先停止 |
+| Termux | 重跑远程一键命令 `curl -fsSL ... deploy/termux/install.sh \| bash`；已安装目录内的 `install.sh` 不自动升级（检测到旧版本会有提示） |
+
+任何升级入口都不会删除或覆盖 `data/`（数据库、下载、会话、配对状态）。
+
 ## 首次设置与常用操作
 
 1. 启动程序并打开终端打印的本地 URL。
@@ -101,7 +119,7 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termu
 3. 在网页中完成设备配对和安全设置，再按需扫码登录 B 站。
 4. 完整包优先使用包内 aria2c 和 FFmpeg；轻量 `core` 包没有包内运行时时，按环境变量再到系统 `PATH` 查找，媒体探测会继续寻找 ffprobe 或回退 FFmpeg。
 
-常用本机控制命令：
+常用本机控制命令（需服务已运行；ctl 默认仅放行 `status`/`help`/`quit`/`ai`）：
 
 ```text
 bulibuli ctl sys status
@@ -109,6 +127,8 @@ bulibuli ctl dl status
 bulibuli ctl cred qrcode
 bulibuli ctl sys ffmpeg-test
 ```
+
+AI 模式（`bulibuli ctl ai on`）开启后，AI 助手可执行与人工相同的全部操作，包括监听模式、IP 访问规则、GeoIP、信任外部 aria2/FFmpeg、设备配对等；命令需服务已运行。
 
 查看版本和帮助不会加载配置、创建数据目录、启动数据库或启动服务：
 
@@ -126,12 +146,13 @@ Linux/macOS 将 `bulibuli.exe` 替换为 `./bulibuli`。完整命令清单见 [`
 - 数据目录包含 SQLite 数据库、下载目录、`security.toml`、日志、迁移备份和运行状态；升级前请先停止程序并备份整个目录。
 - 日志按天滚动。日志、数据库、Cookie、session 和配对码不要上传到 issue 或公开工单。
 - Unix 控制 socket 优先使用 `XDG_RUNTIME_DIR`，深层数据目录不会再触发 Linux socket 路径过长；Windows 使用仅本机可访问的命名管道。
+- 应用内更新：设置页可切换更新策略（仅提示 / 自动下载暂存 / 关闭）并手动"立即检查更新""立即更新"。自动更新只替换程序文件（可执行文件、static、resources），不触碰 `data/`；更新完成后需重启程序生效，Windows 运行中更新会在退出程序后自动完成替换。
 
 ## 故障排查
 
 - `/api/health` 返回服务存活状态，`/api/ready` 会同时检查数据库和 aria2。
 - 下载失败先运行 `sys status`，确认 aria2 可用；再运行 `sys aria2-restart`。
-- FFmpeg 检查使用 `sys ffmpeg-test`。
+- FFmpeg 检查使用 `sys ffmpeg-test`（读取设置里的 FFmpeg 模式与自定义路径，与设置页测试一致）。
 - 无桌面、SSH、Docker 或 nohup 环境不会强行调用浏览器；直接打开终端输出的 URL。
 - 如果安装器找不到最新版本，可用 `BULIBULI_VERSION=vX.Y.Z` 固定到 Releases 中明确存在的版本；也可以直接下载 portable 归档，不需要安装器。
 - Linux 便携包中的运行时二进制带有独立 `.sha256` 文件；归档或运行时校验失败时停止安装，不要使用被替换的文件。
@@ -164,7 +185,7 @@ python build.py --portable
 - [部署安全说明](deploy/SECURITY.md)
 - [内置资源清单与校验](resources/README.md)
 
-提交 issue 前请附上版本、平台/架构、启动方式、脱敏后的错误信息和复现步骤；不要附带 Cookie、token、完整绝对路径或整个 `data/` 目录。
+提交 issue 前请附上版本、平台/架构、启动方式、脱敏后的错误信息和复现步骤；不要附带 Cookie、token、完整绝对路径或整个 `data/` 目录。[提交 Issue](https://github.com/Wong0728/bulibuli/issues/new)
 
 ## 项目状态
 

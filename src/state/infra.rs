@@ -8,7 +8,7 @@ use crate::services::settings::SettingsService;
 use crate::ws::WebSocketManager;
 use anyhow::Context;
 use sea_orm::DatabaseConnection;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU16};
+use std::sync::atomic::{AtomicBool, AtomicU16};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -23,9 +23,6 @@ pub struct InfraState {
     pub(crate) cancellation: tokio_util::sync::CancellationToken,
     /// AI Skill 模式开关（来自 onboarding / `ai on|off`）。ctl 命令门控以此为准。
     pub(crate) ai_skill_enabled: Arc<AtomicBool>,
-    /// 人工授予 AI 修改安全边界的短时权限。
-    /// `0` 表示未授权；权限不会跨进程重启持久化。
-    pub(crate) ai_foundation_authorized_until: Arc<AtomicI64>,
     /// 进程启动时刻，供 `sys status` 计算运行时长。
     pub(crate) started_at: Instant,
     /// 审计日志服务：所有写操作经此记录，供 `ctl audit` 查询与前端追溯。
@@ -73,7 +70,6 @@ impl InfraState {
             settings_service,
             cancellation,
             ai_skill_enabled: Arc::new(AtomicBool::new(ai_skill_enabled)),
-            ai_foundation_authorized_until: Arc::new(AtomicI64::new(0)),
             started_at: Instant::now(),
             audit_log,
             conflict_guard,

@@ -118,7 +118,14 @@ export async function loadKnownBloggerIntoAddForm() {
     const list = await loadKnownBloggers();
     const blogger = list.find(item => String(item.uid) === String(select.value));
     if (!blogger) return;
-    const state = _state.bloggerStates[blogger.id] || {};
+    // bloggerStates 按自动任务 id 建索引，"已添加博主"下拉的 id 是另一套，
+    // 直接取 state 恒为 undefined → 回退默认值。这里按 uid 匹配自动任务列表拿真实配置。
+    const monitor = (_state.bloggers || []).find(b => String(b.uid) === String(blogger.uid));
+    const state = (monitor && _state.bloggerStates[monitor.id]) || {};
+    const hasConfig = Boolean(monitor && _state.bloggerStates[monitor.id]);
+    if (!hasConfig) {
+        showToast('该博主暂无自动任务配置，已使用默认值', 'info');
+    }
     document.getElementById('modal-blogger-uid').value = blogger.uid || '';
     document.getElementById('modal-blogger-name').value = state.name || blogger.name || '';
     document.getElementById('modal-min-interval').value = state.minInterval || blogger.min_interval || 60;
@@ -130,7 +137,7 @@ export async function loadKnownBloggerIntoAddForm() {
     document.getElementById('modal-burn-danmaku').checked = state.burn_danmaku === true;
     document.getElementById('modal-burn-subtitle').checked = state.burn_subtitle === true;
     document.getElementById('modal-series-filter-regex').value = state.series_filter_regex || '';
-    document.getElementById('modal-start-monitoring').checked = state.isRunning === true;
+    document.getElementById('modal-start-monitoring').checked = hasConfig ? state.isRunning === true : true;
     renderActiveWindowRows(Array.isArray(state.active_windows) ? state.active_windows : [], 'blogger');
 }
 

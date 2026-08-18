@@ -342,6 +342,7 @@ detect_layout() {
             APP_DIR="${SCRIPT_DIR}"
             BIN_PATH="${SCRIPT_DIR}/${BIN_NAME}"
             MODE="release-package"
+            log "检测到已安装的 v${package_version#v}，直接使用（已是最新版本，无需升级）"
             return
         fi
         if [ -n "${package_version}" ] && package_runtime_available "${SCRIPT_DIR}"; then
@@ -387,22 +388,42 @@ ensure_binary() {
     [ -x "${BIN_PATH}" ] || die "编译完成但未找到产物：${BIN_PATH}"
 }
 
+is_app_running() {
+    if command -v pidof >/dev/null 2>&1 && pidof "${BIN_NAME}" >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x "${BIN_NAME}" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
 install_remote_package() {
     [ "${REMOTE_BOOTSTRAP}" -eq 1 ] || return
     local destination="${BULIBULI_INSTALL_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/${APP_SLUG}}"
     mkdir -p "${destination}"
-    # 先清理旧版本目录再拷贝：cp -a 合并覆盖会残留上一版已删除的文件
-    #（旧二进制/资源可能与新 manifest 校验冲突）。
     if [ -d "${destination}" ]; then
-        local backup="${destination}.old.$$"
-        mv "${destination}" "${backup}" 2>/dev/null || true
-        rm -rf "${backup}" 2>/dev/null || true
+        # 升级前检查旧实例是否仍在运行：运行中删除安装目录会让进程继续向已删除
+        # 的 inode 写数据，且旧进程与新二进制不匹配，必须让用户先停止服务。
+        if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+            die "检测到 ${SERVICE_NAME} 服务正在运行，请先 systemctl stop ${SERVICE_NAME} 再升级"
+        fi
+        if is_app_running; then
+            die "检测到 ${BIN_NAME} 正在运行，请先停止（前台 Ctrl+C 或 systemctl stop ${SERVICE_NAME}）再升级"
+        fi
+        # 先清理旧版本其余内容再拷贝：cp -a 合并覆盖会残留上一版已删除的文件
+        #（旧二进制/资源可能与新 manifest 校验冲突）。
+        # data/（数据库、下载、会话、配对状态）必须跨版本保留，逐个清理时跳过，
+        # 与 Windows（install.ps1）和 Termux（install.sh）的安装器行为一致。
+        find "${destination}" -mindepth 1 -maxdepth 1 ! -name data -exec rm -rf -- {} +
     fi
     mkdir -p "${destination}"
-    cp -a "${APP_DIR}/." "${destination}/"
+    # 拷贝新包内容：包内 data/ 只是打包时新建的空目录，跳过避免覆盖旧数据。
+    (cd "${APP_DIR}" && tar -cf - --exclude='./data' .) | (cd "${destination}" && tar -xf -)
+    mkdir -p "${destination}/data"
     APP_DIR="${destination}"
     BIN_PATH="${APP_DIR}/${BIN_NAME}"
-    log "已安装到：${APP_DIR}"
+    log "已安装到：${APP_DIR}（data/ 目录已保留，旧数据未受影响）"
 }
 
 service_paths() {
@@ -544,10 +565,25 @@ main() {
             install_deps
             ensure_binary
             log "安装完成。前台运行：./install.sh run；注册服务：./install.sh service"
+            if [ "$(id -u)" -eq 0 ] && [ -z "${BULIBULI_DATA_DIR:-}" ] && [ -z "${BILI__DATA_DIR:-}" ]; then
+                log "root 安装：数据目录统一为 /var/lib/${SERVICE_NAME}（run 与 service 共用，可用 BULIBULI_DATA_DIR 覆盖）"
+            fi
             ;;
         run)
             install_deps
             ensure_binary
+            # root 下 run 与 service 统一数据目录，避免一台机器出现两套数据库、
+            # 两个配对状态（配对/登录状态必须跨入口延续）。
+            if [ "$(id -u)" -eq 0 ] && [ -z "${BULIBULI_DATA_DIR:-}" ] && [ -z "${BILI__DATA_DIR:-}" ]; then
+                local run_data_dir="/var/lib/${SERVICE_NAME}"
+                mkdir -p "${run_data_dir}"
+                if id "${SERVICE_NAME}" >/dev/null 2>&1; then
+                    chown "${SERVICE_NAME}:${SERVICE_NAME}" "${run_data_dir}"
+                fi
+                chmod 700 "${run_data_dir}"
+                export BILI__DATA_DIR="${run_data_dir}"
+                log "root 前台运行：数据目录统一为 ${run_data_dir}（与 service 注册一致）"
+            fi
             log "前台启动（Ctrl+C 退出）"
             cd "${APP_DIR}"
             exec "${BIN_PATH}"

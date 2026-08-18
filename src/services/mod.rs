@@ -28,6 +28,7 @@ pub(crate) mod security_config;
 pub(crate) mod settings;
 pub(crate) mod subtitle_burner;
 pub(crate) mod subtitle_fetch;
+pub(crate) mod update;
 pub(crate) mod url_parser;
 pub(crate) mod verify;
 pub(crate) mod video_processor;

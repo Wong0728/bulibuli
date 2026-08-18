@@ -1,6 +1,6 @@
 import { _state } from './state.js';
 import { clampPercent, escapeHtml, formatFileSize, formatSpeed } from './utils.js';
-import { apiPost } from './core.js';
+import { apiPost, apiGet } from './core.js';
 import { fetchDownloadSnapshot } from './download-status-store.js';
 import { retryDownload, loadHistoryBoard } from './history.js';
 import { showToast, confirmDialog } from './download-status.js';
@@ -33,6 +33,32 @@ export async function updateDownloadLists() {
         }
     } catch (e) {
         // 静默处理网络错误
+    }
+    // 队列摘要条随状态轮询一并刷新（/api/download/metrics）
+    updateQueueSummary();
+}
+
+// 队列摘要：各状态任务数 + 等待重试（GET /api/download/metrics）。
+export async function updateQueueSummary() {
+    const el = document.getElementById('download-queue-summary');
+    if (!el) return;
+    try {
+        const result = await apiGet('/api/download/metrics');
+        const data = result.data || {};
+        const statuses = data.statuses || {};
+        const parts = [
+            ['等待中', statuses.pending || 0],
+            ['下载中', statuses.downloading || 0],
+            ['已暂停', statuses.paused || 0],
+            ['失败', statuses.failed || 0],
+            ['已完成', statuses.completed || 0],
+        ].filter(([, count]) => Number(count) > 0);
+        const waiting = data.waiting_retry ? ` · 等待重试 ${data.waiting_retry}` : '';
+        el.textContent = parts.length
+            ? parts.map(([label, count]) => `${label} ${count}`).join(' · ') + waiting
+            : '队列空闲';
+    } catch (e) {
+        el.textContent = '队列摘要暂不可用';
     }
 }
 
@@ -255,5 +281,27 @@ export async function resumeAllDownloads() {
         }
     } catch (e) {
         showToast('全局恢复失败', 'error');
+    }
+}
+
+// 调整下载优先级（1..=300，越大越先下载）。步进 10，越界钳制。
+export async function adjustDownloadPriority(bvid, delta, currentHint = null) {
+    if (!bvid) return;
+    const status = _state.currentDownloadStatuses?.[bvid]
+        || _state.currentDownloadStatuses?.[`${bvid}_video`];
+    const current = Number(currentHint ?? status?.priority) || 100;
+    const next = Math.min(300, Math.max(1, current + delta));
+    if (next === current) return;
+    try {
+        const result = await apiPost('/api/download/priority', { bvid, type: 'video', priority: next });
+        if (result.code === 0) {
+            showToast(`下载优先级已调整为 ${next}`, 'success');
+            updateDownloadLists();
+            refreshBoardIfActive();
+        } else {
+            showToast(result.message || '调整优先级失败', 'error');
+        }
+    } catch (e) {
+        showToast('调整优先级失败', 'error');
     }
 }

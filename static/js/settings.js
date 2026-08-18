@@ -10,14 +10,19 @@ export function loadSettingsFragment() {
     settingsFragmentPromise = (async () => {
         const mount = document.getElementById('settings-fragment-mount');
         if (!mount || mount.dataset.loaded === 'true') return;
-        const response = await fetch('/settings.html', { credentials: 'same-origin', cache: 'no-store' });
+        // 设置页片段走内部片段路由（/settings.html 直链已 302 回主界面）。
+        // 纯静态文件服务（如前端冒烟测试）没有内部片段路由，回退到 /settings.html。
+        let response = await fetch('/_fragments/settings.html', { credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) {
+            response = await fetch('/settings.html', { credentials: 'same-origin', cache: 'no-store' });
+        }
         if (!response.ok) throw new Error(`设置导航加载失败 (${response.status})`);
         mount.innerHTML = await response.text();
         mount.dataset.loaded = 'true';
         const groups = {
             basic: ['account', 'appearance', 'query', 'parallel', 'smart'],
             downloads: ['danmaku', 'aria2', 'ffmpeg', 'burn', 'subtitle', 'path', 'storage', 'retain', 'verify'],
-            advanced: ['board', 'monitor', 'refresh', 'live-recording'],
+            advanced: ['board', 'monitor', 'refresh', 'live-recording', 'update', 'logs'],
             security: ['local-config'],
         };
         const sections = () => [...document.querySelectorAll('#tab-settings .section-collapsible')];
@@ -34,6 +39,9 @@ export function loadSettingsFragment() {
             button.addEventListener('click', () => selectGroup(button.dataset.settingsGroup));
         });
         selectGroup('basic');
+        // 全局日志对所有已认证角色开放（与 /api/logs/get 的 RBAC 一致），
+        // 片段加载后即启动轮询，不依赖 owner-only 的 loadSettingsFromServer。
+        startGlobalLogsPolling();
     })();
     return settingsFragmentPromise;
 }
@@ -340,7 +348,6 @@ export async function loadSettingsFromServer() {
 
             if (s.storage) {
                 document.getElementById('setting-history-limit').value = s.storage.history_limit;
-                document.getElementById('setting-uid-history-limit').value = s.storage.uid_history_limit;
                 document.getElementById('setting-log-limit').value = s.storage.log_limit;
                 document.getElementById('setting-per-blogger-retain-default').value = s.storage.per_blogger_retain_default;
             }
@@ -450,10 +457,15 @@ export async function loadSettingsFromServer() {
                 document.getElementById('setting-subtitle-accept-ai').checked = s.subtitle.accept_ai === true;
                 document.getElementById('setting-subtitle-languages').value = (s.subtitle.languages || []).join(',');
             }
+            // 更新策略
+            if (s.update) {
+                document.getElementById('setting-update-policy').value = s.update.policy ?? 'manual';
+            }
 
             // 主 Web 仅显示基础配置摘要，不再访问可写的 Setup API。
             loadFoundationSummary();
             loadAiSkillInfo();
+            loadUpdateStatus();
         }
     } catch (e) {
         showToast(`加载设置失败：${e.message}`, 'error');
@@ -507,7 +519,6 @@ export async function saveSettings(btn) {
         });
         Object.assign(settings.storage, {
             history_limit: parseInt(document.getElementById('setting-history-limit').value),
-            uid_history_limit: parseInt(document.getElementById('setting-uid-history-limit').value),
             log_limit: parseInt(document.getElementById('setting-log-limit').value),
             per_blogger_retain_default: parseInt(document.getElementById('setting-per-blogger-retain-default').value),
         });
@@ -570,6 +581,10 @@ export async function saveSettings(btn) {
             languages: document.getElementById('setting-subtitle-languages').value
                 .split(',').map(s => s.trim()).filter(s => s.length > 0),
         });
+        settings.update = {
+            ...(settings.update || {}),
+            policy: document.getElementById('setting-update-policy')?.value || 'manual',
+        };
 
         const result = await apiPut('/api/settings', settings);
         if (result.code === 0) {
@@ -725,6 +740,116 @@ function loadAiSkillInfo() {
     }
 }
 
+// --- 更新机制（检查 + 提示 + 手动更新） ---
+
+export async function loadUpdateStatus() {
+    try {
+        const result = await apiGet('/api/update/status');
+        const data = result.data || {};
+        const currentEl = document.getElementById('update-current-version');
+        if (currentEl) currentEl.textContent = data.current_version || '未知';
+        const latestEl = document.getElementById('update-latest-version');
+        if (latestEl) {
+            latestEl.textContent = data.has_update
+                ? `${data.latest_version}（有新版本）`
+                : (data.latest_version || '尚未检查');
+        }
+        const applyBtn = document.querySelector('[data-action="apply-update"]');
+        if (applyBtn) applyBtn.hidden = !data.has_update;
+    } catch (e) {
+        // 状态读取失败静默；"立即检查"会给出明确错误
+    }
+}
+
+export async function checkUpdate() {
+    const resultEl = document.getElementById('update-check-result');
+    const applyBtn = document.querySelector('[data-action="apply-update"]');
+    if (resultEl) resultEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在检查更新...';
+    try {
+        const result = await apiPost('/api/update/check', {});
+        const data = result.data || {};
+        const latestEl = document.getElementById('update-latest-version');
+        if (result.code === 0) {
+            if (data.has_update) {
+                if (latestEl) latestEl.textContent = `${data.latest_version}（有新版本）`;
+                if (applyBtn) applyBtn.hidden = false;
+                if (resultEl) resultEl.innerHTML = `<span class="status-success"><i class="fa-solid fa-circle-up"></i> 发现新版本 ${escapeHtml(data.latest_version)}${data.updatable ? '' : '（当前平台暂无可下载包）'}</span>`;
+            } else {
+                if (latestEl) latestEl.textContent = data.latest_version || '已是最新';
+                if (resultEl) resultEl.innerHTML = '<span class="status-success"><i class="fa-solid fa-check-circle"></i> 已是最新版本</span>';
+            }
+        } else {
+            if (resultEl) resultEl.innerHTML = `<span class="status-error"><i class="fa-solid fa-times-circle"></i> ${escapeHtml(result.message || '检查失败')}</span>`;
+        }
+    } catch (e) {
+        if (resultEl) resultEl.innerHTML = '<span class="status-error"><i class="fa-solid fa-times-circle"></i> 检查更新失败</span>';
+    }
+}
+
+export async function applyUpdate() {
+    const applyBtn = document.querySelector('[data-action="apply-update"]');
+    const resultEl = document.getElementById('update-check-result');
+    if (!(await confirmDialog('确定要立即更新吗？更新只替换程序文件、不触碰 data/ 目录；完成后需重启程序生效。', { title: '立即更新', okText: '更新' }))) return;
+    if (applyBtn) applyBtn.disabled = true;
+    if (resultEl) resultEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在下载并校验更新...';
+    try {
+        const result = await apiPost('/api/update/apply', {});
+        if (result.code === 0) {
+            if (resultEl) resultEl.innerHTML = `<span class="status-success"><i class="fa-solid fa-check-circle"></i> ${escapeHtml(result.message || '更新完成')}</span>`;
+            showToast(result.message || '更新完成', 'success', 6000);
+            await loadUpdateStatus();
+        } else {
+            if (resultEl) resultEl.innerHTML = `<span class="status-error"><i class="fa-solid fa-times-circle"></i> ${escapeHtml(result.message || '更新失败')}</span>`;
+        }
+    } catch (e) {
+        if (resultEl) resultEl.innerHTML = '<span class="status-error"><i class="fa-solid fa-times-circle"></i> 更新失败</span>';
+    } finally {
+        if (applyBtn) applyBtn.disabled = false;
+    }
+}
+
+// --- 全局日志（跨博主，设置页展示，15 秒轮询） ---
+_state.globalLogsTimer = null;
+_state.globalLogsInFlight = false;
+
+export async function refreshGlobalLogs() {
+    if (_state.globalLogsInFlight) return;
+    _state.globalLogsInFlight = true;
+    try {
+        const container = document.getElementById('global-logs-list');
+        if (!container) return;
+        const result = await apiGet('/api/logs/get?limit=100');
+        const logs = result.data?.logs || [];
+        if (!logs.length) {
+            container.innerHTML = '<div class="empty-state empty-state-padded"><i class="fa-solid fa-inbox"></i><p>暂无日志</p></div>';
+            return;
+        }
+        container.innerHTML = logs.map(l => {
+            const level = l.level || 'info';
+            const time = l.time || '--:--:--';
+            const msg = l.msg || l.message || '';
+            const uidTag = l.uid ? `<span class="log-uid">[${escapeHtml(String(l.uid))}]</span>` : '';
+            return `<div class="log-entry log-level-${escapeHtml(level)}"><span class="log-time">${escapeHtml(time)}</span>${uidTag}<span>${escapeHtml(msg)}</span></div>`;
+        }).join('');
+        container.scrollTop = container.scrollHeight;
+    } catch (e) {
+        // 静默处理网络错误，轮询会自动重试
+    } finally {
+        _state.globalLogsInFlight = false;
+    }
+}
+
+export function startGlobalLogsPolling() {
+    if (_state.globalLogsTimer) return;
+    refreshGlobalLogs();
+    _state.globalLogsTimer = setInterval(() => {
+        if (document.hidden) return;
+        const settingsTab = document.getElementById('tab-settings');
+        if (!settingsTab || !settingsTab.classList.contains('active')) return;
+        refreshGlobalLogs();
+    }, 15000);
+}
+
 // --- 移动端适配 ---
 export function initMobileSidebar() {
     const dashboard = document.querySelector('.blogger-dashboard');
@@ -773,26 +898,8 @@ export function initMobileSidebar() {
 }
 
 // --- 测试功能 ---
-export async function testDownload() {
-    const bvid = prompt('请输入要测试的BVID（例如：BV1xx411c7mD）:');
-    if (!bvid) return;
-
-    showToast('正在测试下载功能...', 'info');
-    try {
-        const result = await apiPost('/api/video/get-video-urls', {
-            bvid: bvid
-        });
-        
-        const data = result.data || {};
-        if (result.code === 0) {
-            showToast(`获取到 ${(data.qualities || []).length} 个清晰度选项`, 'success');
-        } else {
-            showToast(result.message || '测试失败', 'error');
-        }
-    } catch (e) {
-        showToast('测试失败', 'error');
-    }
-}
+// "测试下载"已按审计决定（R1）整体删除：/api/video/get-video-urls 是抽屉真实使用的
+// 接口，保留；只删除这个调试入口（原用原生 window.prompt()，体验差且无实际用途）。
 
 function applyTheme(theme) {
     const root = document.documentElement;

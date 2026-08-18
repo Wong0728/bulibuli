@@ -195,7 +195,9 @@ function bindNetworkListeners() {
         loadHistoryBoard(_state.currentBoardTab);
         updateDownloadLists();
         const offlineSince = Math.floor((Date.now() - 5 * 60 * 1000) / 1000);
-        apiPost('/api/download/retry-all', { since: offlineSince }).catch(() => {});
+        // 后端 retry_all 只解析 URL query string（Query<RetryAllQuery>），
+        // since 必须放 query 而非 JSON body，否则会被静默忽略并重试全部历史失败任务。
+        apiPost('/api/download/retry-all?since=' + offlineSince, {}).catch(() => {});
     });
 }
 
@@ -207,6 +209,28 @@ function applySessionRole(role) {
     document.getElementById('cookie-warning-banner')?.setAttribute('hidden', '');
     document.getElementById('login-user-card')?.setAttribute('hidden', '');
     document.getElementById('login-prompt-btn')?.setAttribute('hidden', '');
+
+    if (role === 'operator') {
+        // 设置仅 Owner 可修改（后端 /api/settings* 全部 owner-only）：
+        // operator 会话下禁用设置表单全部控件，避免"可编辑但保存必 403"的假入口。
+        const settingsTab = document.getElementById('tab-settings');
+        if (settingsTab) {
+            // 禁用全部表单控件，但保留设置分组切换按钮，使 Operator 仍可浏览各组只读内容。
+            settingsTab.querySelectorAll('input, select, textarea, button').forEach(control => {
+                if (control.closest('.settings-group-switcher')) return;
+                control.disabled = true;
+                control.setAttribute('aria-disabled', 'true');
+            });
+            let note = document.getElementById('operator-settings-note');
+            if (!note) {
+                note = document.createElement('p');
+                note.id = 'operator-settings-note';
+                note.className = 'form-note form-note-warning';
+                note.innerHTML = '<i class="fa-solid fa-lock"></i> 设置仅 Owner 可修改；当前为 Operator 会话，本页为只读展示。';
+                settingsTab.prepend(note);
+            }
+        }
+    }
 
     if (role === 'viewer') {
         document.querySelectorAll('[data-action]').forEach(control => {
@@ -536,17 +560,26 @@ export async function saveManualCookie() {
     }
 }
 
-// 退出登录：清空服务器保存的 Cookie（应对错误账号 / 需要重新登录）
+// 退出登录：清空服务器保存的 Cookie + 注销当前设备会话。
 export async function logoutAccount() {
     if (!(await confirmDialog('确定要退出当前 B 站账号登录吗？退出后需重新扫码或粘贴 Cookie。', { title: '退出登录', okText: '退出', danger: true }))) return;
     try {
-        const result = await apiPost('/api/cookies/save', { cookies: '' });
-        if (result.code === 0) {
-            showToast('已退出登录', 'info');
-            await refreshLoginInfo();
-        } else {
-            showToast(result.message || '退出失败', 'error');
+        // 先清 B 站 Cookie（此时会话仍有效），再注销设备会话。
+        const cookieResult = await apiPost('/api/cookies/save', { cookies: '' });
+        if (cookieResult.code !== 0) {
+            showToast(cookieResult.message || '退出失败', 'error');
+            return;
         }
+        // 注销当前设备会话（撤销配对令牌 + 断开 WS）。只清 Cookie 会让会话在
+        // 有效期内仍可用，必须补调后端 /api/auth/logout。
+        const sessionResult = await apiPost('/api/auth/logout', {});
+        if (sessionResult.code === 0) {
+            showToast('已退出登录，设备会话已注销', 'success');
+        } else {
+            showToast('已清除 B 站 Cookie，但设备会话注销失败', 'warning');
+        }
+        // 会话 Cookie 已被后端清除，刷新回到配对/登录页。
+        window.location.reload();
     } catch (e) {
         showToast('退出登录失败', 'error');
     }

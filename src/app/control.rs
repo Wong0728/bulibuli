@@ -258,7 +258,7 @@ const COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         name: "pair [close]",
         category: CommandCategory::Credential,
-        desc: "服务器终端开启 / 关闭配对模式（AI 调用需临时授权）",
+        desc: "服务器终端开启 / 关闭配对模式",
         example: "pair",
     },
     CommandSpec {
@@ -447,7 +447,7 @@ pub(crate) async fn execute_from(
         // 旧名 alias（保留以兼容现有脚本）
         "help" => Ok(help()),
         "status" => Ok(legacy_status(state).await),
-        "pair" => pair_command(state, args, origin).await,
+        "pair" => pair_command(state, args).await,
         "sessions" => Ok(serde_json::to_value(
             state.bili.auth.list_sessions().await?,
         )?),
@@ -475,11 +475,8 @@ pub(crate) async fn execute_from(
 
 /// `pair [close]`：开启/关闭配对模式。
 /// 开启配对会生成配对码，这是敏感操作（一次性访问凭证）；审计走 record_silent，不广播事件。
-async fn pair_command(
-    state: &SharedState,
-    args: &[String],
-    origin: CommandOrigin,
-) -> AppResult<Value> {
+/// AI 模式开启后 AI 与人工拥有相同权限，配对始终允许（不再需要短时授权层）。
+async fn pair_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
     let is_close = args.get(1).is_some_and(|value| value == "close");
     let ctx = ctl_audit_ctx(
         &args.join(" "),
@@ -494,11 +491,6 @@ async fn pair_command(
         crate::app::onboarding::clear_pairing_code(&state.infra.paths.data_dir);
         Ok(json!({"pairing_open": false}))
     } else {
-        // `ctl` 是仅供 AI 使用的 IPC，因此需要人工授予短时权限。
-        // 本机 TUI/stdin 是人工恢复入口，始终可以生成一次性 Owner 配对码。
-        if pair_requires_foundation_authorization(origin) {
-            ensure_foundation_authorized(state)?;
-        }
         let code = auth.open_pairing().await;
         Ok(json!({"pairing_code": format!("{}-{}", &code[..4], &code[4..])}))
     };
@@ -547,60 +539,12 @@ async fn ai_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
     let Some(value) = args.get(1).map(String::as_str) else {
         return Ok(json!({
             "ai_skill_enabled": state.infra.ai_skill_enabled.load(Ordering::Relaxed),
-            "foundation_authorized_until": state.infra.ai_foundation_authorized_until.load(Ordering::Relaxed),
         }));
     };
-    if value == "assist" {
-        let enabled = match args.get(2).map(String::as_str) {
-            Some("on") => true,
-            Some("off") => false,
-            _ => {
-                return Err(AppError::BadRequest(
-                    "用法：ai assist on|off [--minutes 1..=10]".to_string(),
-                ))
-            }
-        };
-        let minutes = parse_minutes(args)?.unwrap_or(5).clamp(1, 10);
-        let until = if enabled {
-            chrono::Utc::now().timestamp() + (minutes as i64 * 60)
-        } else {
-            0
-        };
-        return audit_only_op(
-            state,
-            &args.join(" "),
-            OperationTarget::Settings,
-            None,
-            if enabled {
-                "ai_foundation_authorize"
-            } else {
-                "ai_foundation_revoke"
-            },
-            || async move {
-                state
-                    .infra
-                    .ai_foundation_authorized_until
-                    .store(until, Ordering::Relaxed);
-                Ok(json!({
-                    "foundation_authorized_until": until,
-                    "note": if enabled {
-                        "已临时允许 AI 协助修改基础配置；到期后自动失效。"
-                    } else {
-                        "已撤销 AI 的基础配置权限。"
-                    }
-                }))
-            },
-        )
-        .await;
-    }
     let enabled = match value {
         "on" => true,
         "off" => false,
-        _ => {
-            return Err(AppError::BadRequest(
-                "用法：ai on|off 或 ai assist on|off".to_string(),
-            ))
-        }
+        _ => return Err(AppError::BadRequest("用法：ai on|off".to_string())),
     };
     audit_only_op(
         state,
@@ -620,9 +564,9 @@ async fn ai_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
             Ok(json!({
                 "ai_skill_enabled": enabled,
                 "note": if enabled {
-                    "AI Skill 模式已启用，ctl 命令全开（需 B 站已登录）"
+                    "AI Skill 模式已启用，AI 助手可执行与人工相同的全部 ctl 命令（含 mode/access/geo/trust/pair）"
                 } else {
-                    "AI Skill 模式已关闭，ctl 仅放行 status/help/quit"
+                    "AI Skill 模式已关闭，ctl 仅放行 status/help/quit/ai"
                 },
             }))
         },
@@ -649,11 +593,10 @@ async fn dl_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
         "retry" => dl_retry(state, args).await,
         "remove" => dl_remove(state, args).await,
         "priority" => dl_priority(state, args).await,
-        "burn" | "burn-status" => Err(AppError::BadRequest(
-            "字幕烧录编排暂未在 ctl 实现，请用前端网页触发".to_string(),
-        )),
+        // 字幕烧录编排仅 Web 支持（前端 /api/download/burn），ctl 不提供半实现入口，
+        // 避免"帮助可见、调用必错"的假命令。
         _ => Err(AppError::BadRequest(format!(
-            "未知 dl 子命令 `{sub}`；用法：dl status|add|pause|resume|retry|remove|priority"
+            "未知 dl 子命令 `{sub}`；用法：dl status|add|pause|resume|retry|remove|priority（烧录请用前端网页）"
         ))),
     }
 }
@@ -976,6 +919,20 @@ async fn blg_add(state: &SharedState, args: &[String]) -> AppResult<Value> {
         .map_err(|_| AppError::BadRequest("uid 必须是整数".to_string()))?;
     let cookies = require_bili_login(state).await?;
 
+    // 预查重复：与 Web（manage.rs）一致返回友好 Conflict，而不是数据库唯一键错误
+    // 被包成 INTERNAL "添加博主失败"。
+    if let Some(existing) = state
+        .business
+        .blogger_service
+        .find_by_uid(uid)
+        .await
+        .map_err(|e| AppError::Internal(format!("查询博主失败: {e}")))?
+    {
+        if existing.has_auto_task {
+            return Err(AppError::Conflict("该博主已有自动任务".to_string()));
+        }
+    }
+
     // 拉取资料（失败时回退到空资料，不阻断添加）
     let (name, face, sign, level, fans) =
         match state.bili.bili_api.get_user_info(uid_i64, &cookies).await {
@@ -1283,10 +1240,16 @@ async fn sys_aria2_restart(state: &SharedState) -> AppResult<Value> {
 }
 
 async fn sys_ffmpeg_test(state: &SharedState) -> AppResult<Value> {
+    // 与 Web /api/settings/ffmpeg-test 保持一致：读取设置里的 ffmpeg.mode + custom_path，
+    // 而不是固定 "auto" 探测——否则设置页配好自定义 FFmpeg 后 ctl 仍报"未找到 FFmpeg"。
+    let settings = state.infra.settings_service.current();
+    let mode = settings.ffmpeg.mode.clone();
+    let custom_path = (!settings.ffmpeg.custom_path.trim().is_empty())
+        .then(|| settings.ffmpeg.custom_path.clone());
     let (path, source) = state
         .media
         .video_processor
-        .detect_ffmpeg("auto", None)
+        .detect_ffmpeg(&mode, custom_path.as_deref())
         .await;
     let Some(path) = path else {
         return Ok(json!({
@@ -1306,9 +1269,9 @@ async fn sys_ffmpeg_test(state: &SharedState) -> AppResult<Value> {
     }))
 }
 
-fn sys_logs_value(_state: &SharedState) -> Value {
+fn sys_logs_value(state: &SharedState) -> Value {
     json!({
-        "logs_dir": "data/logs",
+        "logs_dir": state.infra.paths.data_dir.join("logs"),
         "hint": "日志按天滚动，文件名形如 app.log.YYYY-MM-DD",
     })
 }
@@ -1388,10 +1351,8 @@ async fn sys_refresh(state: &SharedState, args: &[String]) -> AppResult<Value> {
                 Some(bvid),
                 None,
                 move |_| async move {
-                    refresh
-                        .trigger_video(&bvid_owned)
-                        .await
-                        .map_err(|e| AppError::Internal(format!("触发视频刷新失败: {e}")))?;
+                    // 直接透传 AppError（查不到记录时返回 NOT_FOUND，与 Web 一致）
+                    refresh.trigger_video(&bvid_owned).await?;
                     Ok(json!({"scope": "video", "bvid": bvid_owned, "triggered": 1}))
                 },
             )
@@ -1610,7 +1571,6 @@ async fn access_command(state: &SharedState, args: &[String]) -> AppResult<Value
             state.bili.security.current().access_rules,
         )?);
     }
-    ensure_foundation_authorized(state)?;
     let cmd_str = args.join(" ");
     let args_owned: Vec<String> = args.to_vec();
     audit_only_op(
@@ -1661,7 +1621,6 @@ async fn mode_command(state: &SharedState, args: &[String]) -> AppResult<Value> 
     let Some(mode) = args.get(1).map(String::as_str) else {
         return Ok(json!({"mode": state.bili.security.current().mode}));
     };
-    ensure_foundation_authorized(state)?;
     let cmd_str = args.join(" ");
     let args_owned: Vec<String> = args.to_vec();
     let mode_owned = mode.to_string();
@@ -1721,7 +1680,6 @@ async fn mode_command(state: &SharedState, args: &[String]) -> AppResult<Value> 
 }
 
 async fn geo_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
-    ensure_foundation_authorized(state)?;
     let cmd_str = args.join(" ");
     let args_owned: Vec<String> = args.to_vec();
     audit_only_op(
@@ -1787,7 +1745,6 @@ async fn geo_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
 }
 
 async fn trust_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
-    ensure_foundation_authorized(state)?;
     let cmd_str = args.join(" ");
     let args_owned: Vec<String> = args.to_vec();
     audit_only_op(
@@ -1882,10 +1839,14 @@ async fn audit_command(state: &SharedState, args: &[String]) -> AppResult<Value>
     };
     match sub {
         "list" => {
-            let source = parse_source_flag(args);
-            let since = parse_flag_value(args, "--since");
+            let source = parse_source_flag(args)?;
+            let since = parse_since_flag(args)?;
             let limit = parse_limit_flag(args, 100);
-            let rows = state.infra.audit_log.list(source, since, limit).await?;
+            let rows = state
+                .infra
+                .audit_log
+                .list(source, since.as_deref(), limit)
+                .await?;
             Ok(json!({
                 "count": rows.len(),
                 "logs": rows.iter().map(|r| r.to_api()).collect::<Vec<_>>(),
@@ -2001,10 +1962,40 @@ fn extract_expected_version(args: &[String]) -> (Vec<String>, Option<i32>) {
     (args.to_vec(), None)
 }
 
-/// 解析 `--source <src>` flag 为 OperationSource。
-fn parse_source_flag(args: &[String]) -> Option<OperationSource> {
-    let val = parse_flag_value(args, "--source")?;
-    val.parse::<OperationSource>().ok()
+/// 解析 `--source <src>` flag 为 OperationSource。非法值报 BAD_REQUEST 而非静默忽略，
+/// 避免拼错参数后静默得到全量审计结果。
+fn parse_source_flag(args: &[String]) -> AppResult<Option<OperationSource>> {
+    let Some(val) = parse_flag_value(args, "--source") else {
+        return Ok(None);
+    };
+    val.parse::<OperationSource>()
+        .map(Some)
+        .map_err(|_| AppError::BadRequest(format!("--source 非法值 `{val}`")))
+}
+
+/// 解析 `--since <duration>`：仅接受 Nd/Nh/Nm（如 1h / 24h / 7d）。非法值报 BAD_REQUEST，
+/// 与 --source 一致，避免静默忽略过滤条件。
+fn parse_since_flag(args: &[String]) -> AppResult<Option<String>> {
+    let Some(val) = parse_flag_value(args, "--since") else {
+        return Ok(None);
+    };
+    validate_since_duration(val)?;
+    Ok(Some(val.to_string()))
+}
+
+fn validate_since_duration(value: &str) -> AppResult<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let (num, unit) = trimmed.split_at(trimmed.len() - 1);
+    if num.parse::<i64>().is_ok() && matches!(unit, "h" | "d" | "m") {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(format!(
+            "--since 非法值 `{value}`，支持格式如 1h / 24h / 7d"
+        )))
+    }
 }
 
 /// 解析 `--target-type` 字符串为 OperationTarget。
@@ -2235,32 +2226,9 @@ fn parse_minutes(args: &[String]) -> AppResult<Option<u64>> {
         .map_err(|_| AppError::BadRequest("minutes 必须是正整数".to_string()))
 }
 
-/// 高影响操作（网络暴露、GeoIP 和可信可执行文件）在人工通过 TUI 或 Setup Web
-/// 执行 `ai assist on` 授予短时权限前，对 AI 不可用。权限仅在当前进程内有效，
-/// 会自动过期；每次授予或撤销都会由调用方写入审计日志。
-fn ensure_foundation_authorized(state: &SharedState) -> AppResult<()> {
-    let now = chrono::Utc::now().timestamp();
-    let until = state
-        .infra
-        .ai_foundation_authorized_until
-        .load(Ordering::Relaxed);
-    if foundation_authorization_is_active(until, now) {
-        Ok(())
-    } else {
-        Err(AppError::Unauthorized(
-            "基础配置需要人工临时授权：请在 TUI 或基础配置 Web 执行 `ai assist on` 后重试"
-                .to_string(),
-        ))
-    }
-}
-
-fn pair_requires_foundation_authorization(origin: CommandOrigin) -> bool {
-    origin == CommandOrigin::AiCtl
-}
-
-fn foundation_authorization_is_active(until: i64, now: i64) -> bool {
-    until > now
-}
+// 高影响操作（网络暴露、GeoIP 和可信可执行文件）在 AI 模式开启后与人工同等可用。
+// AI 模式门控由 `execute_from` 入口统一检查（未开启时整批拒绝），无需再叠加短时授权层。
+// （原 `ai assist` 短时授权层已按 2026-08-18 审计整改删除。）
 
 /// `dl pause/resume <task_id|all>`：`all` → None（全局），数字 → Some(id)
 fn parse_task_id_or_all(target: &str) -> AppResult<Option<i32>> {
@@ -2374,6 +2342,9 @@ fn generate_skill_markdown() -> String {
     out.push_str("1. **AI Skill 模式已启用**：启动向导步骤 2 选启用，或运行 `ai on`。");
     out.push_str(
         "未启用时仅 `status` / `help` / `quit` / `ai` 可用，其他命令返回 `AI_SKILL_DISABLED`。\n",
+    );
+    out.push_str(
+        "启用后 AI 助手拥有与人工相同的全部操作权限（含 `mode` / `access` / `geo` / `trust` / `pair` 等基础配置命令），无需任何临时授权；所有 ctl 命令都要求服务已在运行。\n",
     );
     out.push_str(
         "2. **B 站已登录**：涉及 B 站 API 的命令（download / blogger / cookies / refresh）",
@@ -2747,22 +2718,14 @@ mod tests {
     }
 
     #[test]
-    fn human_terminal_pair_does_not_need_ai_authorization() {
-        assert!(!pair_requires_foundation_authorization(
-            CommandOrigin::HumanTerminal
-        ));
-    }
-
-    #[test]
-    fn ai_ctl_pair_without_active_grant_is_rejected_by_policy() {
-        assert!(pair_requires_foundation_authorization(CommandOrigin::AiCtl));
-        assert!(!foundation_authorization_is_active(100, 100));
-    }
-
-    #[test]
-    fn ai_ctl_pair_with_active_grant_is_allowed_by_policy() {
-        assert!(pair_requires_foundation_authorization(CommandOrigin::AiCtl));
-        assert!(foundation_authorization_is_active(101, 100));
+    fn pair_command_has_no_temporary_authorization_requirement() {
+        // AI 模式开启后 AI 与人工权限一致（审计 2026-08-18 B2：删除 ai assist 短时授权层），
+        // 帮助清单里 pair 不应再出现"临时授权"字样。
+        let pair = COMMAND_REGISTRY
+            .iter()
+            .find(|spec| spec.name.starts_with("pair "))
+            .expect("pair 应在 COMMAND_REGISTRY 中");
+        assert!(!pair.desc.contains("授权"));
     }
 
     #[cfg(unix)]

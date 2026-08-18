@@ -263,6 +263,7 @@ async fn build_video_list(
                     "downloaded_size": task.downloaded_size,
                     "total_size": task.total_size,
                     "task_id": task.task_id,
+                    "priority": task.priority,
                 },
             })
         })
@@ -347,6 +348,7 @@ async fn build_single_video_response(
         "downloaded_size": task.downloaded_size,
         "total_size": task.total_size,
         "task_id": task.task_id,
+        "priority": task.priority,
     });
 
     let files = business
@@ -505,6 +507,8 @@ struct AggregatedTaskProgress {
     /// 当前聚合状态对应的任务 ID，供前端 pause/resume 等单任务操作使用。
     /// 多任务时优先返回 downloading/paused 任务，便于暂停按钮定位到活跃任务。
     task_id: Option<i32>,
+    /// 代表任务的下载优先级（1..=300，默认 100），供前端调整控件显示。
+    priority: i32,
 }
 
 /// 统一看板与抽屉的任务聚合优先级：下载中 > 已暂停 > 等待 > 失败 > 终态。
@@ -524,6 +528,7 @@ fn aggregate_task_progress(
             downloaded_size: 0,
             total_size: 0,
             task_id: None,
+            priority: 100,
         };
     };
     // 状态优先级：downloading > paused > pending > failed > completed
@@ -532,11 +537,10 @@ fn aggregate_task_progress(
         .find(|candidate| tasks.iter().any(|task| task.status == *candidate))
         .unwrap_or("completed")
         .to_string();
-    // 取该状态下的第一个任务 id 作为代表（前端 pause/resume 据此定位单任务）
-    let task_id = tasks
-        .iter()
-        .find(|task| task.status == status)
-        .map(|task| task.id);
+    // 取该状态下的第一个任务作为代表（前端 pause/resume/priority 据此定位单任务）
+    let representative = tasks.iter().find(|task| task.status == status);
+    let task_id = representative.map(|task| task.id);
+    let priority = representative.map(|task| task.priority).unwrap_or(100);
     AggregatedTaskProgress {
         progress: tasks
             .iter()
@@ -548,5 +552,6 @@ fn aggregate_task_progress(
         downloaded_size: tasks.iter().map(|task| task.downloaded_size).sum(),
         total_size: tasks.iter().map(|task| task.total_size).sum(),
         task_id,
+        priority,
     }
 }

@@ -160,9 +160,9 @@ export function openVideoDrawerFromManual(bvid) {
 
 // 渲染抽屉内容
 // 所有可选画质（静态列表，会根据视频实际可用质量动态禁用），供 media-actions.js 复用。
+// 注意：不含 126（杜比视界）/127（8K）——后端下载白名单最高 125，选了必被 400 拒绝；
+// 这两档在设置页全局画质下拉中保留但标注"仅在线观看可用，下载暂不支持"。
 export const _ALL_QUALITY_OPTIONS = [
-    { qn: 127, label: '8K', tag: '8K' },
-    { qn: 126, label: '杜比视界', tag: 'HDR' },
     { qn: 125, label: 'HDR', tag: 'HDR' },
     { qn: 120, label: '4K 超清', tag: '4K' },
     { qn: 116, label: '1080P60', tag: '60帧' },
@@ -189,13 +189,21 @@ export async function refreshQualityPills(bvid) {
         // 收集用户权限允许的质量 ID
         const acceptQuality = new Set((data.accept_quality || []).map(q => q));
 
-        // 查找最高可用质量作为默认值
-        let bestAvailable = 80; // 回退默认值
+        // 查找最高可用质量（兜底：用户默认画质不可用/无权限时退回最高可用档）
+        let bestAvailable = 80;
         for (const q of _ALL_QUALITY_OPTIONS) {
             if (availableQualities.has(q.qn) && acceptQuality.has(q.qn) && q.qn > bestAvailable) {
                 bestAvailable = q.qn;
             }
         }
+
+        // 默认选中：服务端 default_quality（= 设置 query.video_quality，默认 80/1080P）优先，
+        // 取不超过它的最高可用档；全部不可用时退回最高可用档（保持原行为）。
+        const defaultQn = Number(data.default_quality) || 80;
+        let selected = [..._ALL_QUALITY_OPTIONS]
+            .sort((a, b) => b.qn - a.qn)
+            .find(q => q.qn <= defaultQn && availableQualities.has(q.qn) && acceptQuality.has(q.qn))?.qn;
+        if (!selected) selected = bestAvailable;
 
         const pills = container.querySelectorAll('.quality-pill');
         pills.forEach(pill => {
@@ -209,9 +217,9 @@ export async function refreshQualityPills(bvid) {
             }
         });
 
-        // 设置默认选中最高可用质量
-        _state.selectedQuality = bestAvailable;
-        const defaultPill = container.querySelector(`.quality-pill[data-qn="${bestAvailable}"]`);
+        // 设置默认选中（服务端默认画质优先，其次最高可用）
+        _state.selectedQuality = selected;
+        const defaultPill = container.querySelector(`.quality-pill[data-qn="${selected}"]`);
         if (defaultPill) {
             container.querySelectorAll('.quality-pill').forEach(p => p.classList.remove('active'));
             defaultPill.classList.add('active');

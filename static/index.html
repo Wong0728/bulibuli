@@ -246,7 +246,14 @@
                     <span id="last-pull-time" class="last-pull-time" title="上次从后端拉取看板数据的时间">--</span>
                 </div>
                 <div class="board-top-bar-right">
+                    <span id="download-queue-summary" class="queue-summary" title="队列摘要：各状态任务数"></span>
                     <span id="aria2-status-dot-history" class="aria2-dot disconnected" title="正在检测 Aria2 状态..."></span>
+                    <button class="btn btn-sm btn-ghost" id="download-pause-all-btn" data-action="pause-all-downloads" title="暂停全部下载任务">
+                        <i class="fa-solid fa-pause"></i> 全部暂停
+                    </button>
+                    <button class="btn btn-sm btn-ghost" id="download-resume-all-btn" data-action="resume-all-downloads" title="恢复全部暂停任务">
+                        <i class="fa-solid fa-play"></i> 全部恢复
+                    </button>
                     <button class="btn btn-sm btn-ghost" id="board-refresh-btn" title="手动刷新看板数据（5 秒内防抖）">
                         <i class="fa-solid fa-sync-alt"></i> 刷新
                     </button>

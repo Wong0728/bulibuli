@@ -119,8 +119,8 @@ impl LogBuffer {
                 summary.push('\n');
             }
         }
-        let _ = log_dir;
-        summary.push_str("完整日志目录: data/logs\n");
+        // 日志目录以实际 data_dir 为准（BILI__DATA_DIR 可重定向），不再硬编码 data/logs。
+        summary.push_str(&format!("完整日志目录: {}\n", log_dir.display()));
         summary
     }
 

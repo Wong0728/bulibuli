@@ -39,9 +39,6 @@
                             <button type="button" class="btn btn-primary" data-action="save-manual-cookie">
                                 <i class="fa-solid fa-save"></i> 保存并登录
                             </button>
-                            <button type="button" class="btn btn-ghost" data-action="test-download">
-                                <i class="fa-solid fa-bug"></i> 测试下载
-                            </button>
                         </div>
                     </div>
                 </div>
@@ -95,10 +92,10 @@
                             <option value="116">1080P60 帧</option>
                             <option value="120">4K</option>
                             <option value="125">HDR</option>
-                            <option value="126">杜比视界</option>
-                            <option value="127">8K</option>
+                            <option value="126">杜比视界（仅在线观看可用，下载暂不支持）</option>
+                            <option value="127">8K（仅在线观看可用，下载暂不支持）</option>
                         </select>
-                        <div class="form-note">需要相应会员权限</div>
+                        <div class="form-note">需要相应会员权限；126/127 下载链路暂不支持（后端下载白名单最高 125），选择后将按可用画质降级</div>
                     </div>
                     <div class="form-group">
                         <label for="setting-video-format">视频格式 (fnval)</label>
@@ -536,12 +533,7 @@
                     <div class="form-group">
                         <label for="setting-history-limit">历史记录上限</label>
                         <input type="number" id="setting-history-limit" class="form-control" min="100" max="5000">
-                        <div class="form-note">范围: 100-5000，建议 1000</div>
-                    </div>
-                    <div class="form-group">
-                        <label for="setting-uid-history-limit">UID历史上限</label>
-                        <input type="number" id="setting-uid-history-limit" class="form-control" min="5" max="50">
-                        <div class="form-note">范围: 5-50，建议 10</div>
+                        <div class="form-note">范围: 100-5000，建议 1000；历史清理按此设置生效</div>
                     </div>
                     <div class="form-group">
                         <label for="setting-log-limit">日志上限</label>
@@ -729,6 +721,69 @@
                         <label class="form-label" for="setting-live-file-template">录制文件名模板</label>
                         <input type="text" id="setting-live-file-template" class="form-control" value="{room_id}_{title}_{date}">
                         <div class="form-note">可用占位符：{room_id} 房间号、{title} 直播标题、{date} 日期、{time} 时间；系统会自动追加时间戳与短后缀避免重名</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 更新设置。 -->
+        <div class="section-collapsible" data-section="update">
+            <div class="section-header">
+                <h2><i class="fa-solid fa-cloud-arrow-down"></i> 更新</h2>
+            </div>
+            <div class="section-body">
+                <div class="settings-grid">
+                    <div class="form-group form-full">
+                        <span class="form-label">当前版本</span>
+                        <div class="path-preview-box">
+                            <code id="update-current-version">正在获取...</code>
+                        </div>
+                    </div>
+                    <div class="form-group form-full">
+                        <span class="form-label">最新版本</span>
+                        <div class="path-preview-box">
+                            <code id="update-latest-version">尚未检查</code>
+                        </div>
+                    </div>
+                    <div class="form-group form-full">
+                        <label for="setting-update-policy">更新策略</label>
+                        <select id="setting-update-policy" class="form-control">
+                            <option value="manual">仅提示，不自动更新（推荐）</option>
+                            <option value="auto">检测到新版本自动下载暂存</option>
+                            <option value="off">关闭检测</option>
+                        </select>
+                        <div class="form-note">自动更新只替换程序文件、不触碰 data/ 目录；更新完成后需重启程序生效。</div>
+                    </div>
+                    <div class="form-group form-full">
+                        <div class="btn-group">
+                            <button type="button" class="btn" data-action="check-update">
+                                <i class="fa-solid fa-magnifying-glass"></i> 立即检查更新
+                            </button>
+                            <button type="button" class="btn btn-primary" data-action="apply-update" hidden>
+                                <i class="fa-solid fa-download"></i> 立即更新
+                            </button>
+                            <span id="update-check-result" class="test-result-hint"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 全局日志。 -->
+        <div class="section-collapsible" data-section="logs">
+            <div class="section-header">
+                <h2><i class="fa-solid fa-terminal"></i> 全局日志</h2>
+            </div>
+            <div class="section-body">
+                <div class="form-group form-full">
+                    <div class="btn-group">
+                        <button type="button" class="btn btn-sm" data-action="refresh-global-logs">
+                            <i class="fa-solid fa-rotate"></i> 刷新
+                        </button>
+                        <span class="form-note" id="global-logs-hint">最近 100 条监控日志（跨博主），每 15 秒自动刷新</span>
+                    </div>
+                    <div id="global-logs-list" class="blogger-logs-panel">
+                        <div class="empty-state empty-state-padded"><i class="fa-solid fa-inbox"></i><p>暂无日志</p></div>
                     </div>
                 </div>
             </div>

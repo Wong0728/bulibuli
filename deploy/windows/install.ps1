@@ -316,6 +316,9 @@ function Install-Package([object]$Package) {
     if ((Test-Path -LiteralPath $destination) -and (Get-ChildItem -LiteralPath $destination -Force | Select-Object -First 1) -and -not $Force) {
         throw "安装目录已存在；升级或覆盖请显式指定 -Force：$destination"
     }
+    if ($Force -and (Test-Path -LiteralPath $destination) -and (Get-ChildItem -LiteralPath $destination -Force | Select-Object -First 1)) {
+        Write-Warn "升级模式：已保留 data/ 目录，旧版本独有文件可能残留；如遇异常建议手动删除旧目录后全新安装"
+    }
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
     foreach ($item in Get-ChildItem -LiteralPath $source -Force) {
         if ($item.Name -eq "data") { continue }
