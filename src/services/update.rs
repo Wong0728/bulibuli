@@ -529,11 +529,6 @@ fn spawn_windows_deferred_swap(paths: &AppPaths, staged: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
-fn spawn_windows_deferred_swap(_paths: &AppPaths, _staged: &Path) -> Result<()> {
-    unreachable!("非 Windows 平台不会走到延迟替换分支")
-}
-
 /// 启动后按策略执行一次更新检查（off 不发任何请求）。
 /// - manual：仅记录 latest_version（设置页显示"有新版本"）。
 /// - auto：检测到新版本时自动下载校验暂存（不自动重启、不替换）。
