@@ -60,7 +60,8 @@ pub struct StagedMarker {
 pub enum ApplyOutcome {
     /// 已完成替换（重启后生效）。
     Applied,
-    /// 程序运行中无法替换，已暂存，退出/下次启动后完成。
+    /// 程序运行中无法替换，已暂存，退出/下次启动后完成（仅 Windows 需要）。
+    #[cfg(windows)]
     Staged,
 }
 
@@ -423,6 +424,7 @@ fn replace_package_files(app_root: &Path, staged: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn write_staged_marker(paths: &AppPaths, staged: &Path) -> Result<()> {
     let version = staged
         .file_name()
@@ -461,6 +463,7 @@ pub fn startup_apply_staged(paths: &AppPaths) -> Result<()> {
     }
     match apply_staged(paths, &staged) {
         Ok(ApplyOutcome::Applied) => Ok(()),
+        #[cfg(windows)]
         Ok(ApplyOutcome::Staged) => spawn_windows_deferred_swap(paths, &staged),
         Err(error) => Err(error),
     }
