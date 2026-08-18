@@ -14,12 +14,29 @@ impl MigrationTrait for Migration {
         let conn = manager.get_connection();
 
         // --- 1. 新增列（SQLite 的 ALTER TABLE ADD COLUMN 每次仅能加一列，且不能带非常量默认值） ---
-        conn.execute_unprepared("ALTER TABLE download_tasks ADD COLUMN cid BIGINT")
-            .await?;
-        conn.execute_unprepared("ALTER TABLE download_tasks ADD COLUMN page INTEGER")
-            .await?;
-        conn.execute_unprepared("ALTER TABLE download_tasks ADD COLUMN part_title TEXT")
-            .await?;
+        // 存在性守卫（对齐 003/006/007/011/013）：旧库若已含该列（部分升级/手工补丁）直接跳过，
+        // 否则 ALTER 会报 duplicate column name 导致整个迁移失败、应用无法启动。
+        for (name, sql) in [
+            ("cid", "ALTER TABLE download_tasks ADD COLUMN cid BIGINT"),
+            ("page", "ALTER TABLE download_tasks ADD COLUMN page INTEGER"),
+            (
+                "part_title",
+                "ALTER TABLE download_tasks ADD COLUMN part_title TEXT",
+            ),
+        ] {
+            let columns = conn
+                .query_all_raw(sea_orm::Statement::from_string(
+                    conn.get_database_backend(),
+                    "PRAGMA table_info(download_tasks)".to_string(),
+                ))
+                .await?;
+            if !columns
+                .iter()
+                .any(|row| row.try_get::<String>("", "name").unwrap_or_default() == name)
+            {
+                conn.execute_unprepared(sql).await?;
+            }
+        }
 
         // --- 2. 去重键升级：先删旧唯一索引，再建 COALESCE 表达式唯一索引 ---
         conn.execute_unprepared("DROP INDEX IF EXISTS uix_bvid_type")

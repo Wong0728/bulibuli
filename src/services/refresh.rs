@@ -201,7 +201,7 @@ impl RefreshService {
     }
 
     /// 手动触发单个视频刷新（POST /api/refresh?kind=video 用）。
-    pub async fn trigger_video(&self, bvid: &str) -> Result<()> {
+    pub async fn trigger_video(&self, bvid: &str) -> crate::error::AppResult<()> {
         let cookies = read_cookies(&self.settings_service).await;
         refresh_single_video(&self.db, &self.bili_api, bvid, &cookies).await
     }
@@ -464,21 +464,30 @@ async fn refresh_blogger_profile(
 }
 
 /// 手动刷新单个视频：写回 view/state/view_refreshed_at。
+/// history 查不到记录时返回 NotFound（审计 B6：此前静默返回成功，API 假成功）。
 pub async fn refresh_single_video(
     db: &DatabaseConnection,
     bili_api: &BiliApi,
     bvid: &str,
     cookies: &str,
-) -> Result<()> {
+) -> crate::error::AppResult<()> {
+    use crate::error::AppError;
     let h = history::Entity::find()
         .filter(history::Column::Bvid.eq(bvid))
         .one(db)
-        .await?;
+        .await
+        .map_err(|error| AppError::Internal(format!("查询视频记录失败: {error}")))?;
     let Some(h) = h else {
-        return Ok(());
+        return Err(AppError::NotFound("未找到该视频的下载记录".to_string()));
     };
-    let info = bili_api.get_video_info(bvid, cookies).await?;
-    map_video_info(&h, &info).update(db).await?;
+    let info = bili_api
+        .get_video_info(bvid, cookies)
+        .await
+        .map_err(|error| AppError::Internal(format!("获取视频信息失败: {error}")))?;
+    map_video_info(&h, &info)
+        .update(db)
+        .await
+        .map_err(|error| AppError::Internal(format!("更新视频记录失败: {error}")))?;
     Ok(())
 }
 

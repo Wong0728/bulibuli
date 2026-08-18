@@ -37,6 +37,7 @@ pub struct RuntimeSettings {
     pub burn: BurnSettings,
     pub subtitle: SubtitleSettings,
     pub live: LiveRecordingSettings,
+    pub update: UpdateSettings,
 }
 
 impl Default for RuntimeSettings {
@@ -61,6 +62,7 @@ impl Default for RuntimeSettings {
             burn: BurnSettings::default(),
             subtitle: SubtitleSettings::default(),
             live: LiveRecordingSettings::default(),
+            update: UpdateSettings::default(),
         }
     }
 }
@@ -153,10 +155,6 @@ impl RuntimeSettings {
         }
         if !(16..=127).contains(&self.query.min_video_quality)
             || !matches!(
-                self.query.prefer_audio_quality.as_str(),
-                "best" | "high" | "standard"
-            )
-            || !matches!(
                 self.query.audio_quality_preference.as_str(),
                 "m4a" | "dolby" | "flac"
             )
@@ -236,6 +234,11 @@ impl RuntimeSettings {
         {
             return Err(AppError::BadRequest("直播录制设置超出允许范围".to_string()));
         }
+        if !matches!(self.update.policy.as_str(), "auto" | "manual" | "off") {
+            return Err(AppError::BadRequest(
+                "更新策略必须是 auto、manual 或 off".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -256,12 +259,11 @@ macro_rules! default_struct {
 default_struct!(QuerySettings {
     manual_query_limit: i32 = 10,
     auto_query_limit: i32 = 3,
-    video_quality: i32 = 112,
+    video_quality: i32 = 80,
     video_format: i32 = 4048,
     skip_charge_videos: bool = true,
     min_video_quality: i32 = 64,
     prefer_codecs: Vec<String> = vec!["av1".to_string(), "hevc".to_string(), "avc".to_string()],
-    prefer_audio_quality: String = "best".to_string(),
     allow_quality_fallback: bool = true,
     // 音轨偏好：m4a（默认最高码率）/ dolby（杜比全景声优先）/ flac（Hi-Res 无损优先）。
     // 命中时 ext 切换为 ec3/flac，合并容器自动切换为 mkv；未命中回退 m4a+mp4（行为不变）。
@@ -270,7 +272,6 @@ default_struct!(QuerySettings {
 default_struct!(DanmakuCommentSettings {
     auto_download_danmaku: bool = true,
     auto_download_comments: bool = true,
-    danmaku_download_all: bool = true,
     comments_main_limit: i32 = 30,
     comments_reply_mode: String = "hot3".to_string(),
     comments_filter_regex: String = String::new(),
@@ -303,7 +304,6 @@ default_struct!(Aria2BasicSettings {
 });
 default_struct!(StorageSettings {
     history_limit: i64 = 1000,
-    uid_history_limit: i64 = 10,
     log_limit: i64 = 100,
     per_blogger_retain_default: i32 = 0,
 });
@@ -380,6 +380,15 @@ default_struct!(LiveRecordingSettings {
     max_duration_hours: u64 = 12,
     // 录制文件名模板，可用占位符：{room_id} {title} {date} {time}
     file_name_template: String = "{room_id}_{title}_{date}".to_string(),
+});
+
+default_struct!(UpdateSettings {
+    // 更新策略：auto 检测到新版本自动下载并暂存（不自动重启）/ manual 仅提示（默认）/ off 关闭检测
+    policy: String = "manual".to_string(),
+    // 上次检查时间（unix 秒），供设置页展示
+    last_checked_at: Option<i64> = None,
+    // 缓存的最新版本号（如 v2.0.0-alpha.9）；仅提示用途
+    latest_version: Option<String> = None,
 });
 
 impl BurnSettings {

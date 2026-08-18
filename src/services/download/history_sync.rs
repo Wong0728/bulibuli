@@ -216,7 +216,14 @@ impl DownloadManager {
     }
 
     async fn cleanup_history(&self) -> Result<()> {
-        let limit = self.config.history_limit;
+        // 设置页 storage.history_limit 优先，环境变量 config.history_limit 兜底
+        //（审计 B11：此前设置页改了不生效，只有环境变量能改）。
+        let settings_limit = self.settings_service.current().storage.history_limit;
+        let limit = if settings_limit > 0 {
+            settings_limit
+        } else {
+            self.config.history_limit
+        };
         let count = history::Entity::find().count(&self.db).await?;
         if count > (limit as u64 * 11 / 10) {
             let to_delete: Vec<i32> = history::Entity::find()

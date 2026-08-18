@@ -200,6 +200,7 @@ export function renderManualQueryResults(videos, reset) {
             created: v.created,
             play: v.play,
             duration: v.duration,
+            default_quality: Number(v.default_quality) || 80,
             status: 'not_downloaded',
             pubdate: v.created ? new Date(v.created * 1000).toLocaleDateString('zh-CN') : (v.pubdate || '--'),
             view: (v.play || 0).toLocaleString()
@@ -363,6 +364,7 @@ async function renderResolvedNormalVideo(bvid, resultDiv) {
             created: data.pub_timestamp,
             play: data.stat?.view || 0,
             duration: data.duration,
+            default_quality: Number(data.default_quality) || 80,
             status: 'not_downloaded',
             pubdate: data.pub_timestamp ? new Date(data.pub_timestamp * 1000).toLocaleDateString('zh-CN') : '--',
             view: (data.stat?.view || 0).toLocaleString()

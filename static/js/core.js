@@ -34,10 +34,10 @@ import {
 } from './modal.js';
 import { saveBloggers, selectBlogger, renderBloggerLogs, startLogRefresh, cleanupBloggerNowByUid } from './blogger.js';
 import { removeKnownBlogger, clearKnownBloggers, closeBloggerNoticeModal, acknowledgeBloggerChange, acknowledgeAllBloggerChanges } from './blogger-search.js';
-import { updateDownloadLists, patchSingleCardProgress, pauseDownload, resumeDownload } from './download-queue.js';
+import { updateDownloadLists, patchSingleCardProgress, pauseDownload, resumeDownload, adjustDownloadPriority, pauseAllDownloads, resumeAllDownloads } from './download-queue.js';
 import { switchBoardTab, loadHistoryBoard, updateDownloadProgressInList } from './history.js';
 import { startProgressUpdates, showToast, confirmDialog, closeConfirmDialog } from './download-status.js';
-import { addTimePoint, removeTimePoint, browseFFmpegPath, testFFmpeg, saveSettings, resetSettings, loadSettings, testDownload, restartAria2 } from './settings.js';
+import { addTimePoint, removeTimePoint, browseFFmpegPath, testFFmpeg, saveSettings, resetSettings, loadSettings, restartAria2, checkUpdate, applyUpdate, refreshGlobalLogs } from './settings.js';
 import { openVideoDrawer, closeVideoDrawer, openVideoDrawerFromManual } from './drawer.js';
 import { burnMedia, deleteVideoRecord, refreshVideoInfo, loadBvidLogs, selectQualityPill, startVideoDownload, retryVideoDownload, startVideoDownloadFromManual, saveManualToLocal, toggleAllPages, openVideoPage, downloadCover, startSeasonDownload, toggleAllEpisodes } from './media-actions.js';
 import { loadDrawerComments, loadDrawerDanmaku } from './drawer-sidecars.js';
@@ -92,7 +92,6 @@ const _declarativeActions = {
     'logout-account': () => logoutAccount(),
     'toggle-manual-cookie': () => toggleManualCookie(),
     'save-manual-cookie': () => saveManualCookie(),
-    'test-download': () => testDownload(),
     'restart-aria2': el => restartAria2(el),
     'add-time-point': () => addTimePoint(),
     'browse-ffmpeg-path': () => browseFFmpegPath(),
@@ -100,6 +99,9 @@ const _declarativeActions = {
     'save-settings': el => saveSettings(el),
     'reset-settings': () => resetSettings(),
     'load-settings': () => loadSettings(),
+    'check-update': () => checkUpdate(),
+    'apply-update': () => applyUpdate(),
+    'refresh-global-logs': () => refreshGlobalLogs(),
     'close-blogger-modal': () => closeBloggerModal(),
     'confirm-blogger-modal': () => confirmBloggerModal(),
     'close-add-blogger-modal': () => closeAddBloggerModal(),
@@ -136,6 +138,10 @@ const _declarativeActions = {
     'start-video': el => startVideoDownload(el.dataset.bvid),
     'pause-download': el => pauseDownload(Number(el.dataset.taskId)),
     'resume-download': el => resumeDownload(Number(el.dataset.taskId)),
+    'priority-down': el => adjustDownloadPriority(el.dataset.bvid, -10, Number(el.dataset.priority)),
+    'priority-up': el => adjustDownloadPriority(el.dataset.bvid, 10, Number(el.dataset.priority)),
+    'pause-all-downloads': () => pauseAllDownloads(),
+    'resume-all-downloads': () => resumeAllDownloads(),
     'delete-video': el => deleteVideoRecord(el.dataset.bvid, el.dataset.historyId ? Number(el.dataset.historyId) : undefined),
     'load-drawer-comments': el => loadDrawerComments(el.dataset.bvid, el.dataset.path, el.dataset.historyId ? Number(el.dataset.historyId) : undefined),
     'load-drawer-danmaku': el => loadDrawerDanmaku(el.dataset.bvid, el.dataset.path, el.dataset.historyId ? Number(el.dataset.historyId) : undefined),

@@ -234,15 +234,16 @@ export function renderDrawerContentForManualQuery(video, bvid) {
     const rawPic = video.poster || video.pic || '';
     const thumbUrl = rawPic ? `/api/video/proxy-image?url=${encodeURIComponent(rawPic)}` : '';
 
+    // 默认画质取服务端设置（video.default_quality），未返回时兜底 1080P。
+    const defaultQn = Number(video.default_quality) || 80;
     const qualityPills = _ALL_QUALITY_OPTIONS.map((q, idx) => `
-        <button class="quality-pill ${q.qn === 80 ? 'active' : ''}" data-action="select-quality" data-qn="${q.qn}">
+        <button class="quality-pill ${q.qn === defaultQn ? 'active' : ''}" data-action="select-quality" data-qn="${q.qn}">
             ${q.label}
             ${q.tag ? `<span class="quality-pill-tag">${q.tag}</span>` : ''}
         </button>
     `).join('');
 
-    // 设置默认质量为1080P
-    _state.selectedQuality = 80;
+    _state.selectedQuality = defaultQn;
 
     bodyEl.innerHTML = `
         <div class="drawer-preview">
@@ -405,10 +406,12 @@ export function renderSeasonResolveResult(result, mediaType) {
         currentEpId,
     };
 
-    // 画质选项：复用抽屉的静态画质列表，默认 1080P
-    _state.selectedQuality = 80;
+    // 画质选项：复用抽屉的静态画质列表；默认画质取服务端设置（resolve 响应附带的
+    // default_quality，= 设置 query.video_quality），未返回时兜底 1080P。
+    const defaultQn = Number(result.default_quality) || 80;
+    _state.selectedQuality = defaultQn;
     const qualityPills = _ALL_QUALITY_OPTIONS.map(q => `
-        <button class="quality-pill ${q.qn === 80 ? 'active' : ''}" data-action="select-quality" data-qn="${q.qn}">
+        <button class="quality-pill ${q.qn === defaultQn ? 'active' : ''}" data-action="select-quality" data-qn="${q.qn}">
             ${q.label}
             ${q.tag ? `<span class="quality-pill-tag">${q.tag}</span>` : ''}
         </button>
@@ -569,7 +572,7 @@ export async function startSeasonDownload(mediaType, seasonTitle) {
 }
 
 // 选择画质按钮
-_state.selectedQuality = 80; // 默认 1080P
+_state.selectedQuality = 80; // 初始兜底 1080P；实际默认由服务端 default_quality 决定
 export function selectQualityPill(el, qn) {
     // 移除所有 active
     const pills = el.parentElement.querySelectorAll('.quality-pill');

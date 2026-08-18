@@ -46,6 +46,14 @@ fn install_crypto_provider() -> anyhow::Result<()> {
 
 async fn run(args: Vec<String>) -> anyhow::Result<()> {
     let (config, paths) = load_config()?;
+    // 上次运行暂存的更新在启动早期完成替换（只换程序文件、不碰 data/）。
+    // tracing 尚未初始化，错误用 eprintln 保证可见但不阻塞启动。
+    if let Err(error) = services::update::startup_apply_staged(&paths) {
+        eprintln!(
+            "{}",
+            app::term_style::error(&format!("应用暂存更新失败: {error:#}"))
+        );
+    }
     if args.first().is_some_and(|value| value == "ctl") {
         let response = app::control::run_client(&paths.data_dir, &args[1..]).await?;
         println!("{response}");
@@ -79,6 +87,16 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     app::onboarding::sync_bili_uid(&state, &state.infra.paths).await;
 
     app::control::start_server(state.clone());
+
+    // 更新策略启动检查：manual 仅记录最新版本，auto 额外下载暂存，off 不发任何请求。
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(error) = services::update::startup_check(&state).await {
+                tracing::warn!(%error, "启动更新检查失败");
+            }
+        });
+    }
 
     // 启动 Setup 独立端口服务（始终 localhost，供首次设置向导和重新配置使用）
     // 必须先于 onboarding 启动，这样 onboarding 打开浏览器时服务器已就绪。
@@ -226,7 +244,7 @@ fn handle_early_cli(args: &[String]) -> Option<anyhow::Result<()>> {
         }
         Some("--help") | Some("-h") => {
             println!(
-                "补哩补哩 bulibuli {}\n\n用法:\n  bulibuli                 启动服务\n  bulibuli --version       输出版本并退出\n  bulibuli --help          显示帮助并退出\n  bulibuli ctl <command>   执行高级控制命令\n\n常用控制命令:\n  bulibuli ctl sys status\n  bulibuli ctl sys ffmpeg-test\n  bulibuli ctl sys aria2-restart\n  bulibuli ctl dl status",
+                "补哩补哩 bulibuli {}\n\n用法:\n  bulibuli                 启动服务\n  bulibuli --version       输出版本并退出\n  bulibuli --help          显示帮助并退出\n  bulibuli ctl <command>   执行高级控制命令\n\n常用控制命令（需服务已运行）:\n  bulibuli ctl sys status\n  bulibuli ctl sys ffmpeg-test\n  bulibuli ctl sys aria2-restart\n  bulibuli ctl dl status\n\n提示：ctl 命令默认仅放行 status/help/quit/ai，先执行 `bulibuli ctl ai on` 启用 AI Skill 模式后，AI 可执行与人工相同的全部命令（含 mode/access/geo/trust/pair）。",
                 env!("CARGO_PKG_VERSION")
             );
             Some(Ok(()))

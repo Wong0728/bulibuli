@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.0-alpha.9
+
+- 数据安全：Linux 安装器重装/升级保留 `data/`（与 Windows/Termux 对齐），运行中先提示停止服务再升级；root 下 `run` 与 `service` 统一数据目录 `/var/lib/bulibuli`；三平台重跑脚本均有明确的升级/最新/需 `-Force` 提示。
+- 行为修复：网络恢复重试失败任务正确携带 `since`（不再静默重试全部历史失败任务）；删除 `ai assist` 短时授权层——AI 模式开启后 AI 与人工权限一致（README/`--help`/设置向导已写明）；默认画质统一为 1080P（80），用户修改设置后抽屉与链接下载均按设置值；抽屉移除 8K/杜比视界下载项（后端白名单最高 125），设置页相应加注。
+- 修复：`sys logs` 与 TUI 退出摘要使用实际日志目录；`refresh video` 查不到记录返回 404；迁移 002 补列存在性守卫；`/settings.html` 直链 302 回主界面（片段改走 `/_fragments/settings.html`）；`sys ffmpeg-test` 与设置页测试一致；网页退出登录补调设备会话注销；`storage.history_limit` 接入历史清理（设置值优先、环境变量兜底），移除 `uid_history_limit`/`prefer_audio_quality`/`danmaku_download_all` 死配置项；Operator 设置页只读并提示仅 Owner 可修改；博主载入配置按 UID 取真实自动任务配置；`blg add` 重复返回友好 Conflict；`audit list` 非法 `--source/--since` 报错；ctl 移除半实现的 `dl burn` 入口。
+- 功能上线：下载优先级 −/＋ 控件（Web 与 `ctl dl priority` 共用后端）、下载管理队列摘要（各状态任务数/等待重试）、设置页全局日志（跨博主、15 秒轮询）、全部暂停/全部恢复按钮；删除设置页"测试下载"调试入口。
+- 新功能：应用内更新机制（设置页策略：仅提示/自动下载暂存/关闭 + 立即检查 + 立即更新），只替换程序文件、不触碰 `data/`；Windows 运行中更新在退出程序后自动完成替换。
+- 云端与 CI：Hero 页补 Windows 一键安装命令；Quality gates 四个 job 全部加超时上限防止卡死；CHANGELOG 补齐 alpha.6 段并标注 alpha.5/6/7 为补发。
+
 ## v2.0.0-alpha.8
 
 - 完成全量代码审查整改（37 项）：修复直播录制会话条目泄漏、活跃 WebSocket 阻塞优雅关机、多 P 音频重试取错分 P、断点续传恢复失效、aria2 任务进度不更新、弹幕采集鉴权重连无退避等缺陷。
@@ -8,11 +17,19 @@
 
 ## v2.0.0-alpha.7
 
+> ⚠️ 本版本于 2026-08-17 补发（发布时间晚于 alpha.8，内容与 alpha.8 相同），请优先使用 alpha.8。
+
 - Termux 默认始终使用 GitHub Actions 云端预编译包；只有显式设置 `BULIBULI_SOURCE_BUILD=1` 才会从源码构建。
 - 修正 Termux 远程安装后的后台启动路径，并同步 README、Release 说明和 Hero 页面。
 - 修复 Hero 窄屏横向溢出，保证手机浏览器可正常浏览和操作。
 
+## v2.0.0-alpha.6
+
+> ⚠️ 本版本于 2026-08-17 补发。Termux 预编译包发布流程调整，与 alpha.5 一并完成；变更内容与 alpha.8 相同，请优先使用 alpha.8。
+
 ## v2.0.0-alpha.5
+
+> ⚠️ 本版本于 2026-08-17 补发（发布时间晚于 alpha.8，内容与 alpha.8 相同），请优先使用 alpha.8。
 
 - Termux Android arm64 改为 GitHub Actions 云端编译并发布预编译包；安装器默认下载、校验并复用该包，不再要求本机编译 Rust。
 - Windows 安装器继续独立于便携包，并优先发现用户放在当前目录、源码 checkout 或缓存目录中的已校验归档。

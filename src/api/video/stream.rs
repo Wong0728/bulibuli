@@ -54,6 +54,7 @@ pub(super) async fn resolve_video(
                 "season_title": season.title(),
                 "cover": season.cover,
                 "current_ep_id": ep_id,
+                "default_quality": state.infra.settings_service.current().query.video_quality,
                 "episodes": season.episodes.iter().map(|e| json!({
                     "ep_id": e.ep_id,
                     "cid": e.cid,
@@ -92,6 +93,7 @@ pub(super) async fn resolve_video(
                 "media_type": "pgc",
                 "season_title": season.title(),
                 "cover": season.cover,
+                "default_quality": state.infra.settings_service.current().query.video_quality,
                 "episodes": season.episodes.iter().map(|e| json!({
                     "ep_id": e.ep_id,
                     "cid": e.cid,
@@ -145,6 +147,7 @@ pub(super) async fn resolve_video(
                 "media_type": "cheese",
                 "season_title": season.title,
                 "cover": season.cover,
+                "default_quality": state.infra.settings_service.current().query.video_quality,
                 "episodes": episodes,
             }))))
         }
@@ -312,6 +315,12 @@ pub(super) async fn get_video_urls(
             "fallback_reason".to_string(),
             fallback_reason.map_or(Value::Null, Value::String),
         );
+        // 抽屉默认画质：来自设置 query.video_quality（默认 80/1080P），
+        // 前端以 `default_quality ?? 80` 兜底，保证"用户改了设置就按用户设置"。
+        object.insert(
+            "default_quality".to_string(),
+            serde_json::json!(settings.query.video_quality),
+        );
     }
     Ok(Json(ApiResponse::success(payload)))
 }
@@ -378,6 +387,7 @@ pub(super) async fn get_video_info(
         "state": info.state,
         "rights": info.rights,
         "pages": info.pages,
+        "default_quality": state.infra.settings_service.current().query.video_quality,
     });
 
     Ok(Json(ApiResponse::success(result)))

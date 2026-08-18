@@ -13,9 +13,9 @@ bulibuli ctl mode lan
 bulibuli ctl mode proxy downloads.example.com
 ```
 
-模式切换后重启服务。`proxy` 固定监听 `127.0.0.1:5000`，端口被占用时直接启动失败。复制 `deploy/caddy/Caddyfile.example`，替换域名并让 Caddy 加载配置。示例会覆盖 `X-Forwarded-For`、代理 Socket.IO，并发送 HSTS、CSP、`nosniff`、`DENY` 和 `no-referrer`；默认不记录包含完整查询参数的访问日志。
+模式切换后重启服务。`proxy` 默认从配置端口起连续尝试绑定，端口被占用会回退到后续端口；请以启动日志或 `data/actual_port.txt` 中的实际端口更新反代配置。复制 `deploy/caddy/Caddyfile.example`，替换域名并让 Caddy 加载配置。示例会覆盖 `X-Forwarded-For`、代理 Socket.IO，并发送 HSTS、CSP、`nosniff`、`DENY` 和 `no-referrer`；默认不记录包含完整查询参数的访问日志。
 
-常用本机控制：
+常用本机控制（需服务已运行；先执行 `bulibuli ctl ai on` 启用 AI Skill 模式后，以下命令全部可用）：
 
 ```text
 bulibuli ctl sessions

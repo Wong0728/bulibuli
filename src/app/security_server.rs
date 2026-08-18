@@ -181,8 +181,11 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
             ),
         )
         .route("/index.html", get(index))
+        // /settings.html 是设置页的 HTML 片段（无 <html>/<head>，被 settings.js fetch 拉取），
+        // 直链访问得到裸文本；对外 302 回主界面，片段加载改走内部 /_fragments/settings.html。
+        .route("/settings.html", get(redirect_to_main))
         .route_service(
-            "/settings.html",
+            "/_fragments/settings.html",
             ServeFile::new(static_root.join("settings.html")),
         )
         .nest_service("/css", ServeDir::new(static_root.join("css")))
@@ -198,6 +201,11 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
 struct StaticPages {
     index: Vec<u8>,
     pair: Vec<u8>,
+}
+
+/// `/settings.html` 直链访问重定向回主界面（主界面按会话状态展示 index 或配对页）。
+async fn redirect_to_main() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/")
 }
 
 async fn trace_request(request: Request<Body>, next: Next) -> Response {
@@ -279,6 +287,7 @@ async fn enforce_request_security(
             | "/pair.css"
             | "/pair.js"
             | "/pair-font.woff2"
+            | "/settings.html"
             | "/api/health"
             | "/api/ready"
             | "/api/auth/state"
@@ -352,7 +361,9 @@ fn authorize_session(request: &Request<Body>, session: &SessionAuth) -> Result<(
     // 在拆分出独立业务接口前，继续保持 Owner-only。
     let owner_only = path.starts_with("/api/cookies/")
         || path.starts_with("/api/settings")
-        || path.starts_with("/api/auth/invitations");
+        || path.starts_with("/api/auth/invitations")
+        || path.starts_with("/api/update/check")
+        || path.starts_with("/api/update/apply");
     if owner_only && !session.role.is_owner() {
         return Err(Box::new(api_error(
             StatusCode::FORBIDDEN,
@@ -593,7 +604,7 @@ fn is_static_asset(path: &str) -> bool {
             | "/pair.js"
             | "/pair-font.woff2"
             | "/index.html"
-            | "/settings.html"
+            | "/_fragments/settings.html"
     ) || path.starts_with("/css/")
         || path.starts_with("/js/")
 }

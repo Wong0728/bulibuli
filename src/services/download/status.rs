@@ -151,6 +151,7 @@ impl DownloadManager {
                     "status": status,
                     "terminal": status.is_terminal(),
                     "task_id": t.id,
+                    "priority": t.priority,
                     "progress_percent": task_info.download.progress_percent,
                     "downloaded_size": task_info.download.downloaded_size,
                     "total_size": task_info.file.total_size,

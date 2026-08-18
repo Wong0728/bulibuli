@@ -9,6 +9,7 @@
 #
 # 用法：
 #   bash install.sh            安装依赖 + 下载预编译包
+#   bash install.sh update     与 install 相同（重跑远程安装命令可升级）
 #   bash install.sh start      后台启动（nohup + wake-lock）
 #   bash install.sh stop       停止后台实例
 #   bash install.sh run        前台运行
@@ -142,6 +143,9 @@ detect_layout() {
         APP_DIR="${SCRIPT_DIR}"
         BIN_PATH="${SCRIPT_DIR}/${BIN_NAME}"
         MODE="release-package"
+        # 已安装目录内的脚本不自动升级（保持数据不变）；版本落后时在 install/update
+        # 动作下给出明确提示，避免"静默不升级"（审计 B13）。
+        [ "${1:-}" = "install" ] || [ "${1:-}" = "update" ] && warn_if_outdated
         return
     fi
 
@@ -330,6 +334,23 @@ installer_path() {
     esac
 }
 
+warn_if_outdated() {
+    [ -f "${APP_DIR}/bulibuli.package.json" ] || return
+    command -v python3 >/dev/null 2>&1 || return
+    local installed_version=""
+    installed_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("app_version", ""))' "${APP_DIR}/bulibuli.package.json" 2>/dev/null || true)"
+    [ -n "${installed_version}" ] || return
+    local latest_version=""
+    latest_version="$(resolve_latest_version 2>/dev/null || true)"
+    [ -n "${latest_version}" ] || return
+    if [ "v${installed_version#v}" != "${latest_version}" ]; then
+        warn "已安装 v${installed_version#v}，最新为 ${latest_version}；本脚本保持不动，升级请重跑远程安装命令："
+        warn "curl -fsSL https://raw.githubusercontent.com/${REPO}/main/deploy/termux/install.sh | bash"
+    else
+        log "已是最新版本 v${installed_version#v}"
+    fi
+}
+
 main() {
     local action="${1:-install}"
     case "${action}" in
@@ -338,7 +359,7 @@ main() {
         unboot) remove_boot; return ;;
     esac
 
-    detect_layout
+    detect_layout "${action}"
     # 依赖安装仅在 install/update 时执行：run/start/boot 不再每次联网
     # 跑 pkg update（Termux:Boot 开机自启场景下会拖慢启动且依赖网络）。
     case "${action}" in
@@ -357,7 +378,7 @@ main() {
             ;;
         start) start_daemon ;;
         boot) setup_boot ;;
-        *) die "未知命令：${action}（可用：install / run / start / stop / boot / unboot / status）" ;;
+        *) die "未知命令：${action}（可用：install / update / run / start / stop / boot / unboot / status）" ;;
     esac
 }
 

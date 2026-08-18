@@ -18,6 +18,7 @@ bulibuli.exe ctl <command> [args...]
 ## 前置条件
 
 1. **AI Skill 模式已启用**：启动向导步骤 2 选启用，或运行 `ai on`。未启用时仅 `status` / `help` / `quit` / `ai` 可用，其他命令返回 `AI_SKILL_DISABLED`。
+启用后 AI 助手拥有与人工相同的全部操作权限（含 `mode` / `access` / `geo` / `trust` / `pair` 等基础配置命令），无需任何临时授权；所有 ctl 命令都要求服务已在运行。
 2. **B 站已登录**：涉及 B 站 API 的命令（download / blogger / cookies / refresh）需先扫码登录，未登录返回 `BILI_NOT_LOGGED_IN`。
 3. **本机权限**：命名管道仅本机进程可连接（SDDL 限制为系统/管理员/所有者）。
 
@@ -77,7 +78,7 @@ bulibuli.exe ctl <command> [args...]
 | `cred qrcode` | 取扫码登录二维码 URL | `cred qrcode` |
 | `cred qrcode-poll <qrcode_key>` | 轮询扫码状态（code=0 成功） | `cred qrcode-poll abc123` |
 | `cred status` | 查看 B 站登录状态 | `cred status` |
-| `pair [close]` | 服务器终端开启 / 关闭配对模式（AI 调用需临时授权） | `pair` |
+| `pair [close]` | 服务器终端开启 / 关闭配对模式 | `pair` |
 | `sessions` | 列出已配对会话 | `sessions` |
 | `revoke <id|all>` | 撤销指定会话或全部会话 | `revoke all` |
 

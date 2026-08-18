@@ -1543,6 +1543,8 @@ input:checked + .slider:before {
 .log-level-success { color: var(--success); }
 .log-level-error { color: var(--error); }
 .log-level-info { color: var(--color-blue); }
+.log-level-warn,
+.log-level-warning { color: var(--warning); }
 .log-level-wait { color: var(--color-purple); }
 .log-level-skip { color: var(--text-muted); }
 
@@ -4991,6 +4993,44 @@ tr:hover {
     background: var(--brand);
     color: var(--color-white);
     border-color: var(--brand);
+}
+
+/* 下载优先级 −/＋ 控件：位于暂停/恢复按钮左侧。 */
+.board-card-priority {
+    position: absolute;
+    right: var(--size-44);
+    bottom: var(--size-8);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-4);
+}
+.board-card-priority .board-card-action-btn {
+    position: static;
+    width: var(--size-24);
+    height: var(--size-24);
+    font-size: 14px;
+    line-height: 1;
+}
+.board-card-priority-value {
+    min-width: var(--size-24);
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* 下载管理顶栏队列摘要条。 */
+.queue-summary {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-right: var(--size-8);
+    white-space: nowrap;
+}
+
+/* 全局日志里的博主 UID 标记。 */
+.log-entry .log-uid {
+    color: var(--brand);
+    margin-right: var(--size-4);
 }
 
 /* sidecar 文件状态图标（视频 / 弹幕 / 字幕）。 */

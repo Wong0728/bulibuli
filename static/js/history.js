@@ -291,6 +291,16 @@ export function renderBoardVideoCard(v) {
         </button>
     ` : '';
 
+    // 优先级 −/＋ 控件：与 pause/resume 同区展示，调整后与 ctl dl priority 共享同一后端。
+    const taskPriority = Number(task.priority) || 100;
+    const priorityHtml = taskId && (task.status === 'downloading' || task.status === 'pending' || task.status === 'paused') ? `
+        <span class="board-card-priority" title="下载优先级（1-300，越大越先下载）">
+            <button class="board-card-action-btn" data-action="priority-down" data-bvid="${bvid}" data-priority="${taskPriority}" title="降低优先级">−</button>
+            <span class="board-card-priority-value">${taskPriority}</span>
+            <button class="board-card-action-btn" data-action="priority-up" data-bvid="${bvid}" data-priority="${taskPriority}" title="提高优先级">+</button>
+        </span>
+    ` : '';
+
     return `
         <div class="board-video-card state-${stateDot}" data-action="open-video" data-bvid="${bvid}" data-history-id="${escapeHtml(String(v.history_id ?? ''))}">
             <div class="board-card-state-dot" title="${escapeHtml(stateLabel(state, v))}"></div>
@@ -309,6 +319,7 @@ export function renderBoardVideoCard(v) {
                 <div class="board-card-sidecar">${sidecarHtml}</div>
                 ${filePath}
                 ${pauseResumeHtml}
+                ${priorityHtml}
             </div>
         </div>
     `;
