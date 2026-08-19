@@ -97,7 +97,12 @@ function renderHint() {
     }
     const m = String(Math.floor(remaining / 60)).padStart(2, '0');
     const s = String(remaining % 60).padStart(2, '0');
-    setHint(`输入配对码以配对（${m}:${s} 后失效）`);
+    if (remaining <= 60) {
+        // ≤60s 用橙色加粗提醒，避免用户在过期前一秒还在输入
+        setHint(`配对码即将过期（剩 ${m}:${s}），请尽快输入`, 'warn');
+    } else {
+        setHint(`输入配对码以配对（${m}:${s} 后失效）`);
+    }
     if (!btn.classList.contains('is-loading')) {
         btn.disabled = false;
     }

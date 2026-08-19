@@ -167,6 +167,11 @@ h1 {
     color: var(--error);
 }
 
+.hint.is-warn {
+    color: #ff7d00;
+    font-weight: 600;
+}
+
 .hint.is-success {
     color: var(--success);
 }

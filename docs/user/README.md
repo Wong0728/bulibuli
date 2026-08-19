@@ -23,4 +23,4 @@
 - [Hero 页面](../hero/bulibuli_hero_fully_editable_v2.html)
 - [Hero SVG 预览](../hero/bulibuli_hero_preview.svg)
 
-宣传视频预览和宣传素材不在主线中，统一放在 `promo-video` 分支的 `docs/promo/`。
+宣传视频相关资料放在独立的 `promo-video` 分支；详见 [分支约定](BRANCHES.md)。
