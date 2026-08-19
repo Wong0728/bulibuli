@@ -115,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termu
 ## 首次设置与常用操作
 
 1. 启动程序并打开终端打印的本地 URL。
-2. 首次设备配对码会同时显示在终端，并写入 `data/pair-code.txt`；文件权限为当前用户可读，配对成功后自动删除。
+2. 首次设备配对码仅在终端打印（请确保终端可见；如以 nohup/systemd 等方式运行则需重启程序重新生成）。
 3. 在网页中完成设备配对和安全设置，再按需扫码登录 B 站。
 4. 完整包优先使用包内 aria2c 和 FFmpeg；轻量 `core` 包没有包内运行时时，按环境变量再到系统 `PATH` 查找，媒体探测会继续寻找 ffprobe 或回退 FFmpeg。
 

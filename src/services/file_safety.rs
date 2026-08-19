@@ -184,38 +184,6 @@ pub fn ensure_within_root(root: &Path, candidate: &Path) -> AppResult<()> {
     Ok(())
 }
 
-/// Windows：将文件 DACL 收紧为仅当前用户、SYSTEM 与 Administrators 可访问。
-/// 用于配对码等敏感文件——便携目录解压到共享位置时，继承 ACL 可能放宽到其他本机用户。
-/// 通过 icacls 实现（系统自带），失败时由调用方决定是否仅告警。
-#[cfg(windows)]
-pub fn restrict_windows_file_acl(path: &Path) -> AppResult<()> {
-    // 移除继承的 ACE，仅保留当前用户完全控制（SYSTEM/管理员按需显式授予）。
-    let username = std::env::var("USERNAME").unwrap_or_default();
-    if username.is_empty() {
-        return Err(AppError::Internal("无法确定当前用户名".to_string()));
-    };
-    let grant_current = format!("{username}:(F)");
-    let status = std::process::Command::new("icacls")
-        .arg(path)
-        .args([
-            "/inheritance:r",
-            "/grant:r",
-            &grant_current,
-            "/grant:r",
-            "SYSTEM:(F)",
-            "/grant:r",
-            "Administrators:(F)",
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|error| AppError::Internal(format!("执行 icacls 失败: {error}")))?;
-    if !status.success() {
-        return Err(AppError::Internal("icacls 收紧文件 ACL 失败".to_string()));
-    }
-    Ok(())
-}
-
 /// 在词法路径校验之外，再检查现有路径或最近的现有父目录是否仍位于根目录内。
 ///
 /// 这一步用于阻止下载目录中的符号链接把新文件引导到根目录之外。

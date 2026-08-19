@@ -488,7 +488,6 @@ async fn pair_command(state: &SharedState, args: &[String]) -> AppResult<Value> 
     let auth = state.bili.auth.clone();
     let result: AppResult<Value> = if is_close {
         auth.close_pairing().await;
-        crate::app::onboarding::clear_pairing_code(&state.infra.paths.data_dir);
         Ok(json!({"pairing_open": false}))
     } else {
         let code = auth.open_pairing().await;

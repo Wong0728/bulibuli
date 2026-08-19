@@ -99,7 +99,6 @@ async fn pair(
             client.explicit_allow,
         )
         .await?;
-    crate::app::onboarding::clear_pairing_code(&state.infra.paths.data_dir);
     let mut response = Json(ApiResponse::with_message(
         json!({"paired": true}),
         "设备配对成功",

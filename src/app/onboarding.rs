@@ -222,43 +222,6 @@ fn browser_available() -> bool {
     }
 }
 
-/// 把首次启动配对码写入仅当前用户可读的文件，方便 nohup、容器和 systemd 用户查看。
-pub fn write_pairing_code(data_dir: &std::path::Path, code: &str) -> anyhow::Result<()> {
-    let path = data_dir.join("pair-code.txt");
-    let temp = data_dir.join(format!(".pair-code.{}.tmp", uuid::Uuid::new_v4().simple()));
-    let content = format!(
-        "首次设备配对码：{}-{}\n有效期：10 分钟，且仅可使用一次。\n配对成功后本文件会自动删除。\n",
-        &code[..4],
-        &code[4..]
-    );
-    std::fs::write(&temp, content)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(windows)]
-    {
-        // 显式收紧为仅当前用户/SYSTEM/管理员可读：便携目录若被解压到共享位置，
-        // 继承 ACL 可能让其他本机用户读到可换取 Owner 会话的配对码。
-        if let Err(error) = crate::services::file_safety::restrict_windows_file_acl(&temp) {
-            tracing::warn!(%error, "收紧 pair-code.txt ACL 失败，依赖目录继承权限");
-        }
-    }
-    let _ = std::fs::remove_file(&path);
-    std::fs::rename(&temp, &path)?;
-    Ok(())
-}
-
-/// 配对成功或配对窗口关闭后清理一次性配对码文件。
-pub fn clear_pairing_code(data_dir: &std::path::Path) {
-    match std::fs::remove_file(data_dir.join("pair-code.txt")) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => tracing::warn!(%error, "清理 pair-code.txt 失败"),
-    }
-}
-
 /// 主流程在 BiliApi 就绪后调用：若用户在向导里选了"现在扫码"，则拉取二维码 URL 并轮询直到完成/超时。
 ///
 /// 失败/超时不阻塞启动（符合规划：登录失败仍允许启动，AI 调用时返回 BILI_NOT_LOGGED_IN）。
