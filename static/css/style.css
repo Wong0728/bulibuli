@@ -5058,6 +5058,29 @@ tr:hover {
     opacity: 0.7;
 }
 
+/* 失败原因 chip：让用户一眼看出「为什么没下成功」。
+   与 .status-tag.failed 同样的红底配色，配紧凑 pill 形态避免抢主标题。 */
+.board-card-failure {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-5);
+    padding: var(--size-2) var(--size-7);
+    border-radius: var(--radius-full);
+    font-size: var(--size-11);
+    background: var(--error-soft);
+    color: var(--error);
+    line-height: 1.4;
+    max-width: 100%;
+}
+.board-card-failure i {
+    flex: 0 0 auto;
+}
+.board-card-failure span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* 文件路径行（仅设置开启时显示）。 */
 .board-card-path {
     display: flex;

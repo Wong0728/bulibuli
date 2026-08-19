@@ -157,6 +157,8 @@ impl DownloadManager {
                     "total_size": task_info.file.total_size,
                     "speed": task_info.download.speed,
                     "error": t.error,
+                    "error_kind": t.error_kind,
+                    "fallback_reason": t.fallback_reason,
                     "task": task_info,
                     "updated_at": t.updated_at.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
                 }),

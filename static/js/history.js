@@ -1,5 +1,5 @@
 import { _state, _NETWORK_ERR_MSG } from './state.js';
-import { clampPercent, escapeHtml, formatFileSize, formatSpeed } from './utils.js';
+import { clampPercent, escapeHtml, formatFileSize, formatSpeed, formatFailureText } from './utils.js';
 import { setTone, checkNetworkBeforeAction, apiPost, apiGet } from './core.js';
 import { updateDownloadLists } from './download-queue.js';
 import { showToast } from './download-status.js';
@@ -301,6 +301,19 @@ export function renderBoardVideoCard(v) {
         </span>
     ` : '';
 
+    // 失败原因 chip：让用户一眼看出「为什么没下成功」。
+    // 后端在 failed/merge_failed 时通过 `v.failure = { message, kind, fallback_reason }` 传出。
+    const failureReasonHtml = (state === 'failed' || state === 'merge_failed') && v.failure
+        ? (() => {
+            const text = formatFailureText(v.failure);
+            if (!text) return '';
+            return `<div class="board-card-failure" title="${escapeHtml(text)}">
+                    <i class="fa-solid fa-circle-exclamation"></i>
+                    <span>${escapeHtml(text)}</span>
+                </div>`;
+        })()
+        : '';
+
     return `
         <div class="board-video-card state-${stateDot}" data-action="open-video" data-bvid="${bvid}" data-history-id="${escapeHtml(String(v.history_id ?? ''))}">
             <div class="board-card-state-dot" title="${escapeHtml(stateLabel(state, v))}"></div>
@@ -316,6 +329,7 @@ export function renderBoardVideoCard(v) {
                     <span title="播放量"><i class="fa-solid fa-play"></i> ${view}</span>
                 </div>
                 ${progressHtml}
+                ${failureReasonHtml}
                 <div class="board-card-sidecar">${sidecarHtml}</div>
                 ${filePath}
                 ${pauseResumeHtml}

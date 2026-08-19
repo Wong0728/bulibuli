@@ -265,6 +265,17 @@ async fn build_video_list(
                     "task_id": task.task_id,
                     "priority": task.priority,
                 },
+                // 失败原因冒泡：仅在 failed/merge_failed 时填充，前端用来解释「为什么没下成功」。
+                // 其他状态下为 null，前端可用 `if (v.failure)` 显式判断。
+                "failure": if task.status == "failed" || task.status == "merge_failed" {
+                    json!({
+                        "message": task.error,
+                        "kind": task.error_kind,
+                        "fallback_reason": task.fallback_reason,
+                    })
+                } else {
+                    Value::Null
+                },
             })
         })
         .buffered(4)
@@ -349,6 +360,10 @@ async fn build_single_video_response(
         "total_size": task.total_size,
         "task_id": task.task_id,
         "priority": task.priority,
+        // 失败元数据：失败原因冒泡到抽屉，前端可展示「为什么失败」详情。
+        "error": task.error,
+        "error_kind": task.error_kind,
+        "fallback_reason": task.fallback_reason,
     });
 
     let files = business
@@ -509,6 +524,12 @@ struct AggregatedTaskProgress {
     task_id: Option<i32>,
     /// 代表任务的下载优先级（1..=300，默认 100），供前端调整控件显示。
     priority: i32,
+    /// 失败原因（来自代表任务的 `error` 字段）。仅在状态为 failed/merge_failed 时有值。
+    error: Option<String>,
+    /// 结构化错误分类（如 `Paywall`、`PermissionDenied`），供前端映射为友好中文。
+    error_kind: Option<String>,
+    /// 画质/编码降级原因（如「大会员不可用，已降级 1080P」），供用户排查。
+    fallback_reason: Option<String>,
 }
 
 /// 统一看板与抽屉的任务聚合优先级：下载中 > 已暂停 > 等待 > 失败 > 终态。
@@ -529,6 +550,9 @@ fn aggregate_task_progress(
             total_size: 0,
             task_id: None,
             priority: 100,
+            error: None,
+            error_kind: None,
+            fallback_reason: None,
         };
     };
     // 状态优先级：downloading > paused > pending > failed > completed
@@ -541,6 +565,19 @@ fn aggregate_task_progress(
     let representative = tasks.iter().find(|task| task.status == status);
     let task_id = representative.map(|task| task.id);
     let priority = representative.map(|task| task.priority).unwrap_or(100);
+    // 失败元数据：仅在 failed/merge_failed 时把数据库里的 error 字段冒泡给前端，
+    // 让用户看到「为什么会失败」（B站风控/权限/网络/账号失效等）。
+    let error_meta = representative.and_then(|task| {
+        if status == "failed" || status == "merge_failed" {
+            Some((
+                task.error.clone(),
+                task.error_kind.clone(),
+                task.fallback_reason.clone(),
+            ))
+        } else {
+            None
+        }
+    });
     AggregatedTaskProgress {
         progress: tasks
             .iter()
@@ -553,5 +590,8 @@ fn aggregate_task_progress(
         total_size: tasks.iter().map(|task| task.total_size).sum(),
         task_id,
         priority,
+        error: error_meta.as_ref().and_then(|(e, _, _)| e.clone()),
+        error_kind: error_meta.as_ref().and_then(|(_, k, _)| k.clone()),
+        fallback_reason: error_meta.as_ref().and_then(|(_, _, r)| r.clone()),
     }
 }
