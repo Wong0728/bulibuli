@@ -37,7 +37,7 @@ import { removeKnownBlogger, clearKnownBloggers, closeBloggerNoticeModal, acknow
 import { updateDownloadLists, patchSingleCardProgress, pauseDownload, resumeDownload, adjustDownloadPriority, pauseAllDownloads, resumeAllDownloads } from './download-queue.js';
 import { switchBoardTab, loadHistoryBoard, updateDownloadProgressInList } from './history.js';
 import { startProgressUpdates, showToast, confirmDialog, closeConfirmDialog } from './download-status.js';
-import { addTimePoint, removeTimePoint, browseFFmpegPath, testFFmpeg, saveSettings, resetSettings, loadSettings, restartAria2, checkUpdate, applyUpdate, refreshGlobalLogs } from './settings.js';
+import { addTimePoint, removeTimePoint, testFFmpeg, saveSettings, resetSettings, loadSettings, restartAria2, checkUpdate, applyUpdate, refreshGlobalLogs } from './settings.js';
 import { openVideoDrawer, closeVideoDrawer, openVideoDrawerFromManual } from './drawer.js';
 import { burnMedia, deleteVideoRecord, refreshVideoInfo, loadBvidLogs, selectQualityPill, startVideoDownload, retryVideoDownload, startVideoDownloadFromManual, saveManualToLocal, toggleAllPages, openVideoPage, downloadCover, startSeasonDownload, toggleAllEpisodes } from './media-actions.js';
 import { loadDrawerComments, loadDrawerDanmaku } from './drawer-sidecars.js';
@@ -94,7 +94,6 @@ const _declarativeActions = {
     'save-manual-cookie': () => saveManualCookie(),
     'restart-aria2': el => restartAria2(el),
     'add-time-point': () => addTimePoint(),
-    'browse-ffmpeg-path': () => browseFFmpegPath(),
     'test-ffmpeg': () => testFFmpeg(),
     'save-settings': el => saveSettings(el),
     'reset-settings': () => resetSettings(),

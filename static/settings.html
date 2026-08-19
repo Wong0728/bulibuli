@@ -3,6 +3,7 @@
         <button type="button" class="btn btn-sm" data-settings-group="basic" aria-pressed="true" aria-controls="settings-sections">基础</button>
         <button type="button" class="btn btn-sm" data-settings-group="downloads" aria-pressed="false" aria-controls="settings-sections">下载</button>
         <button type="button" class="btn btn-sm" data-settings-group="advanced" aria-pressed="false" aria-controls="settings-sections">高级</button>
+        <button type="button" class="btn btn-sm" data-settings-group="tools" aria-pressed="false" aria-controls="settings-sections">工具</button>
         <button type="button" class="btn btn-sm" data-settings-group="security" aria-pressed="false" aria-controls="settings-sections">安全</button>
     </div>
     <p class="form-note settings-fragment-note">设置按用途分组；首次进入默认显示基础设置。</p>
@@ -368,12 +369,7 @@
                     </div>
                     <div class="form-group form-full" id="ffmpeg-custom-path-group" hidden>
                         <label for="setting-ffmpeg-path">自定义 FFmpeg 路径</label>
-                        <div class="btn-group btn-group-stretch">
-                            <input type="text" id="setting-ffmpeg-path" class="form-control" placeholder="请输入 FFmpeg 完整路径">
-                            <button type="button" class="btn" data-action="browse-ffmpeg-path">
-                                <i class="fa-solid fa-folder-open"></i> 浏览
-                            </button>
-                        </div>
+                        <input type="text" id="setting-ffmpeg-path" class="form-control" placeholder="请输入 FFmpeg 完整路径">
                         <div class="form-note">指定自定义的 FFmpeg 可执行文件路径</div>
                     </div>
                     <div class="form-group form-full">
@@ -587,6 +583,11 @@
                         <input type="number" id="setting-verify-periodic-batch" class="form-control" min="1" max="200">
                         <div class="form-note">范围: 1-200，建议 20。每 60 秒扫一批最久未校验的</div>
                     </div>
+                    <div class="form-group">
+                        <label for="setting-verify-concurrency">校验并发数</label>
+                        <input type="number" id="setting-verify-concurrency" class="form-control" min="1" max="16">
+                        <div class="form-note">范围: 1-16，建议 4；后台 MD5 校验线程数</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -673,6 +674,11 @@
                             <option value="all">全部分P</option>
                         </select>
                         <div class="form-note">自动监控发现的多P投稿：选择"仅 P1"只下第一P；选择"全部分P"则每个分P独立入队下载。手动下载不受此项影响，可在抽屉内自选分P</div>
+                    </div>
+                    <div class="form-group form-full">
+                        <label class="form-label" for="setting-scan-page-limit">监控分页上限</label>
+                        <input type="number" id="setting-scan-page-limit" class="form-control" min="1" max="20">
+                        <div class="form-note">范围 1-20，建议 5。监控时每个博主最多拉取最新 N 页视频（每页 30 个）；上限越高，能发现越久远的视频，但首轮扫描更慢</div>
                     </div>
                 </div>
             </div>

@@ -22,7 +22,8 @@ export function loadSettingsFragment() {
         const groups = {
             basic: ['account', 'appearance', 'query', 'parallel', 'smart'],
             downloads: ['danmaku', 'aria2', 'ffmpeg', 'burn', 'subtitle', 'path', 'storage', 'retain', 'verify'],
-            advanced: ['board', 'monitor', 'refresh', 'live-recording', 'update', 'logs'],
+            advanced: ['board', 'monitor', 'refresh', 'live-recording', 'update'],
+            tools: ['logs'],
             security: ['local-config'],
         };
         const sections = () => [...document.querySelectorAll('#tab-settings .section-collapsible')];
@@ -39,6 +40,19 @@ export function loadSettingsFragment() {
             button.addEventListener('click', () => selectGroup(button.dataset.settingsGroup));
         });
         selectGroup('basic');
+        // 每个 section 标题栏点击折叠：与 CSS .section-collapsible.collapsed 联动。
+        mount.querySelectorAll('.section-collapsible .section-header').forEach(header => {
+            header.setAttribute('role', 'button');
+            header.setAttribute('tabindex', '0');
+            const toggle = () => header.closest('.section-collapsible').classList.toggle('collapsed');
+            header.addEventListener('click', toggle);
+            header.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggle();
+                }
+            });
+        });
         // 全局日志对所有已认证角色开放（与 /api/logs/get 的 RBAC 一致），
         // 片段加载后即启动轮询，不依赖 owner-only 的 loadSettingsFromServer。
         startGlobalLogsPolling();
@@ -243,28 +257,6 @@ export async function refreshFFmpegDetectedPath() {
     }
 }
 
-// 浏览 FFmpeg 路径（调用后端文件选择对话框）
-export async function browseFFmpegPath() {
-    try {
-        // 注：由于浏览器安全限制，无法直接访问文件系统
-        // 这里使用 input type="file" 的方式
-        const input = document.createElement('input');
-        input.type = 'file';
-        // 不设置 accept 过滤：Linux/Termux 的 ffmpeg 二进制没有扩展名，过滤会将其挡住
-        input.addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            if (file) {
-                // 注意：浏览器只能获取文件名，无法获取完整路径
-                // 用户需要手动输入完整路径
-                showToast('请手动输入完整的文件路径', 'info');
-            }
-        });
-        input.click();
-    } catch (e) {
-        showToast('无法打开文件选择器', 'error');
-    }
-}
-
 // 测试 FFmpeg 是否可用
 export async function testFFmpeg() {
     const resultEl = document.getElementById('ffmpeg-test-result');
@@ -414,6 +406,7 @@ export async function loadSettingsFromServer() {
                 document.getElementById('setting-verify-mode').value = mode;
                 document.getElementById('setting-verify-periodic-days').value = v.periodic_days;
                 document.getElementById('setting-verify-periodic-batch').value = v.periodic_batch;
+                document.getElementById('setting-verify-concurrency').value = v.concurrency ?? 4;
                 onVerifyModeChange();
             }
 
@@ -430,6 +423,7 @@ export async function loadSettingsFromServer() {
                 document.getElementById('setting-detect-reupload').checked = s.monitor.detect_reupload;
                 const mpEl = document.getElementById('setting-multi-page-mode');
                 if (mpEl) mpEl.value = s.monitor.multi_page_mode ?? 'first';
+                document.getElementById('setting-scan-page-limit').value = s.monitor.scan_page_limit ?? 5;
             }
 
             // 刷新设置
@@ -547,6 +541,7 @@ export async function saveSettings(btn) {
             mode: document.getElementById('setting-verify-mode').value,
             periodic_days: parseInt(document.getElementById('setting-verify-periodic-days').value),
             periodic_batch: parseInt(document.getElementById('setting-verify-periodic-batch').value),
+            concurrency: parseInt(document.getElementById('setting-verify-concurrency').value),
         });
         settings.board.path_display_mode = document.getElementById('setting-path-display-mode').value;
         // 保留旧字段，兼容尚未升级的客户端。
@@ -563,6 +558,7 @@ export async function saveSettings(btn) {
         settings.monitor.detect_reupload = document.getElementById('setting-detect-reupload').checked;
         const mpModeEl = document.getElementById('setting-multi-page-mode');
         if (mpModeEl) settings.monitor.multi_page_mode = mpModeEl.value;
+        settings.monitor.scan_page_limit = parseInt(document.getElementById('setting-scan-page-limit').value);
         settings.refresh.l1_interval_minutes =
             parseInt(document.getElementById('setting-l1-interval-minutes').value);
         Object.assign(settings.burn, {
@@ -674,7 +670,7 @@ async function loadFoundationSummary() {
             ['基础配置状态', status.configuration_status === 'normal' ? '正常' : '需要检查'],
             ['AI Skill', status.ai_skill_enabled ? '已启用' : '已关闭'],
             ['当前访问模式', modeNames[status.access_mode] || status.access_mode || '未知'],
-            ['基础配置入口', status.setup_access === 'remote_available' ? '可访问' : '仅服务端可访问'],
+            ['基础配置入口', status.setup_access === 'unavailable' ? '未启动' : '仅本机可访问（127.0.0.1）'],
         ];
         rows.forEach(([label, value]) => {
             const row = document.createElement('p');
