@@ -123,7 +123,9 @@
             <div class="config-section" id="config-tunnel" hidden>
                 <div class="config-info">
                     <i class="fa-solid fa-info-circle"></i>
-                    <p>请确保你的内网穿透工具（frp / Cloudflare Tunnel 等）已配置好，将外部地址映射到本机端口。</p>
+                    <p>本应用已开启 <strong>LAN 监听模式</strong>（监听 <code>0.0.0.0</code>），请将外部地址映射到本机主端口：<code id="tunnel-local-port">--</code></p>
+                    <p>穿透工具示例（frp）：<br><code>frpc tcp --remote_port &lt;外网端口&gt; --local_ip 127.0.0.1 --local_port <span class="tunnel-port-marker">--</span></code></p>
+                    <p>Cloudflare Tunnel 等其他工具类似——把外部 <code>tunnel.example.com</code> 的访问路由到本机 <code>127.0.0.1:<span class="tunnel-port-marker">--</span></code> 即可。</p>
                     <p>完成穿透配置后，点击"完成设置"即可。</p>
                 </div>
             </div>

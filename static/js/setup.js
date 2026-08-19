@@ -169,6 +169,12 @@ function showConfigForScene() {
     // 局域网模式：检测 IP
     if (scene === 'lan') {
         detectNetworkIps();
+    } else if (scene === 'tunnel') {
+        // 让用户清楚本应用监听哪个端口，便于穿透工具映射。
+        const tunnelPort = actualPorts.main_port || mainPortFallback();
+        document.querySelectorAll('.tunnel-port-marker, #tunnel-local-port').forEach(el => {
+            el.textContent = String(tunnelPort);
+        });
     }
 }
 
