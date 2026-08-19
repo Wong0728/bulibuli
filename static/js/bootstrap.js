@@ -1,4 +1,5 @@
 import { _state, subscribeState } from './state.js';
+import { formatError } from './utils.js';
 import { setTone, initWebSocket, updateNetworkBanner, updateNetworkDisabledButtons, setBackendAvailability, apiPost, apiGet, checkCookiesStatus, dismissCookieWarning, refreshLoginInfo } from './core.js';
 import { setManualQueryMode, doManualQuery, doManualResolve } from './manual.js';
 import { showAddBloggerModal, closeBloggerModal, showEditBloggerModal } from './modal.js';
@@ -556,7 +557,7 @@ export async function saveManualCookie() {
             showToast(result.message || '保存失败', 'error');
         }
     } catch (e) {
-        showToast('保存 Cookie 失败', 'error');
+        showToast(formatError('保存 Cookie', e), 'error');
     }
 }
 
@@ -581,6 +582,6 @@ export async function logoutAccount() {
         // 会话 Cookie 已被后端清除，刷新回到配对/登录页。
         window.location.reload();
     } catch (e) {
-        showToast('退出登录失败', 'error');
+        showToast(formatError('退出登录', e), 'error');
     }
 }

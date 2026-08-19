@@ -1,3 +1,5 @@
+import { _NETWORK_ERR_MSG } from './state.js';
+
 export function escapeHtml(value) {
     if (value === null || value === undefined) return '';
     return String(value)
@@ -6,6 +8,26 @@ export function escapeHtml(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+// 把 catch 块里的异常统一成「操作描述 + 具体原因」的中文短句。
+// 调用规范：showToast(formatError('加载博主列表', e), 'error')
+//
+// - AbortError 默认按"操作已取消"处理（原代码多在 catch 上方就 return，不受影响）。
+// - offline：复用 _NETWORK_ERR_MSG（注意不直接返回它，以保留 showToast 的"持续网络 toast"
+//   机制由调用方按 e.offline 短路）。
+// - 裸 fetch 失败（TypeError: Failed to fetch ...）也归一为网络错误。
+export function formatError(prefix, error) {
+    if (!error) return prefix || '操作失败';
+    if (error.name === 'AbortError') return prefix || '操作已取消';
+    const offline =
+        error.offline ||
+        error?.cause?.offline ||
+        (error.name === 'TypeError' && /fetch|network|load/i.test(error.message || ''));
+    const suffix = offline
+        ? _NETWORK_ERR_MSG
+        : (error.message || (typeof error === 'string' ? error : null) || '未知错误');
+    return prefix ? `${prefix}：${suffix}` : suffix;
 }
 
 export function formatFileSize(bytes) {

@@ -1,5 +1,5 @@
 import { _state } from './state.js';
-import { clampPercent, escapeHtml, formatFileSize, formatSpeed } from './utils.js';
+import { clampPercent, escapeHtml, formatError, formatFileSize, formatSpeed } from './utils.js';
 import { apiPost, apiGet } from './core.js';
 import { fetchDownloadSnapshot } from './download-status-store.js';
 import { retryDownload, loadHistoryBoard } from './history.js';
@@ -207,7 +207,7 @@ export async function removeDownload(bvid, taskType = 'video') {
             showToast(result.message || '移除失败', 'error');
         }
     } catch (e) {
-        showToast('移除下载任务失败', 'error');
+        showToast(formatError('移除下载任务', e), 'error');
     }
 }
 
@@ -227,7 +227,7 @@ export async function pauseDownload(taskId) {
             showToast(result.message || '暂停失败', 'error');
         }
     } catch (e) {
-        showToast('暂停下载任务失败', 'error');
+        showToast(formatError('暂停下载任务', e), 'error');
     }
 }
 
@@ -247,7 +247,7 @@ export async function resumeDownload(taskId) {
             showToast(result.message || '恢复失败', 'error');
         }
     } catch (e) {
-        showToast('恢复下载任务失败', 'error');
+        showToast(formatError('恢复下载任务', e), 'error');
     }
 }
 
@@ -264,7 +264,7 @@ export async function pauseAllDownloads() {
             showToast(result.message || '全局暂停失败', 'error');
         }
     } catch (e) {
-        showToast('全局暂停失败', 'error');
+        showToast(formatError('全局暂停', e), 'error');
     }
 }
 
@@ -280,7 +280,7 @@ export async function resumeAllDownloads() {
             showToast(result.message || '全局恢复失败', 'error');
         }
     } catch (e) {
-        showToast('全局恢复失败', 'error');
+        showToast(formatError('全局恢复', e), 'error');
     }
 }
 
@@ -302,6 +302,6 @@ export async function adjustDownloadPriority(bvid, delta, currentHint = null) {
             showToast(result.message || '调整优先级失败', 'error');
         }
     } catch (e) {
-        showToast('调整优先级失败', 'error');
+        showToast(formatError('调整优先级', e), 'error');
     }
 }

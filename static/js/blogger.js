@@ -1,5 +1,5 @@
 import { _state } from './state.js';
-import { escapeHtml } from './utils.js';
+import { escapeHtml, formatError } from './utils.js';
 import { checkNetworkBeforeAction, apiPost, apiGet } from './core.js';
 import { switchTab } from './bootstrap.js';
 import { loadHistoryBoard } from './history.js';
@@ -493,7 +493,7 @@ export async function startSelectedBlogger() {
             showToast(result.message || '启动失败', 'error');
         }
     } catch (e) {
-        showToast('启动监控失败', 'error');
+        showToast(formatError('启动监控', e), 'error');
     }
 }
 
@@ -523,7 +523,7 @@ export async function stopSelectedBlogger() {
             showToast(result.message || '停止失败', 'error');
         }
     } catch (e) {
-        showToast('停止监控失败', 'error');
+        showToast(formatError('停止监控', e), 'error');
     }
 }
 
@@ -540,7 +540,7 @@ export async function cleanupBloggerNowByUid(uid) {
             showToast(result.message || '整理失败', 'error');
         }
     } catch (e) {
-        showToast('整理失败', 'error');
+        showToast(formatError('整理博主', e), 'error');
     }
 }
 

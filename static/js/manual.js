@@ -1,5 +1,5 @@
 import { _state, _NETWORK_ERR_MSG } from './state.js';
-import { escapeHtml } from './utils.js';
+import { escapeHtml, formatError } from './utils.js';
 import { checkNetworkBeforeAction, apiPost, apiGet } from './core.js';
 import { showToast } from './download-status.js';
 import { renderSeasonResolveResult } from './media-actions.js';
@@ -135,7 +135,7 @@ export async function doManualQuery() {
             resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(result.message || '查询失败')}</p></div>`;
         }
     } catch (e) {
-        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>请求错误: ${escapeHtml(e.message)}</p></div>`;
+        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(formatError('请求失败', e))}</p></div>`;
     } finally {
         _state.manualQueryLoading = false;
         btn.disabled = false;
@@ -172,7 +172,7 @@ export async function loadMoreManualQuery() {
             renderManualLoadMore();
         }
     } catch (e) {
-        showToast('加载更多请求失败', 'error');
+        showToast(formatError('加载更多', e), 'error');
         renderManualLoadMore();
     } finally {
         _state.manualQueryLoading = false;
@@ -305,7 +305,7 @@ export async function doManualResolve() {
         }
         await renderResolveResult(result.data || {});
     } catch (e) {
-        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>请求错误: ${escapeHtml(e.message)}</p></div>`;
+        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(formatError('请求失败', e))}</p></div>`;
     } finally {
         if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
     }
@@ -371,6 +371,6 @@ async function renderResolvedNormalVideo(bvid, resultDiv) {
         };
         resultDiv.innerHTML = `<div class="video-grid" id="manual-video-grid">${renderManualVideoCard(_state.manualQueryVideos[data.bvid])}</div>`;
     } catch (e) {
-        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>获取视频信息失败: ${escapeHtml(e.message)}</p></div>`;
+        resultDiv.innerHTML = `<div class="card empty-state status-error"><i class="fa-solid fa-exclamation-triangle fa-2x mb-md"></i><p>${escapeHtml(formatError('获取视频信息', e))}</p></div>`;
     }
 }
