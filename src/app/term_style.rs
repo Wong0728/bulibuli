@@ -40,15 +40,6 @@ pub fn ok(text: &str) -> String {
     }
 }
 
-/// 警告：黄色。
-pub fn warn(text: &str) -> String {
-    if colored() {
-        format!("{}", text.with(Color::Yellow))
-    } else {
-        text.to_string()
-    }
-}
-
 /// 错误：红色加粗。
 pub fn error(text: &str) -> String {
     if colored() {

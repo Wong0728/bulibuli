@@ -14,7 +14,6 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
 
 const STARTUP_STATE_FILE: &str = "startup_state.json";
 static STARTUP_STATE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -39,9 +38,6 @@ pub struct StartupState {
     /// 终端模式：Web（默认）或 Terminal。持久化到 startup_state.json。
     #[serde(default)]
     pub terminal_mode: TerminalMode,
-    /// 进程内瞬态：onboarding 步骤 3 选"现在扫码"时置 true，主流程据此触发 run_qr_login。不落盘。
-    #[serde(skip)]
-    pub scan_now_requested: bool,
 }
 
 impl Default for StartupState {
@@ -52,7 +48,6 @@ impl Default for StartupState {
             bili_logged_in_uid: None,
             last_modified: Utc::now().to_rfc3339(),
             terminal_mode: TerminalMode::Web,
-            scan_now_requested: false,
         }
     }
 }
@@ -157,7 +152,7 @@ impl StartupState {
 
 /// 运行 onboarding。首次启动打印 Setup URL 并自动打开浏览器，后续启动显示状态摘要并自动打开浏览器。
 ///
-/// 返回的 `StartupState` 带瞬态 `scan_now_requested`（始终为 false，扫码登录改由 Web 端处理）。
+/// 扫码登录已迁到 Web 端处理。
 /// `setup_port` 和 `main_port` 由调用方在服务器启动后传入，确保显示和打开浏览器的端口准确。
 pub async fn run(
     paths: &AppPaths,
@@ -219,114 +214,6 @@ fn browser_available() -> bool {
     #[cfg(not(target_os = "linux"))]
     {
         true
-    }
-}
-
-/// 主流程在 BiliApi 就绪后调用：若用户在向导里选了"现在扫码"，则拉取二维码 URL 并轮询直到完成/超时。
-///
-/// 失败/超时不阻塞启动（符合规划：登录失败仍允许启动，AI 调用时返回 BILI_NOT_LOGGED_IN）。
-/// 成功后回写 `startup_state.json` 的 `bili_logged_in_uid`，供下次启动摘要展示。
-pub async fn run_qr_login(state: &SharedState, paths: &AppPaths) {
-    if let Err(error) = run_qr_login_inner(state, paths).await {
-        eprintln!(
-            "{}",
-            crate::app::term_style::error(&format!(
-                "扫码登录失败：{error:#}（不阻塞启动，可稍后用前端网页登录）"
-            ))
-        );
-    }
-}
-
-async fn run_qr_login_inner(state: &SharedState, paths: &AppPaths) -> Result<()> {
-    use crate::app::term_style;
-    let qrcode = state
-        .bili
-        .bili_api
-        .get_qrcode_url()
-        .await
-        .context("获取扫码登录二维码失败")?;
-    println!("\n—— B 站扫码登录 ——");
-    println!("请用 B 站 App 扫描以下 URL 对应的二维码（在浏览器打开该链接即可显示二维码图片）：");
-    println!("  {}", term_style::url(&qrcode.url));
-    println!("（或启动完成后，用前端网页 /settings 扫码）");
-    println!("正在等待扫码确认...（最多 180 秒）\n");
-
-    let key = qrcode.qrcode_key.clone();
-    let deadline = std::time::Instant::now() + Duration::from_secs(180);
-    loop {
-        if std::time::Instant::now() >= deadline {
-            println!(
-                "{}",
-                term_style::warn("扫码登录超时，已跳过。可稍后用前端网页登录。")
-            );
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        let poll = match state.bili.bili_api.check_qrcode_status(&key).await {
-            Ok(p) => p,
-            Err(error) => {
-                tracing::warn!(%error, "轮询扫码状态失败，稍后重试");
-                continue;
-            }
-        };
-        match poll.code {
-            0 => {
-                if let Some(cookies) = poll.cookies.as_deref().filter(|c| !c.trim().is_empty()) {
-                    let nav = state
-                        .bili
-                        .bili_api
-                        .get_nav_info(cookies)
-                        .await
-                        .context("扫码凭证校验失败")?;
-                    if !nav.is_login {
-                        anyhow::bail!("扫码凭证未通过 B 站登录校验");
-                    }
-                    state
-                        .infra
-                        .settings_service
-                        .save_cookie_header(cookies)
-                        .await
-                        .context("保存扫码登录凭证失败")?;
-                    state.bili.bili_api.invalidate_session_caches().await;
-                }
-                println!("{}", term_style::ok("✓ 扫码登录成功"));
-                refresh_bili_uid(state, paths).await;
-                return Ok(());
-            }
-            86090 => println!("{}", term_style::ok("已扫描，请在 B 站 App 确认登录...")),
-            86038 => println!(
-                "{}",
-                term_style::warn("二维码已失效，请稍后用前端网页重新扫码。")
-            ),
-            code if code < 0 => {
-                println!(
-                    "{}",
-                    term_style::error(&format!("扫码登录失败：{}", poll.message))
-                );
-                return Ok(());
-            }
-            _ => {}
-        }
-    }
-}
-
-/// 登录成功后查询当前 UID 并回写 startup_state.json，供下次启动摘要展示。
-async fn refresh_bili_uid(state: &SharedState, paths: &AppPaths) {
-    let cookies = state
-        .infra
-        .settings_service
-        .cookie_header()
-        .await
-        .unwrap_or_default();
-    if !Credential::from_cookie_header(&cookies).is_logged_in() {
-        return;
-    }
-    if let Ok(nav) = state.bili.bili_api.get_nav_info(&cookies).await {
-        if nav.is_login && nav.mid > 0 {
-            let mut s = StartupState::load(&paths.data_dir);
-            s.bili_logged_in_uid = Some(nav.mid);
-            let _ = s.save(&paths.data_dir);
-        }
     }
 }
 
@@ -401,18 +288,5 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let loaded = StartupState::load(dir.path());
         assert!(!loaded.onboarding_completed);
-    }
-
-    #[test]
-    fn scan_now_requested_not_persisted() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = StartupState {
-            onboarding_completed: true,
-            scan_now_requested: true,
-            ..StartupState::default()
-        };
-        state.save(dir.path()).unwrap();
-        let loaded = StartupState::load(dir.path());
-        assert!(!loaded.scan_now_requested);
     }
 }

@@ -127,11 +127,6 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
         std::sync::atomic::Ordering::Relaxed,
     );
 
-    // BiliApi 就绪后：若向导选了“现在扫码”则执行扫码登录。
-    if startup_state.ai_skill_enabled && startup_state.scan_now_requested {
-        app::onboarding::run_qr_login(&state, &state.infra.paths).await;
-    }
-
     // 审计事件桥接：把审计事件流转发给 WebSocket 客户端，前端可实时感知多端写操作。
     ws::start_audit_event_bridge(state.infra.ws.clone(), state.infra.audit_log.subscribe());
 
