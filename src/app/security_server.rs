@@ -41,19 +41,39 @@ pub async fn serve(
         warn!("LAN 模式使用 HTTP，仅适用于可信局域网；公网访问请使用 proxy + HTTPS");
     }
     let app = build_router(state.clone()).await?;
+    // 关停时机：先等服务真的收到关闭信号（Ctrl+C / SIGTERM / cancellation），
+    // 然后给一个有限宽限期等待在途连接（含 Socket.IO WebSocket）清理完毕。
+    // 浏览器页面开着就会让 Ctrl+C 后的进程永久挂起，所以宽限期到了就放弃
+    // 等待（连接随 serve future 被 drop 而关闭），让 main 的清理链路得以执行。
+    //
+    // 注意：宽限期的计时起点是"收到关闭信号"，不是"serve() 开始"。
+    // 之前用 `tokio::time::timeout(SHUTDOWN_GRACE, server)` 错误地让计时器从
+    // serve() 开始跑，导致程序在无人关机的情况下也会在 10 秒后被自爆。
+    const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
     let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal(state.infra.cancellation.clone()));
-    // graceful shutdown 会等待所有在途连接（含 Socket.IO WebSocket 长连接）结束且无超时；
-    // 浏览器页面开着就会让 Ctrl+C 后的进程永久挂起。给一个有限宽限期，超时后放弃
-    // 等待（连接随 serve future 被 drop 而关闭），让 main 的清理链路得以执行。
-    const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
-    match tokio::time::timeout(SHUTDOWN_GRACE, server).await {
-        Ok(result) => result?,
-        Err(_) => {
-            warn!("优雅关机宽限期（10 秒）已到，仍有活跃连接，强制关闭服务");
+    // race: server 自然结束（graceful shutdown 完成）vs 收到信号 + 宽限期到。
+    // 任一分支触发后，丢弃另一个 future；丢弃 server task 会强制关闭所有在途连接。
+    use std::future::IntoFuture;
+    let mut server = Box::pin(server.into_future());
+    let grace_after_signal = async {
+        shutdown_signal(state.infra.cancellation.clone()).await;
+        info!(
+            "收到关闭信号，开始 {} 秒优雅关停宽限期",
+            SHUTDOWN_GRACE.as_secs()
+        );
+        tokio::time::sleep(SHUTDOWN_GRACE).await;
+    };
+    tokio::pin!(grace_after_signal);
+    tokio::select! {
+        result = &mut server => {
+            result?;
+        }
+        _ = &mut grace_after_signal => {
+            warn!("优雅关停宽限期（{} 秒）已到，仍有活跃连接，强制关闭服务", SHUTDOWN_GRACE.as_secs());
         }
     }
     Ok(())
@@ -147,12 +167,10 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
 
     let static_root = state.infra.paths.static_dir();
     let static_pages = Arc::new(StaticPages {
-        index: tokio::fs::read(static_root.join("index.html"))
+        // 新主界面是 Vue 3 + Vite 产物（static/app/index.html）。
+        index: tokio::fs::read(static_root.join("app").join("index.html"))
             .await
-            .context("读取 index.html 失败")?,
-        pair: tokio::fs::read(static_root.join("pair.html"))
-            .await
-            .context("读取 pair.html 失败")?,
+            .context("读取 static/app/index.html 失败，请先跑 web/ 的 vite build")?,
     });
     let api = api::router().layer(rate_limit);
     let security_layer = middleware::from_fn_with_state(state.clone(), enforce_request_security);
@@ -161,14 +179,6 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
         .route_service(
             "/favicon.ico",
             ServeFile::new(static_root.join("bulibuli.ico")),
-        )
-        .route_service(
-            "/pair.css",
-            ServeFile::new(static_root.join("css").join("pair.css")),
-        )
-        .route_service(
-            "/pair.js",
-            ServeFile::new(static_root.join("js").join("pair.js")),
         )
         .route_service(
             "/pair-font.woff2",
@@ -190,6 +200,12 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
         )
         .nest_service("/css", ServeDir::new(static_root.join("css")))
         .nest_service("/js", ServeDir::new(static_root.join("js")))
+        // 旧版 vanilla-JS 兼容入口：整棵 static/ 挂在 /legacy/ 下。
+        // 当 Vue 改写完成后此路由将被移除（迁移第三档）。
+        .nest_service("/legacy", ServeDir::new(static_root.clone()))
+        // Vue3 + Vite 重写的新主界面，产物落在 static/app/ 下，
+        // 由 Vite 自动写入带 hash 的资源文件名，可走长缓存。
+        .nest_service("/app", ServeDir::new(static_root.join("app")))
         .merge(api)
         .layer(middleware::from_fn(trace_request))
         .layer(socket_layer)
@@ -200,10 +216,9 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
 
 struct StaticPages {
     index: Vec<u8>,
-    pair: Vec<u8>,
 }
 
-/// `/settings.html` 直链访问重定向回主界面（主界面按会话状态展示 index 或配对页）。
+/// `/settings.html` 直链访问重定向回主界面。
 async fn redirect_to_main() -> axum::response::Redirect {
     axum::response::Redirect::permanent("/")
 }
@@ -227,12 +242,11 @@ async fn index(
     headers: HeaderMap,
 ) -> Response {
     let token = session_cookie(&headers).unwrap_or_default();
-    let authenticated = state.bili.auth.authenticate(&token, client.ip).await;
-    let (bytes, session) = match authenticated {
-        Ok(Some(session)) => (pages.index.clone(), Some(session)),
-        Ok(None) => (pages.pair.clone(), None),
+    let session = match state.bili.auth.authenticate(&token, client.ip).await {
+        Ok(value) => value,
         Err(error) => return error.into_response(),
     };
+    let bytes = pages.index.clone();
     let mut response = Response::new(Body::from(bytes));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -284,15 +298,18 @@ async fn enforce_request_security(
     let public = matches!(
         path.as_str(),
         "/" | "/favicon.ico"
-            | "/pair.css"
-            | "/pair.js"
-            | "/pair-font.woff2"
             | "/settings.html"
+            // 新版 Vue3 主界面：静态资源全部免认证，仅 /api/* 仍走会话校验。
+            | "/app" | "/app/"
+            | "/app/index.html"
             | "/api/health"
             | "/api/ready"
             | "/api/auth/state"
             | "/api/auth/pair"
-    );
+            // 旧版 vanilla-JS 兼容入口，与新版同等免认证。
+            | "/legacy" | "/legacy/"
+    ) || path.starts_with("/app/assets/")
+        || path.starts_with("/legacy/");
     let mut session = None;
     if !public {
         // 仅当 IP 在 auth_bypass_ips 配置中明确列出时才跳过认证
@@ -600,13 +617,16 @@ fn is_static_asset(path: &str) -> bool {
     matches!(
         path,
         "/favicon.ico"
-            | "/pair.css"
-            | "/pair.js"
-            | "/pair-font.woff2"
             | "/index.html"
             | "/_fragments/settings.html"
+            // Vue 3 + Vite 产物带 hash，可长缓存。
+            | "/app" | "/app/" | "/app/index.html"
+            // 旧版 vanilla-JS 兼容入口（迁移完成前缓存）。
+            | "/legacy" | "/legacy/" | "/legacy/index.html"
     ) || path.starts_with("/css/")
         || path.starts_with("/js/")
+        || path.starts_with("/app/assets/")
+        || path.starts_with("/legacy/")
 }
 
 fn api_error(status: StatusCode, code: i64, message: &'static str) -> Response {

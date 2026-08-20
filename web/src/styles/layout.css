@@ -1,0 +1,59 @@
+.skip-link {
+    position: absolute;
+    inset-block-start: -3rem;
+    inset-inline-start: 1rem;
+    z-index: 1000;
+    padding: .5rem .75rem;
+    background: var(--brand);
+    color: var(--surface);
+}
+
+.skip-link:focus {
+    inset-block-start: 1rem;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 768px) {
+    /* 顶栏改竖排 */
+    .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    .header-right {
+        align-self: flex-end;
+    }
+    /* tab 按钮允许换行 */
+    .nav-tabs {
+        flex-wrap: wrap;
+    }
+    .nav-tab {
+        font-size: 13px;
+        padding: 6px 10px;
+    }
+    /* 设置分组 switcher 也允许换行 */
+    .settings-group-switcher {
+        flex-wrap: wrap;
+    }
+    /* 卡片 padding 收紧 */
+    .card {
+        padding: 12px;
+    }
+    /* 看板侧栏改竖排：博主侧栏在上，详情在下 */
+    .blogger-dashboard,
+    .live-dashboard {
+        grid-template-columns: 1fr !important;
+    }
+    .blogger-sidebar,
+    .live-sidebar {
+        max-height: 240px;
+        overflow-y: auto;
+    }
+}
+
+@media (max-width: 480px) {
+    h1 { font-size: 18px; }
+    .header p { font-size: 12px; }
+    .nav-tab { font-size: 12px; padding: 4px 8px; }
+    .btn { padding: 4px 10px; font-size: 13px; }
+}

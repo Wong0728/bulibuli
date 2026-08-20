@@ -1,0 +1,216 @@
+/* ============================================================
+ * 设计令牌：补哩补哩 bulibuli
+ * ------------------------------------------------------------
+ * 这一层是整个前端的"色彩 / 字体 / 间距 / 阴影 / 圆角"基底。
+ * 为保持与原版 vanilla JS 项目的视觉一致，本文件**完整**复刻
+ * 原版 `static/css/style.css` 中的 :root 变量块；并在此基础上
+ * 额外暴露一组 `--bulibuli-*` 别名（无前缀的命名空间），
+ * 供新代码使用。
+ *
+ * 加载顺序（由 index.css 控制）：
+ *   1. tokens.css   ← 本文件
+ *   2. layout.css / components.css / settings.css / live.css / drawer.css（原版补丁）
+ *   3. style.css    ← 原版 6200+ 行完整样式表（与本文件共享同一套 :root）
+ *
+ * dark mode 处理：
+ *   原版 style.css 中 `@media (prefers-color-scheme: dark)` 块会重新
+ *   定义 :root 中的语义颜色（--bg / --text / --surface 等）；
+ *   因为 --bulibuli-* 是用 `var(--xxx)` 间接引用的，所以会自动跟随主题。
+ * ============================================================ */
+
+:root {
+    /* —— 原版 tokens.css 保留的别名 —— */
+    --text-muted-deep: var(--text-secondary);
+
+    /* ============================================================
+     * 原版 design tokens（完整 1:1 复刻自原版 style.css :root 块）
+     * ============================================================ */
+    --brand: #fb7299;
+    --brand-hover: #e85a89;
+    --brand-soft: #fff0f3;
+
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --surface-hover: #fafafa;
+
+    --border: #e5e6eb;
+    --border-strong: #d0d1d9;
+    --divider: #f0f1f5;
+
+    --text: #1d2129;
+    --text-secondary: #4e5969;
+    --text-muted: #86909c;
+
+    --success: #00b578;
+    --success-text: #087443;
+    --error: #f53f3f;
+    --error-text: #b42318;
+    --warning: #ff7d00;
+    --warning-text: #8a4b00;
+    --info: #165dff;
+    --info-text: #175cd3;
+
+    /* 语义状态的浅色背景。 */
+    --success-soft: #e8ffea;
+    --warning-soft: #fff7e6;
+    --error-soft: #ffece8;
+    --info-soft: #e6f4ff;
+
+    /* 组件使用的语义别名。 */
+    --text-tertiary: #86909c;
+    --bg-card: #ffffff;
+    --card-bg: #ffffff;
+    --error-dark: #d32029;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06);
+    --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.08);
+
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-full: 9999px;
+
+    --font-base: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", monospace;
+
+    --transition-fast: 150ms ease;
+    --transition-normal: 250ms ease;
+
+    /* —— 尺寸 / 字号 / 间距（来自原版 design tokens 集中定义） —— */
+    --size-1: 1px;
+    --size-2: 2px;
+    --size-3: 3px;
+    --size-4: 4px;
+    --size-5: 5px;
+    --size-6: 6px;
+    --size-7: 7px;
+    --size-8: 8px;
+    --size-9: 9px;
+    --size-10: 10px;
+    --size-11: 11px;
+    --size-12: 12px;
+    --size-13: 13px;
+    --size-14: 14px;
+    --size-15: 15px;
+    --size-16: 16px;
+    --size-18: 18px;
+    --size-20: 20px;
+    --size-22: 22px;
+    --size-24: 24px;
+    --size-26: 26px;
+    --size-28: 28px;
+    --size-30: 30px;
+    --size-32: 32px;
+    --size-34: 34px;
+    --size-36: 36px;
+    --size-40: 40px;
+    --size-42: 42px;
+    --size-44: 44px;
+    --size-48: 48px;
+    --size-56: 56px;
+    --size-60: 60px;
+    --size-70: 70px;
+    --size-80: 80px;
+    --size-84: 84px;
+    --size-90: 90px;
+    --size-100: 100px;
+    --size-120: 120px;
+    --size-140: 140px;
+    --size-150: 150px;
+    --size-160: 160px;
+    --size-200: 200px;
+    --size-210: 210px;
+    --size-220: 220px;
+    --size-240: 240px;
+    --size-260: 260px;
+    --size-280: 280px;
+    --size-300: 300px;
+    --size-320: 320px;
+    --size-350: 350px;
+    --size-360: 360px;
+    --size-400: 400px;
+    --size-460: 460px;
+    --size-480: 480px;
+    --size-500: 500px;
+    --size-600: 600px;
+    --size-640: 640px;
+    --size-641: 641px;
+    --size-768: 768px;
+    --size-992: 992px;
+    --size-1200: 1200px;
+    --size-1400: 1400px;
+    --size-neg-1: -1px;
+    --size-neg-2: -2px;
+    --size-neg-4: -4px;
+    --size-neg-8: -8px;
+    --size-neg-10: -10px;
+    --size-neg-260: -260px;
+
+    --text-sm: 12px;
+
+    /* —— 字体别名（来自原版） —— */
+    --font-custom-1: var(--font-base);
+    --font-custom-2: var(--font-mono);
+    --font-custom-3: var(--font-mono);
+    --font-custom-4: var(--font-mono);
+    --font-custom-5: var(--font-mono);
+    --font-custom-6: var(--font-mono);
+    --font-custom-7: "Font Awesome 6 Free";
+    --font-custom-8: var(--font-mono);
+    --font-custom-9: var(--font-mono);
+    --font-custom-10: "Font Awesome 5 Free";
+    --font-custom-11: var(--font-mono);
+    --font-custom-12: var(--font-mono);
+    --font-custom-13: var(--font-mono);
+    --font-custom-14: var(--font-mono);
+    --font-custom-15: "Font Awesome 6 Free", "FontAwesome";
+    --font-custom-16: var(--font-mono);
+
+    /* ============================================================
+     * --bulibuli-* 别名：给新写的 Vue 组件使用。
+     * 全部走 `var(--原版名)` 间接引用；原版 dark mode 媒体查询
+     * （在 style.css 中）会重新定义 :root，bulibuli-* 也会自动跟随。
+     * ============================================================ */
+    --bulibuli-brand: var(--brand);
+    --bulibuli-brand-dark: var(--brand-hover);
+    --bulibuli-brand-soft: var(--brand-soft);
+
+    --bulibuli-success: var(--success);
+    --bulibuli-warn: var(--warning);
+    --bulibuli-error: var(--error);
+    --bulibuli-info: var(--info);
+
+    --bulibuli-bg: var(--bg);
+    --bulibuli-bg-card: var(--surface);
+    --bulibuli-bg-elev: var(--surface-hover);
+    --bulibuli-bg-hover: var(--surface-hover);
+
+    --bulibuli-text: var(--text);
+    --bulibuli-text-muted: var(--text-secondary);
+    --bulibuli-text-faint: var(--text-muted);
+    --bulibuli-text-inverse: var(--surface);
+
+    --bulibuli-border: var(--border);
+    --bulibuli-border-soft: var(--divider);
+
+    --bulibuli-radius-sm: var(--radius-sm);
+    --bulibuli-radius: var(--radius-md);
+    --bulibuli-radius-lg: var(--radius-lg);
+    --bulibuli-radius-full: var(--radius-full);
+
+    --bulibuli-shadow-sm: var(--shadow-sm);
+    --bulibuli-shadow: var(--shadow-md);
+    --bulibuli-shadow-lg: var(--shadow-lg);
+
+    --bulibuli-font-sans: var(--font-base);
+    --bulibuli-font-mono: var(--font-mono);
+
+    /* 间距：与原版 --size-* 对齐。 */
+    --bulibuli-spacing-1: var(--size-4);
+    --bulibuli-spacing-2: var(--size-8);
+    --bulibuli-spacing-3: var(--size-12);
+    --bulibuli-spacing-4: var(--size-16);
+    --bulibuli-spacing-5: var(--size-20);
+    --bulibuli-spacing-6: var(--size-24);
+}

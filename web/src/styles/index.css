@@ -1,0 +1,55 @@
+/* ============================================================
+ * 补哩补哩 bulibuli · 样式入口
+ * ------------------------------------------------------------
+ * 加载顺序与原版 `static/index.html` 中的 link 顺序保持一致：
+ *   tokens → layout → components → settings → live → drawer → style
+ *
+ * 其中 style.css 是原版 vanilla JS 时代沉淀下来的 6200+ 行
+ * 完整设计系统（包含 dark mode、响应式、所有 tab 专用样式）。
+ * 这里"几乎无损"地引入到新 Vue 框架中。
+ * ============================================================ */
+
+@import "./tokens.css";
+@import "./layout.css";
+@import "./components.css";
+@import "./settings.css";
+@import "./live.css";
+@import "./drawer.css";
+@import "./style.css";
+
+/* —— 顶部兼容：原 vanilla JS 留下的 utility class —— */
+.sr-only { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.tone-brand { color: var(--bulibuli-brand); }
+.tone-success { color: var(--bulibuli-success); }
+.tone-error { color: var(--bulibuli-error); }
+.tone-warn { color: var(--bulibuli-warn); }
+.text-brand { color: var(--bulibuli-brand); }
+
+/* 基础全局规则：与原版 `* { margin: 0; padding: 0; box-sizing: border-box; }` 等价，
+   但额外确保 #app 撑满视口，让 fixed 定位的抽屉/弹窗有正确的容器参考。 */
+* { box-sizing: border-box; }
+
+html, body, #app {
+    margin: 0;
+    padding: 0;
+    font-family: var(--bulibuli-font-sans);
+    background: var(--bulibuli-bg);
+    color: var(--bulibuli-text);
+    min-height: 100vh;
+}
+
+button { font-family: inherit; cursor: pointer; }
+
+img { max-width: 100%; }
+
+/* ARIA2 状态点（保留：原版 header 顶栏也用） */
+.aria2-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+.aria2-dot.connected { background: var(--bulibuli-success); box-shadow: 0 0 6px rgba(82, 196, 26, 0.4); }
+.aria2-dot.disconnected { background: var(--bulibuli-text-faint); }

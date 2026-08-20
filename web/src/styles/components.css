@@ -1,0 +1,51 @@
+.form-note,
+.login-user-sub,
+.settings-fragment-note {
+    color: var(--text-muted-deep);
+}
+
+.modal-overlay[role="dialog"] {
+    overscroll-behavior: contain;
+}
+
+
+/* 博主变动通知（TabAuto 侧栏黄点 + 模态） */
+.blogger-notice-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--tone-warning, #e6a23c);
+    margin-left: 6px;
+    vertical-align: middle;
+    box-shadow: 0 0 0 2px var(--bg-card, #fff);
+}
+.blogger-notice-row {
+    border-bottom: 1px solid var(--border-soft, #eee);
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+}
+.blogger-notice-row:last-child {
+    border-bottom: 0;
+    margin-bottom: 0;
+}
+.blogger-notice-compare {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.blogger-notice-cell {
+    flex: 1;
+    text-align: center;
+}
+.blogger-notice-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-bottom: 4px;
+}
+.blogger-notice-name {
+    font-size: 12px;
+    word-break: break-all;
+}
