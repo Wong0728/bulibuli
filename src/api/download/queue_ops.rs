@@ -1,9 +1,12 @@
 //! 下载任务队列接口：添加/一键启动/重试/移除/状态查询/优先级/打开目录。
 
 use crate::error::{ApiResponse, AppError};
+use crate::models::{download_task, operation_log::OperationTarget};
 use crate::services::download::{PageInfo, TaskOutcome};
+use crate::services::conflict_guard::ConflictGuard;
 use crate::state::SharedState;
 use axum::{extract::Query, extract::State, Json};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::error;
@@ -33,6 +36,53 @@ fn ensure_multi_page_started(
     Ok(())
 }
 
+async fn rollback_task_guards(guards: Vec<ConflictGuard>) {
+    for guard in guards {
+        if let Err(error) = guard.rollback().await {
+            tracing::error!("下载任务版本回滚失败: {error}");
+        }
+    }
+}
+
+fn commit_task_guards(guards: Vec<ConflictGuard>) {
+    for guard in guards {
+        guard.commit();
+    }
+}
+
+/// 下载队列的 bvid/type 操作可能同时覆盖多个分P；把它们作为一个版本快照校验。
+async fn guard_task_batch(
+    state: &SharedState,
+    bvid: &str,
+    task_type: &str,
+    expected_version: Option<i32>,
+) -> Result<Vec<ConflictGuard>, AppError> {
+    let tasks = download_task::Entity::find()
+        .filter(download_task::Column::Bvid.eq(bvid))
+        .filter(download_task::Column::TaskType.eq(task_type))
+        .all(&state.infra.db)
+        .await?;
+    if tasks.is_empty() {
+        return Err(AppError::NotFound("未找到下载任务".to_string()));
+    }
+    let mut guards = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        match state
+            .infra
+            .conflict_guard
+            .check_and_bump(OperationTarget::Task, &task.id.to_string(), expected_version)
+            .await
+        {
+            Ok(guard) => guards.push(guard),
+            Err(error) => {
+                rollback_task_guards(guards).await;
+                return Err(error);
+            }
+        }
+    }
+    Ok(guards)
+}
+
 pub(super) async fn queue_metrics(
     State(state): State<SharedState>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
@@ -55,19 +105,37 @@ pub(super) struct PriorityRequest {
     #[serde(rename = "type")]
     task_type: String,
     priority: i32,
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 
 pub(super) async fn set_priority(
     State(state): State<SharedState>,
     Json(request): Json<PriorityRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
+    let guards = guard_task_batch(
+        &state,
+        &request.bvid,
+        &request.task_type,
+        request.expected_version,
+    )
+    .await?;
     let result = state
         .media
         .download_manager
         .set_priority(&request.bvid, &request.task_type, request.priority)
         .await
-        .map_err(|error| AppError::BadRequest(error.to_string()))?;
-    Ok(Json(ApiResponse::success(result)))
+        .map_err(|error| AppError::BadRequest(error.to_string()));
+    match result {
+        Ok(result) => {
+            commit_task_guards(guards);
+            Ok(Json(ApiResponse::success(result)))
+        }
+        Err(error) => {
+            rollback_task_guards(guards).await;
+            Err(error)
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -542,6 +610,8 @@ pub(super) struct RetryDownloadRequest {
     bvid: String,
     #[serde(rename = "type")]
     task_type: String,
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 
 pub(super) async fn retry_download(
@@ -555,11 +625,27 @@ pub(super) async fn retry_download(
         req.bvid, req.task_type
     );
 
+    let guards = guard_task_batch(&state, &req.bvid, &req.task_type, req.expected_version).await?;
     let outcome = state
         .media
         .download_manager
         .retry_task(&req.bvid, &req.task_type)
-        .await?;
+        .await;
+
+    let outcome = match outcome {
+        Ok(outcome) => {
+            if outcome.ok {
+                commit_task_guards(guards);
+            } else {
+                rollback_task_guards(guards).await;
+            }
+            outcome
+        }
+        Err(error) => {
+            rollback_task_guards(guards).await;
+            return Err(error.into());
+        }
+    };
 
     if outcome.ok {
         info!(
@@ -607,6 +693,8 @@ pub(super) struct RemoveDownloadRequest {
     bvid: String,
     #[serde(rename = "type")]
     task_type: String,
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 
 pub(super) async fn remove_download(
@@ -620,11 +708,27 @@ pub(super) async fn remove_download(
         req.bvid, req.task_type
     );
 
+    let guards = guard_task_batch(&state, &req.bvid, &req.task_type, req.expected_version).await?;
     let outcome = state
         .media
         .download_manager
         .remove_task(&req.bvid, &req.task_type)
-        .await?;
+        .await;
+
+    let outcome = match outcome {
+        Ok(outcome) => {
+            if outcome.ok {
+                commit_task_guards(guards);
+            } else {
+                rollback_task_guards(guards).await;
+            }
+            outcome
+        }
+        Err(error) => {
+            rollback_task_guards(guards).await;
+            return Err(error.into());
+        }
+    };
 
     info!(
         "[API] /api/download/remove 完成: bvid={}, type={}",
@@ -658,6 +762,8 @@ pub(super) async fn get_status(
 #[derive(Deserialize)]
 pub(super) struct PauseResumeRequest {
     pub task_id: Option<i32>,
+    #[serde(default)]
+    pub expected_version: Option<i32>,
 }
 
 pub(super) async fn pause_download(
@@ -667,6 +773,25 @@ pub(super) async fn pause_download(
     use tracing::info;
 
     info!("[API] /api/download/pause 请求: task_id={:?}", req.task_id);
+    let guard = if let Some(task_id) = req.task_id {
+        Some(
+            state
+                .infra
+                .conflict_guard
+                .check_and_bump(
+                    OperationTarget::Task,
+                    &task_id.to_string(),
+                    req.expected_version,
+                )
+                .await?,
+        )
+    } else if req.expected_version.is_some() {
+        return Err(AppError::BadRequest(
+            "全局暂停不支持单任务 expected_version".to_string(),
+        ));
+    } else {
+        None
+    };
     let outcome = state
         .media
         .download_manager
@@ -675,7 +800,25 @@ pub(super) async fn pause_download(
         .map_err(|e| {
             error!("/api/download/pause 暂停下载任务失败: {e}");
             AppError::from(e)
-        })?;
+        });
+    let outcome = match outcome {
+        Ok(outcome) => {
+            if let Some(guard) = guard {
+                if outcome.ok {
+                    guard.commit();
+                } else {
+                    rollback_task_guards(vec![guard]).await;
+                }
+            }
+            outcome
+        }
+        Err(error) => {
+            if let Some(guard) = guard {
+                rollback_task_guards(vec![guard]).await;
+            }
+            return Err(error);
+        }
+    };
     if outcome.ok {
         info!("[API] /api/download/pause 完成: {}", outcome.message);
     } else {
@@ -691,6 +834,25 @@ pub(super) async fn resume_download(
     use tracing::info;
 
     info!("[API] /api/download/resume 请求: task_id={:?}", req.task_id);
+    let guard = if let Some(task_id) = req.task_id {
+        Some(
+            state
+                .infra
+                .conflict_guard
+                .check_and_bump(
+                    OperationTarget::Task,
+                    &task_id.to_string(),
+                    req.expected_version,
+                )
+                .await?,
+        )
+    } else if req.expected_version.is_some() {
+        return Err(AppError::BadRequest(
+            "全局恢复不支持单任务 expected_version".to_string(),
+        ));
+    } else {
+        None
+    };
     let outcome = state
         .media
         .download_manager
@@ -699,7 +861,25 @@ pub(super) async fn resume_download(
         .map_err(|e| {
             error!("/api/download/resume 恢复下载任务失败: {e}");
             AppError::from(e)
-        })?;
+        });
+    let outcome = match outcome {
+        Ok(outcome) => {
+            if let Some(guard) = guard {
+                if outcome.ok {
+                    guard.commit();
+                } else {
+                    rollback_task_guards(vec![guard]).await;
+                }
+            }
+            outcome
+        }
+        Err(error) => {
+            if let Some(guard) = guard {
+                rollback_task_guards(vec![guard]).await;
+            }
+            return Err(error);
+        }
+    };
     if outcome.ok {
         info!("[API] /api/download/resume 完成: {}", outcome.message);
     } else {

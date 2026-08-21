@@ -21,7 +21,10 @@
         gap: 8px;
     }
     .header-right {
-        align-self: flex-end;
+        align-self: stretch;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        min-width: 0;
     }
     /* tab 按钮允许换行 */
     .nav-tabs {

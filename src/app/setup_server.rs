@@ -117,17 +117,21 @@ async fn add_setup_security(request: Request<Body>, next: Next) -> Response {
         request.method(),
         &Method::POST | &Method::PUT | &Method::PATCH | &Method::DELETE
     ) {
+        // CSRF 防护必须绑定到当前 Setup 服务的完整 authority（包含端口）。
+        // 仅判断 localhost/127.0.0.1 会放行其它本机端口上的恶意页面。
         let origin_allowed = request
             .headers()
             .get(header::ORIGIN)
             .and_then(|v| v.to_str().ok())
+            .and_then(origin_authority)
             .and_then(|origin| {
-                origin
-                    .strip_prefix("http://")
-                    .or_else(|| origin.strip_prefix("https://"))
+                request
+                    .headers()
+                    .get(header::HOST)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|host| origin.eq_ignore_ascii_case(host.trim()))
             })
-            .and_then(|value| value.split('/').next())
-            .is_some_and(is_loopback_host_header);
+            .unwrap_or(false);
         if !origin_allowed {
             return (
                 StatusCode::FORBIDDEN,
@@ -154,6 +158,24 @@ fn is_loopback_host_header(value: &str) -> bool {
         value.split(':').next().unwrap_or(value)
     };
     matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+fn origin_authority(value: &str) -> Option<&str> {
+    let authority = value.strip_prefix("http://")?;
+    let authority = authority.split('/').next()?;
+    (!authority.is_empty() && is_loopback_host_header(authority)).then_some(authority)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::origin_authority;
+
+    #[test]
+    fn setup_origin_keeps_the_port_in_the_comparison() {
+        assert_eq!(origin_authority("http://127.0.0.1:3001/setup"), Some("127.0.0.1:3001"));
+        assert!(origin_authority("https://127.0.0.1:3001").is_none());
+        assert!(origin_authority("http://127.0.0.1:3002").is_some());
+    }
 }
 
 /// 绑定 Setup 端口：绑定 127.0.0.1（IPv4 回环），带 port fallback。

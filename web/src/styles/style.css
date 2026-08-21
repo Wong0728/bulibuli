@@ -658,6 +658,7 @@ body {
     display: flex;
     align-items: center;
     gap: var(--size-10);
+    flex-wrap: wrap;
     padding: var(--size-10) var(--size-16);
     background: var(--warning-soft);
     border: var(--size-1) solid var(--color-token-63);
@@ -667,6 +668,12 @@ body {
     color: var(--warning);
     flex-shrink: 0;
     animation: fadeIn 0.3s ease;
+}
+
+.cookie-warning-banner > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    line-height: 1.5;
 }
 
 .cookie-warning-banner i {
@@ -683,6 +690,23 @@ body {
 }
 
 .cookie-warning-banner a:hover {
+    color: var(--brand-hover);
+}
+
+.cookie-warning-settings-link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--brand);
+    font: inherit;
+    font-weight: 500;
+    text-decoration: underline;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.cookie-warning-settings-link:hover,
+.cookie-warning-settings-link:focus-visible {
     color: var(--brand-hover);
 }
 
@@ -920,6 +944,11 @@ select.blogger-select::picker(select) {
 }
 
 select.blogger-select {
+    /* base-select 收起态会直接渲染选中 option 的子元素（含头像），
+       select 本身必须是 flex 才能让头像与文字水平对齐而不是各自换行。 */
+    display: flex;
+    align-items: center;
+    gap: var(--size-10);
     width: 100%;
     padding: var(--size-8) var(--size-12);
     min-height: var(--size-36);
@@ -1041,6 +1070,45 @@ select.blogger-select option .opt-meta {
 select.blogger-select option[value=""] {
     color: var(--text-muted);
     font-weight: 400;
+}
+
+/* 选中博主预览（添加监控博主弹窗：下拉下方实时展示头像与名称）。 */
+.known-blogger-preview {
+    display: flex;
+    align-items: center;
+    gap: var(--size-10);
+    margin-top: var(--size-8);
+    padding: var(--size-8) var(--size-10);
+    background: var(--bg);
+    border: var(--size-1) solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: var(--size-13);
+    color: var(--text-muted);
+    min-height: var(--size-44);
+}
+
+.known-blogger-preview img {
+    width: var(--size-28);
+    height: var(--size-28);
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: var(--surface);
+    border: var(--size-1) solid var(--border);
+}
+
+.known-blogger-preview-fallback {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--size-28);
+    height: var(--size-28);
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--surface);
+    border: var(--size-1) solid var(--border);
+    color: var(--text-muted);
+    font-size: var(--size-13);
 }
 
 #manual-cookies {
@@ -1570,7 +1638,8 @@ input:checked + .slider:before {
 }
 
 /* 缩略图样式。 */
-.video-card .video-thumb {
+    .video-card .video-thumb {
+        position: relative;
     width: var(--size-160);
     min-width: var(--size-160);
     height: auto;
@@ -2587,6 +2656,9 @@ tr:hover {
 }
 
 .modal-container.qrcode .qrcode-container {
+    flex-direction: column;
+    gap: var(--size-10);
+    padding: var(--size-10);
     margin: var(--size-20) 0;
     min-height: var(--size-200);
     display: flex;
@@ -2598,11 +2670,33 @@ tr:hover {
 }
 
 .modal-container.qrcode .qrcode-status {
-    position: absolute;
-    background: var(--color-token-65);
+    position: static;
+    background: var(--surface);
+    color: var(--text-secondary);
     padding: var(--size-10);
     border-radius: var(--radius-md);
     font-weight: 600;
+    border: var(--size-1) solid var(--border);
+    max-width: 100%;
+}
+
+.active-window-remove {
+    align-self: end;
+    width: var(--size-28);
+    height: var(--size-28);
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+    background: transparent;
+    cursor: pointer;
+    transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.active-window-remove:hover,
+.active-window-remove:focus-visible {
+    color: var(--error-text);
+    background: var(--error-soft);
 }
 
 /* 二维码状态框不是按钮，成功状态使用浅底深字避免白字融入背景。 */
@@ -2610,6 +2704,13 @@ tr:hover {
     color: var(--success-text);
     background: var(--success-soft);
     border: var(--size-1) solid color-mix(in srgb, var(--success) 35%, transparent);
+}
+
+.modal-container.qrcode .qrcode-status.expired,
+.modal-container.qrcode .qrcode-status.partial {
+    color: var(--error);
+    background: var(--error-soft);
+    border-color: color-mix(in srgb, var(--error) 35%, transparent);
 }
 
 .modal-container.qrcode .qrcode-hint {
@@ -2896,7 +2997,8 @@ tr:hover {
         flex-direction: column;
     }
 
-    .video-card .video-thumb {
+.video-card .video-thumb {
+    position: relative;
         width: 100%;
         max-width: 100%;
         height: auto;
@@ -3399,6 +3501,24 @@ tr:hover {
     font-size: var(--size-12);
     background: var(--surface-hover);
 }
+
+.video-card .video-thumb > img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+}
+
+.video-thumb-fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    background: var(--bg);
+    font-size: var(--size-24);
+}
 .drawer-sidecar .sidecar-icon.ok {
     color: var(--success-text);
 }
@@ -3624,6 +3744,16 @@ tr:hover {
 .sidecar-version-btn small {
     color: var(--text-muted);
     font-size: var(--size-10);
+}
+/* 侧车版本行：查看按钮 + 可选的下载选择控件。 */
+.sidecar-version-row {
+    display: flex;
+    align-items: stretch;
+    gap: var(--size-6);
+}
+.sidecar-version-row .sidecar-version-btn {
+    flex: 1;
+    min-width: 0;
 }
 .drawer-sidecar-result-title {
     display: flex;
@@ -4484,6 +4614,129 @@ tr:hover {
     min-width: var(--size-160);
 }
 
+/* 手动查询结果：沿用旧版的封面网格与分集列表布局。 */
+#tab-manual #manual-result {
+    min-width: 0;
+}
+
+#tab-manual #manual-video-grid {
+    min-height: 0;
+}
+
+#tab-manual .manual-season-result {
+    overflow: hidden;
+}
+
+#tab-manual .manual-season-title {
+    min-width: 0;
+    flex: 1;
+}
+
+#tab-manual .manual-season-title .drawer-info-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#tab-manual .drawer-pages {
+    margin-top: var(--size-16);
+}
+
+#tab-manual .drawer-pages-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--size-10);
+    margin-bottom: var(--size-10);
+}
+
+#tab-manual .drawer-pages-label {
+    color: var(--text);
+    font-size: var(--size-14);
+    font-weight: 600;
+}
+
+#tab-manual .drawer-pages-list {
+    display: grid;
+    gap: var(--size-6);
+    max-height: var(--size-280);
+    overflow-y: auto;
+}
+
+#tab-manual .manual-episode-item {
+    display: flex;
+    align-items: center;
+    gap: var(--size-8);
+    min-width: 0;
+    padding: var(--size-8) var(--size-10);
+    border: var(--size-1) solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+#tab-manual .manual-episode-item:hover {
+    border-color: var(--brand);
+    background: var(--brand-soft);
+}
+
+#tab-manual .manual-episode-item input {
+    flex: 0 0 auto;
+}
+
+#tab-manual .manual-episode-item .drawer-page-index {
+    flex: 0 0 auto;
+    color: var(--brand);
+    font-family: var(--font-custom-11);
+    font-size: var(--size-12);
+    font-weight: 600;
+}
+
+#tab-manual .manual-episode-item .drawer-page-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: var(--size-12);
+}
+
+#tab-manual .manual-episode-badge {
+    flex: 0 0 auto;
+    padding: var(--size-2) var(--size-6);
+    border-radius: var(--radius-sm);
+    background: var(--warning-soft);
+    color: var(--warning);
+    font-size: var(--size-11);
+}
+
+#tab-manual .manual-season-actions .drawer-btn {
+    grid-column: 1 / -1;
+    width: 100%;
+}
+
+@media (max-width: 768px) {
+    #tab-manual .card-title {
+        flex-wrap: wrap;
+    }
+
+    #tab-manual .manual-mode-switch {
+        flex: 1 0 100%;
+        order: 3;
+        justify-content: stretch;
+    }
+
+    #tab-manual .manual-mode-switch .mode-btn {
+        flex: 1;
+        justify-content: center;
+    }
+
+    #tab-manual .drawer-pages-header {
+        align-items: flex-start;
+    }
+}
+
 /* 附加选项。 */
 .drawer-extras {
     display: grid;
@@ -4580,7 +4833,7 @@ tr:hover {
         margin: 0;
     }
 
-    .active-window-row .btn-icon {
+    .active-window-row .active-window-remove {
         grid-column: 3;
         justify-self: end;
     }
@@ -4930,6 +5183,38 @@ tr:hover {
     border-color: var(--brand);
 }
 
+/* 下载优先级 −/＋ 控件：位于暂停/恢复按钮左侧（自老框架 style.css 4999-5020 迁移）。 */
+.board-card-priority {
+    position: absolute;
+    right: var(--size-44);
+    bottom: var(--size-8);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-4);
+}
+.board-card-priority .board-card-action-btn {
+    position: static;
+    width: var(--size-24);
+    height: var(--size-24);
+    font-size: 14px;
+    line-height: 1;
+}
+.board-card-priority-value {
+    min-width: var(--size-24);
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* 下载管理顶栏队列摘要条（自老框架 style.css 5023-5028 迁移）。 */
+.queue-summary {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-right: var(--size-8);
+    white-space: nowrap;
+}
+
 /* sidecar 文件状态图标（视频 / 弹幕 / 字幕）。 */
 .board-card-sidecar {
     display: flex;
@@ -4953,6 +5238,28 @@ tr:hover {
 }
 .board-card-sidecar .sidecar-icon.missing {
     opacity: 0.7;
+}
+
+/* 失败原因 chip：保留标题空间，长错误信息在卡片内截断。 */
+.board-card-failure {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-5);
+    max-width: 100%;
+    padding: var(--size-2) var(--size-7);
+    border-radius: var(--radius-full);
+    background: var(--error-soft);
+    color: var(--error);
+    font-size: var(--size-11);
+    line-height: 1.4;
+}
+.board-card-failure i {
+    flex: 0 0 auto;
+}
+.board-card-failure span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* 文件路径行（仅设置开启时显示）。 */

@@ -216,6 +216,8 @@ fn table_for(target: OperationTarget) -> &'static str {
     match target {
         OperationTarget::Task => "download_tasks",
         OperationTarget::Blogger => "bloggers",
+        OperationTarget::History => "history",
+        OperationTarget::LiveSource => "live_sources",
         OperationTarget::Settings => "settings", // settings 是 KV 表，不参与乐观锁，这里仅为完整性
         OperationTarget::Cookie | OperationTarget::Session => "auth_sessions",
     }

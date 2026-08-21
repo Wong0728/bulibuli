@@ -495,8 +495,12 @@ impl SettingsService {
         Ok(settings)
     }
 
-    pub async fn reset(&self) -> AppResult<Arc<RuntimeSettings>> {
-        self.save_inner(RuntimeSettings::default(), false).await
+    pub async fn reset(&self, expected_revision: Option<u64>) -> AppResult<Arc<RuntimeSettings>> {
+        let mut settings = RuntimeSettings::default();
+        if let Some(revision) = expected_revision {
+            settings.revision = revision;
+        }
+        self.save_inner(settings, expected_revision.is_some()).await
     }
 
     pub async fn cookie_header(&self) -> AppResult<String> {

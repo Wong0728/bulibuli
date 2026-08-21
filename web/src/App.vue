@@ -1,34 +1,26 @@
 <script setup lang="ts">
-import { onMounted, computed, ref } from 'vue';
+import { onMounted, computed, ref, watch } from 'vue';
 import { useAppStore } from './stores/app';
 import { useAuthStore } from './stores/auth';
-import { useBloggerStore } from './stores/blogger';
 import { useDownloadStore } from './stores/download';
-import { useLiveStore } from './stores/live';
-import { useHistoryStore } from './stores/history';
-import { useSetupStore } from './stores/setup';
-import { useSettingsStore } from './stores/settings';
-import { useToastStore } from './stores/toast';
 import TabSearch from './views/TabSearch.vue';
 import TabManual from './views/TabManual.vue';
 import TabAuto from './views/TabAuto.vue';
 import TabHistory from './views/TabHistory.vue';
 import TabLive from './views/TabLive.vue';
 import TabSettings from './views/TabSettings.vue';
+import PairView from './views/PairView.vue';
 import SetupView from './views/SetupView.vue';
 import VideoDrawer from './components/VideoDrawer.vue';
 import ConfirmDialogList from './components/ConfirmDialogList.vue';
 import CookieLoginModals from './components/CookieLoginModals.vue';
 import ToastList from './components/ToastList.vue';
+import { video as videoApi } from './api';
+import { useToastStore } from './stores/toast';
 
 const app = useAppStore();
 const auth = useAuthStore();
-const blogger = useBloggerStore();
 const download = useDownloadStore();
-const live = useLiveStore();
-const history = useHistoryStore();
-const setup = useSetupStore();
-const settings = useSettingsStore();
 const toast = useToastStore();
 
 const tabs = [
@@ -40,93 +32,253 @@ const tabs = [
   { id: 'settings', icon: 'fa-cog', label: '设置' },
 ] as const;
 
-const aria2Status = computed(() => download.health.aria2_ok ? 'connected' : 'disconnected');
-const aria2Title = computed(() => download.health.aria2_ok ? 'aria2 已连接' : 'aria2 未连接');
-const showCookieWarning = computed(() => app.backendAvailable && !auth.isCookieValid);
+const aria2Status = computed(() => download.health.aria2_connected ? 'connected' : 'disconnected');
+const aria2Title = computed(() => download.health.aria2_connected ? 'aria2 已连接' : 'aria2 未连接');
+const cookieWarningDismissed = ref(false);
+const isOwner = computed(() => auth.state.role === 'owner');
+const isViewer = computed(() => auth.state.role === 'viewer');
+const showCookieWarning = computed(() => isOwner.value && app.backendAvailable && auth.cookieStatusLoaded && !auth.isCookieValid && !cookieWarningDismissed.value);
+const cookieWarningText = computed(() => {
+  switch (auth.cookieStatus.state) {
+    case 'risk_control': return 'B 站暂时限制了状态检查，保留当前 Cookie，请稍后重试。';
+    case 'unreachable': return '暂时无法连接 B 站，保留当前 Cookie，请稍后重试。';
+    case 'malformed': return 'B 站返回的数据暂时无法识别，请稍后重试。';
+    default: return auth.cookieStatus.has_cookies
+      ? '当前 B 站登录已失效，请重新登录，部分功能受限（仅能获取低清晰度视频）。'
+      : '未登录 B 站账号，部分功能受限（仅能获取低清晰度视频）。';
+  }
+});
+const cookieLoginPrompt = computed(() => {
+  if (['risk_control', 'unreachable', 'malformed'].includes(auth.cookieStatus.state || '')) return 'B 站状态暂不可用';
+  return auth.cookieStatus.has_cookies ? '登录失效·重新登录' : '未登录·点击登录';
+});
 const serverTitle = computed(() => {
   switch (app.serverStatus) {
+    case 'connected': return '已连接到服务器';
+    case 'connecting': return '正在连接服务器...';
+    default: return '未连接到服务器，请检查后端服务是否已启动';
+  }
+});
+const serverStatusText = computed(() => {
+  switch (app.serverStatus) {
     case 'connected': return '已连接';
-    case 'connecting': return '连接中...';
+    case 'connecting': return '连接中';
     default: return '未连接';
   }
 });
 
-/** 二态：'setup' → 配置向导；'main' → 正常主界面。
- *  - setup.status.completed === false → 'setup'
- *  - 否则 → 'main'（无论是否已认证；未认证用户可在 header 点击登录）
- */
-const phase = ref<'loading' | 'setup' | 'main'>('loading');
+/** 对齐老框架 updateServerStatus：点击状态指示器给出连接反馈 toast。 */
+function onServerStatusClick() {
+  switch (app.serverStatus) {
+    case 'connected': toast.success('服务器连接正常'); break;
+    case 'connecting': toast.info('正在尝试连接服务器...'); break;
+    default: toast.error('无法连接到服务器，请检查后端服务是否已启动');
+  }
+}
 
-onMounted(async () => {
-  await app.bootstrap();
-  // 决定初始 phase
-  const s = await setup.loadStatus();
-  if (s && !s.completed) {
-    phase.value = 'setup';
-  } else {
+/** 先完成设备认证，再进入配置向导或主界面。 */
+const phase = ref<'loading' | 'pair' | 'setup' | 'unavailable' | 'main'>('loading');
+const tabComponents = {
+  search: TabSearch,
+  manual: TabManual,
+  auto: TabAuto,
+  history: TabHistory,
+  live: TabLive,
+  settings: TabSettings,
+} as const;
+const activeTabComponent = computed(() => tabComponents[app.currentTab]);
+
+let enteringApp: Promise<void> | null = null;
+
+function enterAuthenticatedApp() {
+  if (enteringApp) return enteringApp;
+  enteringApp = (async () => {
+    phase.value = 'loading';
+    const result = await app.bootstrap();
+    if (result === 'unavailable') {
+      phase.value = 'unavailable';
+      return;
+    }
+    if (result === 'pair') {
+      phase.value = 'pair';
+      return;
+    }
+    if (result === 'setup') {
+      phase.value = 'setup';
+      return;
+    }
     phase.value = 'main';
-  }
-  // 预拉核心数据
-  if (phase.value === 'main') {
-    // 主题持久化：把后端 appearance.theme 立即反映到 <html>
-    try {
-      await settings.load();
-      const t = (settings.settings as any)?.theme || 'system';
-      document.documentElement.dataset.theme = t;
-    } catch { /* 静默 */ }
-    Promise.allSettled([
-      download.refreshHealth(),
-      blogger.refreshSaved().catch(() => {}),
-      live.refreshDashboard().catch(() => {}),
-    ]);
-  }
+    void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
+  })().finally(() => {
+    enteringApp = null;
+  });
+  return enteringApp;
+}
+
+onMounted(() => { void enterAuthenticatedApp(); });
+
+function onPaired() {
+  // PairView 只有在 auth/state 已确认 authenticated 后才会发出 paired。
+  // 这里绝不再把页面切回 loading；配对成功只做一次稳定的 phase 切换。
+  if (!auth.isAuthenticated) return;
+  phase.value = 'main';
+  app.activateSession();
+  void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
+}
+function onSetupDone() {
+  // Setup 向导完成，进入主界面
+  phase.value = 'main';
+  app.activateSession();
+  void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
+}
+function retryConnection() { void enterAuthenticatedApp(); }
+
+function imageError(event: Event) {
+  const image = event.target as HTMLImageElement;
+  image.hidden = true;
+  image.nextElementSibling?.removeAttribute('hidden');
+}
+
+function imageUrl(url?: string) {
+  return url ? videoApi.proxyImage(url) : '';
+}
+
+const viewerLocalActions = new Set([
+  'switch-tab', 'switch-board-tab', 'switch-live-board',
+  'close-video-drawer', 'close-blogger-modal', 'close-add-blogger-modal',
+  'close-edit-blogger-modal', 'close-blogger-notice-modal', 'close-qr-modal',
+  'dismiss-network-toast', 'dismiss-cookie-warning', 'toggle-manual-cookie',
+  'add-time-point', 'remove-time-point', 'select-quality', 'toggle-all-pages',
+  'toggle-page', 'toggle-all-episodes', 'browser-download-master', 'browser-download-check',
+  'toggle-file',
+]);
+
+function guardViewerMutation(event: Event) {
+  if (!isViewer.value) return;
+  const source = event.target instanceof Element ? event.target : null;
+  if (!source) return;
+  const actionTarget = source.closest<HTMLElement>('[data-action]');
+  const action = actionTarget?.dataset.action;
+  const formControl = source.closest('input, select, textarea');
+  const lockedTarget = source.closest('[data-mutating], [data-network-required]');
+  // Viewer 仍可操作不会触发后端写入的本地表单控件（例如从已添加博主载入配置）。
+  if (source.closest('[data-viewer-local]')) return;
+  if (!action && !formControl && !lockedTarget) return;
+  if (action && viewerLocalActions.has(action)) return;
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+/** 老框架 network.js LOCAL_ONLY_ACTIONS：离线/后端不可用时仍可用的纯本地 UI 操作
+ * （关弹窗、切视图、本地编辑与勾选）。其余一律拦截。 */
+const networkLocalActions = new Set([
+  'switch-tab', 'switch-board-tab',
+  'close-video-drawer', 'close-blogger-modal', 'close-add-blogger-modal',
+  'close-edit-blogger-modal', 'close-qr-modal', 'close-blogger-notice-modal',
+  'dismiss-network-toast', 'dismiss-cookie-warning',
+  'toggle-manual-cookie', 'add-time-point', 'remove-time-point',
+  'select-quality', 'toggle-all-pages', 'toggle-all-episodes',
+  'browser-download-master', 'browser-download-check',
+]);
+
+/** 老框架 network.js updateNetworkDisabledButtons 的三类禁用目标：
+ * data-action（白名单外）、data-network-required（直播页等无 data-action 控件）、
+ * 独立按钮 id（搜索/刷新等）。 */
+const NETWORK_GUARD_SELECTOR = [
+  '[data-action]', '[data-network-required]',
+  '#blogger-search-btn', '#manual-query-btn', '#manual-resolve-btn',
+  '#show-add-blogger-btn', '#detail-start-btn', '#detail-stop-btn', '#board-refresh-btn',
+].join(', ');
+
+/** 对齐老框架 network.js：离线/后端不可用时拦截需要后端的控件，
+ * 并通过 checkNetworkBeforeAction 弹出唯一持续离线 toast。 */
+function guardNetworkAction(event: Event) {
+  if (!app.networkControlsLocked) return;
+  const source = event.target instanceof Element ? event.target : null;
+  if (!source) return;
+  const locked = source.closest<HTMLElement>(NETWORK_GUARD_SELECTOR);
+  if (!locked) return;
+  // 纯本地 UI 操作（关弹窗/切视图/本地勾选）放行。
+  if (locked.dataset.action && networkLocalActions.has(locked.dataset.action)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  app.checkNetworkBeforeAction();
+}
+
+/** 主容器统一捕获点击：网络降级守卫与 viewer 只读守卫共用一个 capture 入口。 */
+function onContainerClickCapture(event: Event) {
+  guardNetworkAction(event);
+  guardViewerMutation(event);
+}
+
+watch(() => auth.isAuthenticated, (authenticated) => {
+  if (phase.value !== 'main' || authenticated) return;
+  app.disconnectSocket();
+  phase.value = 'pair';
 });
 
-/** 监听 setup 完成事件，切换到主界面。 */
-function onSetupDone() { phase.value = 'main'; }
 </script>
 
 <template>
   <a class="skip-link" href="#main-content">跳转到主要内容</a>
 
-  <!-- Setup 阶段：替换整个主界面 -->
-  <SetupView v-if="phase === 'setup'" @done="onSetupDone" />
+  <!-- 初始化阶段保持稳定占位，避免认证请求完成前出现空白闪变。 -->
+  <div v-if="phase === 'loading'" class="app-loading" aria-live="polite">
+    <span class="loading" aria-hidden="true"></span>
+    <span>正在连接服务…</span>
+  </div>
 
-  <div v-else-if="phase === 'main'" class="container">
+  <div v-else-if="phase === 'unavailable'" class="app-unavailable" role="alert">
+    <i class="fa-solid fa-plug-circle-xmark" aria-hidden="true"></i>
+    <h1>暂时无法连接服务</h1>
+    <p>后端尚未就绪，配对状态不会被误判为未配对。</p>
+    <button class="btn btn-primary" @click="retryConnection">重新连接</button>
+  </div>
+
+  <!-- Setup 向导：首次启动未完成时显示 -->
+  <SetupView v-else-if="phase === 'setup'" @done="onSetupDone" />
+
+  <PairView v-else-if="phase === 'pair'" @paired="onPaired" />
+
+  <div v-else-if="phase === 'main'" class="container" :class="{ 'session-viewer': isViewer, 'session-operator': auth.state.role === 'operator', 'network-degraded': app.networkControlsLocked }"
+       @click.capture="onContainerClickCapture" @beforeinput.capture="guardViewerMutation" @change.capture="guardViewerMutation">
     <header class="header">
       <div class="header-left">
         <h1>补哩补哩 <span class="brand-latin">bulibuli</span></h1>
         <p>下架之前，先下为敬。　博主搜索 / 手动查询 / 自动任务 / 下载管理 / 直播 / 设置</p>
+        <p class="migration-links"><a href="/legacy/" rel="nofollow">遇到问题？打开旧版</a></p>
       </div>
       <div class="header-right">
-        <div class="login-user-card" :hidden="!auth.isAuthenticated">
-          <img v-if="auth.state.user?.face" :src="auth.state.user.face" class="login-user-avatar" alt="avatar" />
-          <span>{{ auth.state.user?.name || '已登录' }}</span>
+        <div id="login-user-card" class="login-user-card" :hidden="!isOwner || !auth.isCookieValid">
+          <template v-if="auth.biliUser?.face">
+            <img :src="imageUrl(auth.biliUser.face)" class="login-user-face" alt="avatar" @error="imageError" />
+            <span class="login-user-face login-user-face-ph" hidden><i class="fa-solid fa-user"></i></span>
+          </template>
+          <span v-else class="login-user-face login-user-face-ph"><i class="fa-solid fa-user"></i></span>
+          <div class="login-user-meta">
+            <span class="login-user-name">{{ auth.biliUser?.name || '已登录' }}</span>
+            <span class="login-user-sub">Lv{{ auth.cookieStatus.level || 0 }}<span v-if="auth.cookieStatus.vip_status"> · {{ auth.cookieStatus.vip_label || '大会员' }}</span></span>
+          </div>
+          <button class="login-switch-btn" title="切换账号" @click="app.openCookieLogin()"><i class="fa-solid fa-right-left"></i></button>
         </div>
-        <button class="login-prompt-btn" :hidden="auth.isAuthenticated" @click="app.openCookieLogin()">
-          <i class="fa-solid fa-user"></i> 未登录·点击登录
+        <button id="login-prompt-btn" class="login-prompt-btn" :hidden="!isOwner || !auth.cookieStatusLoaded || auth.isCookieValid" @click="app.openCookieLogin()">
+          <i class="fa-solid fa-user"></i> {{ cookieLoginPrompt }}
         </button>
-        <span class="server-status" :class="app.serverStatus" :title="serverTitle">
+        <span id="server-status-indicator" class="server-status" :class="app.serverStatus" :title="serverTitle" @click="onServerStatusClick">
           <span class="server-status-dot"></span>
-          <span class="server-status-text">{{ serverTitle }}</span>
+          <span class="server-status-text">{{ serverStatusText }}</span>
         </span>
       </div>
     </header>
 
-    <div v-if="showCookieWarning" class="cookie-warning-banner">
+    <div v-if="showCookieWarning" id="cookie-warning-banner" class="cookie-warning-banner">
       <i class="fa-solid fa-exclamation-triangle"></i>
-      <span>未配置有效的 Cookies，部分功能受限（仅能获取低清晰度视频）。</span>
-      <button class="cookie-warning-settings-link" @click="app.setTab('settings')">点击前往设置</button>
-      <button class="cookie-warning-close" @click="auth.setCookieStatus({ configured: true, valid: true })" title="关闭">×</button>
+      <span>{{ cookieWarningText }}</span>
+      <button id="cookie-warning-settings-link" class="cookie-warning-settings-link" @click="app.setTab('settings')">点击前往设置</button>
+      <button class="cookie-warning-close" @click="cookieWarningDismissed = true" title="关闭">×</button>
     </div>
 
-    <div v-if="app.riskNotice" class="cookie-warning-banner" style="background: var(--tone-error-bg, #fff3f3); color: var(--tone-error, #c0392b);">
-      <i class="fa-solid fa-shield-halved"></i>
-      <span>B站风控触发：{{ app.riskNotice }}</span>
-      <button class="cookie-warning-close" @click="app.dismissRiskNotice()" title="关闭">×</button>
-    </div>
-
-    <div v-if="app.networkBannerVisible" class="network-error-banner">
+    <div v-if="app.networkBannerVisible" id="network-error-banner" class="network-error-banner show">
       <i class="fa-solid fa-wifi network-banner-icon"></i>
       <span>网络连接异常，部分功能不可用，请检查网络或后端服务状态</span>
     </div>
@@ -142,17 +294,17 @@ function onSetupDone() { phase.value = 'main'; }
               :tabindex="app.currentTab === t.id ? 0 : -1"
               @click="app.setTab(t.id)">
         <i class="fa-solid" :class="t.icon"></i> {{ t.label }}
-        <span v-if="t.id === 'history'" id="aria2-status-dot-history" class="aria2-dot" :class="aria2Status" :title="aria2Title"></span>
+            <span v-if="t.id === 'history'" id="aria2-status-dot" class="aria2-dot" :class="aria2Status" :title="aria2Title"></span>
       </button>
     </nav>
 
     <main id="main-content">
-      <TabSearch :class="{ active: app.currentTab === 'search' }" :hidden="app.currentTab !== 'search'" />
-      <TabManual :class="{ active: app.currentTab === 'manual' }" :hidden="app.currentTab !== 'manual'" />
-      <TabAuto :class="{ active: app.currentTab === 'auto' }" :hidden="app.currentTab !== 'auto'" />
-      <TabHistory :class="{ active: app.currentTab === 'history' }" :hidden="app.currentTab !== 'history'" />
-      <TabLive :class="{ active: app.currentTab === 'live' }" :hidden="app.currentTab !== 'live'" />
-      <TabSettings :class="{ active: app.currentTab === 'settings' }" :hidden="app.currentTab !== 'settings'" />
+      <!-- 只挂载当前 Tab；KeepAlive 保留表单状态，同时停止隐藏页面的轮询。 -->
+      <KeepAlive>
+        <component :is="activeTabComponent" class="active"
+                   :id="`tab-${app.currentTab}`" role="tabpanel"
+                   :aria-labelledby="`tab-${app.currentTab}-label`" />
+      </KeepAlive>
     </main>
 
     <VideoDrawer />
@@ -165,4 +317,11 @@ function onSetupDone() { phase.value = 'main'; }
 <style scoped>
 .skip-link { position: absolute; left: -9999px; }
 .skip-link:focus { left: 8px; top: 8px; background: var(--bulibuli-brand, #00aeec); color: #fff; padding: 6px 12px; z-index: 9999; }
+.app-loading { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; gap: 10px; color: var(--text-secondary); }
+.app-unavailable { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; align-content: center; gap: 10px; padding: 24px; color: var(--text-secondary); text-align: center; }
+.app-unavailable > i { color: var(--error); font-size: 32px; }
+.app-unavailable h1 { margin: 0; color: var(--text); font-size: 22px; }
+.app-unavailable p { margin: 0 0 8px; }
+.migration-links { margin-top: 6px; font-size: 12px; }
+.migration-links a { color: var(--bulibuli-brand, #00aeec); text-decoration: none; }
 </style>

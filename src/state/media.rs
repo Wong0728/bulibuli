@@ -45,7 +45,9 @@ impl MediaState {
             bili.bili_api.clone(),
         ));
         let aria2 = Arc::new(Aria2Manager::new(infra.paths.clone(), &infra.config)?);
-        let burn_tasks = Arc::new(Mutex::new(HashMap::new()));
+        let burn_tasks = Arc::new(Mutex::new(
+            crate::models::burn::restore_burn_tasks(&infra.db).await?,
+        ));
         let burn_semaphore = Arc::new(Semaphore::new(2));
 
         let download_manager = Arc::new(

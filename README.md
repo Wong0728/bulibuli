@@ -8,6 +8,8 @@
 
 补哩补哩是一个基于 Rust/Axum 的 B 站视频监控、补档下载、直播监控与直播录制工具。当前主线是 Rust v2 Alpha，支持 Windows、Linux、macOS Intel、macOS Apple Silicon，以及 Android arm64/Termux 云端预编译包。
 
+**前端架构**：主界面是 Vue 3 + Vite + Pinia + Vue Router 工程（位于 `web/`，构建产物落到 `static/app/`）；旧版 vanilla-JS 仍在 `static/js/`（`static/dist/app.bundle.js`）保留作为 `/legacy/` 路径下的兼容兜底，方便在新版功能尚未补齐的窗口期回退。根路由 `/` 已切到新版；旧版只在显式访问 `/legacy/` 时可见。新版构建步骤见「从源码开发」一节。
+
 ## 从 Releases 安装
 
 打开 [GitHub Releases](https://github.com/Wong0728/bulibuli/releases)，下载与你的系统和 CPU 架构对应的 `portable` 归档，并下载同名 `.sha256` 文件。先校验 SHA-256，再解压到一个有写权限的目录。
@@ -159,17 +161,29 @@ Linux/macOS 将 `bulibuli.exe` 替换为 `./bulibuli`。完整命令清单见 [`
 
 ## 从源码开发
 
-要求：Rust 1.97.1、Python 3.11+、Node.js 22+。Rust 版本由 `rust-toolchain.toml` 固定；前端依赖位于 `static/js`。
+要求：Rust 1.97.1、Python 3.11+、Node.js 22+。Rust 版本由 `rust-toolchain.toml` 固定。
+
+- **新版 Vue 3 前端**（`web/` → `static/app/`，`/` 主路由）：`cd web && npm ci --ignore-scripts && npm run build`；CI 与 `python build.py` 会自动跑这一步。
+- **旧版 vanilla-JS 前端**（`static/js/` → `static/dist/app.bundle.js`，`/legacy/` 兼容入口）：`cd static/js && npm ci --ignore-scripts && npm run build`；保留期间仍是 `python build.py` 的默认构建步骤，可通过 `--skip-frontend-legacy` 跳过。
+
+常用命令：
 
 ```bash
 cargo test --all-targets
-cd static/js
-npm ci --ignore-scripts
-npm run build
-npm run test:smoke
-cd ../..
+cd web && npm ci --ignore-scripts && npm run build && cd ..
+cd static/js && npm ci --ignore-scripts && npm run build && cd ../..
 python build.py --check
 python build.py --portable
+```
+
+跳过某个前端的写法：
+
+```bash
+# 只构建 Vue 3（旧版用现有产物）
+python build.py --skip-frontend-legacy --portable
+
+# 跳过所有前端构建
+python build.py --skip-frontend --portable
 ```
 
 `python build.py --portable` 会生成桌面平台完整自包含包，或生成不内置媒体运行时的 Termux Android arm64 包；桌面 Unix 包缺少 aria2c、FFmpeg 或必要动态库时会拒绝组装。`python build.py --core` 生成不含媒体运行时的轻量命令包。每个包都会生成 `bulibuli.package.json`，记录版本、平台、架构、包类型和文件 SHA-256。推送 `v*` tag 后由独立的 Release 工作流构建并上传 Windows/Linux/macOS `portable` 包、Termux arm64 包、Windows/Linux `core` 包及 `latest.json`；已有 tag 也可以从 Actions 手动补发。详见 [云端发布架构](docs/user/RELEASES.md)。

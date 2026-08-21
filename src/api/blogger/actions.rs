@@ -15,15 +15,12 @@ pub(super) async fn cleanup_now(
     State(state): State<SharedState>,
     Json(req): Json<CleanupNowRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = req.uid.trim();
-    if uid.is_empty() {
-        return Err(AppError::BadRequest("请提供博主UID".to_string()));
-    }
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?.as_str().to_owned();
     info!("[API] /api/blogger/cleanup-now 触发博主 {uid} 保留数清理");
     state
         .business
         .blogger_service
-        .enforce_retain(uid)
+        .enforce_retain(&uid)
         .await
         .map_err(|error| {
             warn!("[API] /api/blogger/cleanup-now 失败 {uid}: {error}");
@@ -41,14 +38,11 @@ pub(super) async fn acknowledge_profile_change(
     State(state): State<SharedState>,
     Json(req): Json<AcknowledgeRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = req.uid.trim();
-    if uid.is_empty() {
-        return Err(AppError::BadRequest("请提供博主UID".to_string()));
-    }
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?.as_str().to_owned();
     state
         .business
         .blogger_service
-        .acknowledge_profile_change(uid)
+        .acknowledge_profile_change(&uid)
         .await?;
     Ok(Json(ApiResponse::with_message(json!({}), "已确认")))
 }

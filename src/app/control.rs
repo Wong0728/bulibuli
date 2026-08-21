@@ -2002,11 +2002,12 @@ fn parse_target_type(s: &str) -> AppResult<OperationTarget> {
     match s {
         "task" => Ok(OperationTarget::Task),
         "blogger" => Ok(OperationTarget::Blogger),
+        "history" => Ok(OperationTarget::History),
         "settings" => Ok(OperationTarget::Settings),
         "cookie" => Ok(OperationTarget::Cookie),
         "session" => Ok(OperationTarget::Session),
         other => Err(AppError::BadRequest(format!(
-            "target_type 必须是 task|blogger|settings|cookie|session，收到 `{other}`"
+            "target_type 必须是 task|blogger|history|settings|cookie|session，收到 `{other}`"
         ))),
     }
 }

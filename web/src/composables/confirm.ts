@@ -32,3 +32,12 @@ export function resolveConfirm(req: ConfirmRequest, value: boolean) {
   req.resolve(value);
   confirmDialogs.value = confirmDialogs.value.filter(r => r !== req);
 }
+
+/**
+ * 按标题关闭当前激活的确认弹窗（对齐老框架 download-status.js closeConfirmDialog）。
+ * 仅当最前弹窗标题匹配时关闭，用于 WS 事件（如磁盘恢复）自动收掉对应系统弹窗。
+ */
+export function closeConfirmByTitle(title: string) {
+  const current = confirmDialogs.value[0];
+  if (current && current.title === title) resolveConfirm(current, false);
+}

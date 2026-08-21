@@ -9,6 +9,8 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { auth as authApi, cookies as cookiesApi } from '@/api';
+import { setCsrfToken, postFull, NETWORK_ERR_MSG } from '../api/client';
+import { useToastStore } from './toast';
 import type { AuthState, CookieStatus } from '@/api/types';
 
 export interface BloggerLogEntry {
@@ -18,46 +20,103 @@ export interface BloggerLogEntry {
 }
 
 export const useAuthStore = defineStore('auth', () => {
+  const toast = useToastStore();
   const state = ref<AuthState>({ authenticated: false });
-  const cookieStatus = ref<CookieStatus>({ configured: false, valid: false });
+  const cookieStatus = ref<CookieStatus>({ configured: false, has_cookies: false, valid: false });
+  const cookieStatusLoaded = ref(false);
   const subscribedBloggerUid = ref<number | null>(null);
   const bloggerLogs = ref<BloggerLogEntry[]>([]);
   const knownBloggerChange = ref<Map<number, { name?: string; face?: string; ts: number }>>(new Map());
-  const knownBloggers = ref<Array<{ uid: number; name: string; face?: string }>>([]);
 
-  function setAuthState(s: AuthState) { state.value = s; }
-  function setCookieStatus(s: CookieStatus) { cookieStatus.value = s; }
+  function setAuthState(s: AuthState) {
+    state.value = s;
+    setCsrfToken(s.authenticated ? s.csrf_token : null);
+  }
+  function normalizeCookieStatus(raw?: Partial<CookieStatus> | null): CookieStatus {
+    const hasCookies = raw?.has_cookies ?? raw?.configured ?? false;
+    return {
+      ...raw,
+      configured: hasCookies,
+      has_cookies: hasCookies,
+      valid: raw?.valid === true,
+    };
+  }
+
+  function setCookieStatus(s: CookieStatus | null) {
+    const normalized = normalizeCookieStatus(s);
+    cookieStatus.value = normalized;
+    cookieStatusLoaded.value = true;
+    if (state.value.authenticated && normalized.valid && normalized.uname) {
+      state.value = {
+        ...state.value,
+        user: {
+          mid: normalized.mid,
+          name: normalized.uname,
+          face: normalized.face,
+        },
+      };
+    }
+  }
 
   async function refreshAuth() {
     try {
       const r = await authApi.state();
-      if (r) state.value = r as AuthState;
-      else state.value = { authenticated: false };
+      if (r) setAuthState(r as AuthState);
+      else setAuthState({ authenticated: false });
     } catch {
-      state.value = { authenticated: false };
+      setAuthState({ authenticated: false });
     }
+  }
+
+  async function pair(code: string, deviceName = '') {
+    const result = await authApi.pair(code, deviceName || undefined);
+    if (!(result as any)?.paired) throw new Error('配对未完成，请检查配对码');
+    // 配对响应已经写入 session cookie；由 App 重新拉取 auth/state，
+    // 一次性取得真实的 CSRF token 和会话角色，避免中间态触发入口抖动。
+    return true;
   }
 
   async function refreshCookieStatus() {
     try {
       const r = await cookiesApi.status();
-      if (r) cookieStatus.value = r as CookieStatus;
-      else cookieStatus.value = { configured: false, valid: false };
+      setCookieStatus(r as CookieStatus | null);
     } catch {
-      cookieStatus.value = { configured: false, valid: false };
+      // 状态检查是上游请求；失败时保留“已配置”事实，避免把临时网络问题闪成未登录。
+      setCookieStatus({ ...cookieStatus.value, valid: false, state: 'unreachable' });
     }
   }
 
-  async function logout() {
-    try { await authApi.logout(); } catch { /* 静默 */ }
-    await refreshAuth();
+  /** 终态挂起：成功后页面即将整页 reload，失败时也不允许调用方继续执行 await 后的语句
+   * （防止 TabSettings 过渡态弹过时的成功 toast）。用户重新点击按钮会发起新调用，无死锁。 */
+  const NEVER = new Promise<never>(() => {});
+
+  async function logoutAccount() {
+    // 对齐老框架 bootstrap.js logoutAccount：单步「清 B 站 Cookie → 注销设备会话 → 整页 reload」。
+    // 确认弹窗由调用方负责（老框架文案：确定要退出当前 B 站账号登录吗？退出后需重新扫码或粘贴 Cookie。）
+    try {
+      // 先清 B 站 Cookie（此时会话仍有效）。client 在 code!==0 时抛错，
+      // 等价老框架 cookieResult.code !== 0 → toast(message || '退出失败') 分支。
+      await postFull('/api/cookies/save', { cookies: '' });
+      // 注销当前设备会话（撤销配对令牌 + 断开 WS）。只清 Cookie 会让会话在
+      // 有效期内仍可用，必须补调后端 /api/auth/logout。
+      await postFull('/api/auth/logout', {});
+      toast.success('已退出登录，设备会话已注销');
+      // 会话 Cookie 已被后端清除，刷新回到配对/登录页。
+      window.location.reload();
+    } catch (e: any) {
+      // 对齐老框架 formatError('退出登录', e)：网络失败用全局网络文案，其余用后端 message。
+      toast.error(e?.code === 0 ? NETWORK_ERR_MSG : `退出登录：${e?.message || '未知错误'}`);
+    }
+    await NEVER;
   }
 
+  /** 旧入口别名：TabSettings（白名单外）仍调用这两个名字，行为统一为完整退出登录。 */
+  async function logoutDevice() { await logoutAccount(); }
+  async function logoutBiliAccount() { await logoutAccount(); }
+
   async function saveCookies(content: string) {
-    try {
-      // 后端字段名是 `cookies`，不是 `content`
-      await cookiesApi.save(content);
-    } catch { /* 静默 */ }
+    // 后端字段名是 `cookies`，不是 `content`；主动保存失败必须交给 UI 提示。
+    await cookiesApi.save(content);
     await refreshCookieStatus();
   }
 
@@ -83,19 +142,19 @@ export const useAuthStore = defineStore('auth', () => {
     knownBloggerChange.value = new Map();
   }
 
-  function setKnownBloggers(list: Array<{ uid: number; name: string; face?: string }>) {
-    knownBloggers.value = list;
-  }
-
   const noticeCount = computed(() => knownBloggerChange.value.size);
   const isAuthenticated = computed(() => state.value.authenticated);
-  const isCookieValid = computed(() => cookieStatus.value.configured && cookieStatus.value.valid);
+  const isCookieValid = computed(() => cookieStatus.value.has_cookies === true && cookieStatus.value.valid === true);
+  const biliUser = computed(() => cookieStatus.value.valid ? {
+    mid: cookieStatus.value.mid,
+    name: cookieStatus.value.uname,
+    face: cookieStatus.value.face,
+  } : null);
 
   return {
-    state, cookieStatus, subscribedBloggerUid, bloggerLogs, knownBloggerChange, knownBloggers,
+    state, cookieStatus, cookieStatusLoaded, biliUser, subscribedBloggerUid, bloggerLogs, knownBloggerChange,
     noticeCount, isAuthenticated, isCookieValid,
-    setAuthState, setCookieStatus, refreshAuth, refreshCookieStatus, logout, saveCookies,
+    setAuthState, setCookieStatus, refreshAuth, pair, refreshCookieStatus, logoutAccount, logoutDevice, logoutBiliAccount, saveCookies,
     appendBloggerLog, clearBloggerLogs, setKnownBloggerChange, acknowledgeBloggerChange, acknowledgeAllBloggerChanges,
-    setKnownBloggers,
   };
 });

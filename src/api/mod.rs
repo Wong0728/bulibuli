@@ -55,6 +55,12 @@ pub fn router() -> Router<SharedState> {
         .merge(live::router())
         .merge(foundation::router())
         .merge(update::router())
+        // Setup 向导 API 同时挂到主端口：新框架 SPA（SetupView）在主端口同源调用
+        // /api/setup/*，否则未完成初始化的用户在 SPA 内全部 404。
+        // 独立 setup 端口（app/setup_server.rs）仍直接引用 setup::router()，行为不变。
+        // 主端口上这些接口与其它 /api/* 一致，走 enforce_request_security 的
+        // 会话认证 + CSRF/Origin 校验；免认证入口始终是仅回环的独立 setup 端口。
+        .merge(setup::router())
 }
 
 #[cfg(test)]

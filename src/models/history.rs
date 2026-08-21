@@ -129,6 +129,7 @@ impl Model {
             "auto_burn_next_retry_at": self.auto_burn_next_retry_at.map(|t| t.to_rfc3339()),
             "sidecar_attempts": self.sidecar_attempts,
             "next_sidecar_at": self.next_sidecar_at.map(|t| t.to_rfc3339()),
+            "version": self.version,
         })
     }
 }

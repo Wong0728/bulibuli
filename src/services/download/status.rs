@@ -79,13 +79,17 @@ impl DownloadManager {
             query = query.filter(download_task::Column::Bvid.is_in(bvids));
         }
         let recent_cutoff = Local::now() - Duration::hours(24);
+        // 非终态任务（含 paused/merging）不设 24 小时时限：长期暂停的任务不能从快照里消失，
+        // 否则前端全量替换后会丢失暂停态，恢复按钮找不到 task_id。
         let tasks = query
             .filter(
                 Condition::any()
                     .add(download_task::Column::Status.is_in([
                         "pending",
                         "downloading",
+                        "paused",
                         "retrying",
+                        "merging",
                     ]))
                     .add(download_task::Column::UpdatedAt.gte(recent_cutoff)),
             )
@@ -151,6 +155,7 @@ impl DownloadManager {
                     "status": status,
                     "terminal": status.is_terminal(),
                     "task_id": t.id,
+                    "version": t.version,
                     "priority": t.priority,
                     "progress_percent": task_info.download.progress_percent,
                     "downloaded_size": task_info.download.downloaded_size,
@@ -260,6 +265,7 @@ impl DownloadManager {
         let (step, total_steps, step_label) = Self::compute_step_info(task);
 
         let mut payload = json!({
+            "task_id": task.id,
             "bvid": bvid,
             "cid": task.cid,
             "page": task.page,

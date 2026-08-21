@@ -266,9 +266,15 @@ fn validate_sensitive_settings(
 
 async fn reset_settings(
     State(state): State<SharedState>,
+    body: Option<Json<ResetSettingsRequest>>,
 ) -> Result<Json<ApiResponse<RuntimeSettings>>, AppError> {
     let before = state.infra.settings_service.current();
-    let settings = state.infra.settings_service.reset().await?;
+    let request = body.map(|Json(value)| value).unwrap_or_default();
+    let settings = state
+        .infra
+        .settings_service
+        .reset(request.expected_revision)
+        .await?;
     // 仅 MonitorService 有 TTL 缓存需失效（见 save_settings 说明）。
     state
         .business
@@ -283,6 +289,12 @@ async fn reset_settings(
         settings_for_response(settings.as_ref()),
         message,
     )))
+}
+
+#[derive(Deserialize, Default)]
+struct ResetSettingsRequest {
+    #[serde(default)]
+    expected_revision: Option<u64>,
 }
 
 #[derive(Deserialize)]

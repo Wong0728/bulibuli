@@ -16,6 +16,19 @@ use std::path::{Path, PathBuf};
 use tracing::error;
 use uuid::Uuid;
 
+async fn persist_burn_snapshot(
+    db: &sea_orm::DatabaseConnection,
+    tasks: &crate::state::media::BurnTasks,
+    task_id: &str,
+) {
+    let task = tasks.lock().await.get(task_id).cloned();
+    if let Some(task) = task {
+        if let Err(error) = crate::models::burn::persist_burn_task(db, task_id, &task).await {
+            error!(task_id, "持久化烧录任务状态失败: {error}");
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub(super) struct BurnRequest {
     bvid: String,
@@ -126,25 +139,28 @@ async fn spawn_burn(
     let source_for_spawn = source.clone();
     let history_id_for_spawn = history.as_ref().map(|history| history.id);
 
-    {
+    let initial_task = {
         let mut tasks = burn_tasks.lock().await;
         crate::models::burn::prune_burn_tasks(&mut tasks);
         let now = chrono::Utc::now().timestamp();
-        tasks.insert(
-            task_id.clone(),
-            BurnTask {
-                bvid: bvid_string.clone(),
-                status: "queued".to_string(),
-                message: "烧录任务已排队".to_string(),
-                output_path: None,
-                created_at: now,
-                updated_at: now,
-            },
-        );
-    }
+        let task = BurnTask {
+            bvid: bvid_string.clone(),
+            status: "queued".to_string(),
+            message: "烧录任务已排队".to_string(),
+            output_path: None,
+            created_at: now,
+            updated_at: now,
+        };
+        tasks.insert(task_id.clone(), task.clone());
+        task
+    };
+    crate::models::burn::persist_burn_task(&infra.db, &task_id, &initial_task)
+        .await
+        .map_err(|error| AppError::Internal(format!("保存烧录任务失败: {error}")))?;
 
     let task_id_for_spawn = task_id.clone();
     let download_dir = infra.paths.download_dir.clone();
+    let db = infra.db.clone();
     tokio::spawn(async move {
         let Ok(_permit) = burn_semaphore.acquire_owned().await else {
             let mut tasks = burn_tasks.lock().await;
@@ -153,6 +169,8 @@ async fn spawn_burn(
                 task.message = "烧录队列已关闭".to_string();
                 task.updated_at = chrono::Utc::now().timestamp();
             }
+            drop(tasks);
+            persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
             return;
         };
         {
@@ -163,6 +181,7 @@ async fn spawn_burn(
                 t.updated_at = chrono::Utc::now().timestamp();
             }
         }
+        persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
         monitor_service
             .add_log(
                 None,
@@ -194,6 +213,7 @@ async fn spawn_burn(
                     t.updated_at = chrono::Utc::now().timestamp();
                 }
                 drop(tasks);
+                persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
 
                 if success {
                     let result = match history_id_for_spawn {
@@ -242,6 +262,7 @@ async fn spawn_burn(
                     t.updated_at = chrono::Utc::now().timestamp();
                 }
                 drop(tasks);
+                persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
                 monitor_service
                     .add_log(
                         None,
@@ -319,6 +340,12 @@ pub(super) async fn burn_status(
     let task = tasks.get(&task_id).cloned();
     drop(tasks);
 
+    let task = match task {
+        Some(task) => Some(task),
+        None => crate::models::burn::find_burn_task(&state.infra.db, &task_id)
+            .await
+            .map_err(AppError::from)?,
+    };
     match task {
         Some(t) => Ok(Json(ApiResponse::success(json!({
             "task_id": task_id,

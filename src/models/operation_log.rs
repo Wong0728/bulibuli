@@ -70,6 +70,8 @@ impl OperationOutcome {
 pub enum OperationTarget {
     Task,
     Blogger,
+    History,
+    LiveSource,
     Settings,
     Cookie,
     Session,
@@ -80,6 +82,8 @@ impl OperationTarget {
         match self {
             Self::Task => "task",
             Self::Blogger => "blogger",
+            Self::History => "history",
+            Self::LiveSource => "live_source",
             Self::Settings => "settings",
             Self::Cookie => "cookie",
             Self::Session => "session",

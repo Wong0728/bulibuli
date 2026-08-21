@@ -11,7 +11,7 @@
  */
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { setup as setupApi, foundation as foundationApi } from '@/api';
+import { setup as setupApi } from '@/api';
 
 export type SetupMode = 'local' | 'lan' | 'proxy';
 
@@ -44,17 +44,6 @@ export const useSetupStore = defineStore('setup', () => {
       }
     } catch { /* 静默 */ }
     return null;
-  }
-
-  /** foundation.status 是只读摘要：先看后端是否处于已配置状态。
-   *  后端 foundation.status 返回 { configuration_status, ... }，未配置时
-   *  configuration_status = "unconfigured"（如果后端支持），否则走 setup.status。 */
-  async function loadFoundation(): Promise<boolean> {
-    try {
-      const f: any = await foundationApi.status();
-      // 后端总是返回 configuration_status: "normal"，不可靠；用 setup.status 的 completed
-      return !!f;
-    } catch { return false; }
   }
 
   async function detectNetwork() {
@@ -92,6 +81,6 @@ export const useSetupStore = defineStore('setup', () => {
 
   return {
     status, detected, saving, error,
-    loadStatus, loadFoundation, detectNetwork, applyConfig, setAiSkill,
+    loadStatus, detectNetwork, applyConfig, setAiSkill,
   };
 });

@@ -33,6 +33,7 @@ pub struct LiveMonitorHealth {
     pub running: bool,
     pub last_heartbeat_at: Option<String>,
     pub last_success_at: Option<String>,
+    pub last_error: Option<String>,
     pub risk_backoff_until: Option<String>,
 }
 
@@ -53,6 +54,7 @@ struct RiskBackoff {
 struct MonitorHealthState {
     last_heartbeat_at: Option<String>,
     last_success_at: Option<String>,
+    last_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -180,6 +182,7 @@ impl LiveMonitor {
             running,
             last_heartbeat_at: health.last_heartbeat_at.clone(),
             last_success_at: health.last_success_at.clone(),
+            last_error: health.last_error.clone(),
             risk_backoff_until,
         }
     }
@@ -210,6 +213,7 @@ impl LiveMonitor {
             Ok(value) => value,
             Err(error) => {
                 warn!("读取直播源失败: {error}");
+                self.inner.health.lock().await.last_error = Some(error.to_string());
                 return;
             }
         };
@@ -258,6 +262,7 @@ impl LiveMonitor {
         let cookies = match self.inner.settings_service.cookie_header().await {
             Ok(value) => value,
             Err(error) => {
+                self.inner.health.lock().await.last_error = Some(error.to_string());
                 self.mark_batch_error(&due, error.to_string(), false).await;
                 return;
             }
@@ -272,8 +277,10 @@ impl LiveMonitor {
             .await;
         match batch {
             Ok(statuses) => {
-                self.inner.health.lock().await.last_success_at =
-                    Some(chrono::Utc::now().to_rfc3339());
+                let mut health = self.inner.health.lock().await;
+                health.last_success_at = Some(chrono::Utc::now().to_rfc3339());
+                health.last_error = None;
+                drop(health);
                 self.note_successful_batch().await;
                 for source in due {
                     if let Some(status) = statuses.get(&source.uid) {
@@ -291,6 +298,7 @@ impl LiveMonitor {
             }
             Err(error) => {
                 let message = error.to_string();
+                self.inner.health.lock().await.last_error = Some(message.clone());
                 let limited = is_risk_error(&message);
                 self.mark_batch_error(&due, message.clone(), limited).await;
                 if limited {
@@ -414,6 +422,7 @@ impl LiveMonitor {
     }
 
     async fn mark_all_stale(&self, message: String) {
+        self.inner.health.lock().await.last_error = Some(message.clone());
         let mut runtime = self.inner.runtime.lock().await;
         for entry in runtime.values_mut() {
             entry.public.stale = true;

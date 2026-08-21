@@ -1966,7 +1966,11 @@ impl RecordingWorker {
         if info.capture_mode != "off" && info.interaction_capture_status == "capturing" {
             info.interaction_capture_status = "completed".to_owned();
         }
-        self.persist_recording(&info, true).await;
+        // 数据库落盘失败时保留最终文件并立即重试一次，避免出现“磁盘有文件、
+        // 数据库无记录”的单点瞬时不一致；后续启动恢复仍会扫描可恢复记录。
+        if !self.persist_recording(&info, true).await {
+            let _ = self.persist_recording(&info, true).await;
+        }
         *self.snapshot.lock().await = info.clone();
         info!(
             operation = "live_recording_finalize",
@@ -2050,7 +2054,7 @@ impl RecordingWorker {
         }
     }
 
-    async fn persist_recording(&self, info: &RecordingInfo, ended: bool) {
+    async fn persist_recording(&self, info: &RecordingInfo, ended: bool) -> bool {
         let update = live_recording::ActiveModel {
             id: Set(self.recording_id),
             status: Set(info.status.to_string()),
@@ -2092,7 +2096,9 @@ impl RecordingWorker {
         };
         if let Err(error) = update.update(&self.db).await {
             warn!(room_id = self.room_id, "更新直播录制记录失败: {error}");
+            return false;
         }
+        true
     }
 }
 

@@ -109,6 +109,7 @@ impl Model {
             "active_windows": self.active_windows_list(),
             "is_saved": self.is_saved,
             "has_auto_task": self.has_auto_task,
+            "version": self.version,
         })
     }
 

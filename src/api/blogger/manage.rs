@@ -1,5 +1,6 @@
 use crate::error::{ApiResponse, AppError};
 use crate::services::blogger::{BloggerUpdate, NewBlogger};
+use crate::models::operation_log::OperationTarget;
 use crate::state::SharedState;
 use axum::extract::State;
 use axum::Json;
@@ -40,6 +41,8 @@ pub(super) struct AddBloggerRequest {
     series_filter_regex: Option<String>,
     active_windows: Option<Vec<String>>,
     start_monitoring: Option<bool>,
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 
 fn validate_intervals(min_interval: i32, max_interval: i32) -> Result<(), AppError> {
@@ -69,6 +72,17 @@ fn validate_series_filter(value: Option<String>) -> Result<Option<String>, AppEr
             .map_err(|error| AppError::BadRequest(format!("正则表达式无效: {error}")))?;
     }
     Ok(value.filter(|item| !item.is_empty()))
+}
+
+fn map_blogger_insert_error(error: anyhow::Error) -> AppError {
+    let message = error.to_string();
+    if message.to_ascii_lowercase().contains("unique")
+        || message.to_ascii_lowercase().contains("constraint")
+    {
+        AppError::Conflict("该 UID 已存在，请刷新列表后重试".to_string())
+    } else {
+        error.into()
+    }
 }
 
 fn normalize_active_windows(windows: Option<Vec<String>>) -> Result<Option<String>, AppError> {
@@ -135,15 +149,14 @@ pub(super) async fn add_blogger(
     State(state): State<SharedState>,
     Json(req): Json<AddBloggerRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = req.uid.trim().to_string();
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?
+        .as_str()
+        .to_string();
     let name = req.name.unwrap_or_default().trim().to_string();
     let min_interval = req.min_interval.unwrap_or(60);
     let max_interval = req.max_interval.unwrap_or(300);
 
     validate_intervals(min_interval, max_interval)?;
-    if uid.is_empty() {
-        return Err(AppError::BadRequest("请输入博主UID".to_string()));
-    }
     let series_filter_regex = validate_series_filter(req.series_filter_regex)?;
     let active_windows = normalize_active_windows(req.active_windows)?;
 
@@ -189,7 +202,12 @@ pub(super) async fn add_blogger(
     let monitor_enabled = req.start_monitoring.unwrap_or(false);
     let blogger = if let Some(existing) = existing {
         let id = existing.id;
-        state
+        let guard = state
+            .infra
+            .conflict_guard
+            .check_and_bump(OperationTarget::Blogger, &id.to_string(), req.expected_version)
+            .await?;
+        if let Err(error) = state
             .business
             .blogger_service
             .apply_update(
@@ -211,7 +229,12 @@ pub(super) async fn add_blogger(
                     ..Default::default()
                 },
             )
-            .await?;
+            .await
+        {
+            let _ = guard.rollback().await;
+            return Err(error.into());
+        }
+        guard.commit();
         state
             .business
             .blogger_service
@@ -243,7 +266,8 @@ pub(super) async fn add_blogger(
                 is_saved: false,
                 has_auto_task: true,
             })
-            .await?
+            .await
+            .map_err(map_blogger_insert_error)?
     };
     info!("添加博主成功: {uid}");
 
@@ -277,6 +301,8 @@ pub(super) struct UpdateBloggerRequest {
     active_windows: Option<Vec<String>>,
     /// 监控开关；与时段外的计划性等待是两个不同概念。
     monitor_enabled: Option<bool>,
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 
 pub(super) async fn update_blogger(
@@ -295,6 +321,7 @@ pub(super) async fn update_blogger(
     if let Some(uid) = req.uid {
         let uid = uid.trim().to_string();
         if !uid.is_empty() {
+            crate::services::file_safety::validate_uid(&uid)?;
             if state
                 .business
                 .blogger_service
@@ -347,11 +374,16 @@ pub(super) async fn update_blogger(
     }
     update.monitor_enabled = req.monitor_enabled;
 
-    state
-        .business
-        .blogger_service
-        .apply_update(b, update)
+    let guard = state
+        .infra
+        .conflict_guard
+        .check_and_bump(OperationTarget::Blogger, &req.id.to_string(), req.expected_version)
         .await?;
+    if let Err(error) = state.business.blogger_service.apply_update(b, update).await {
+        let _ = guard.rollback().await;
+        return Err(error.into());
+    }
+    guard.commit();
     let updated = state
         .business
         .blogger_service
@@ -372,20 +404,36 @@ pub(super) async fn update_blogger(
 #[derive(Deserialize)]
 pub(super) struct DeleteBloggerRequest {
     id: i32,
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 
 pub(super) async fn delete_blogger(
     State(state): State<SharedState>,
     Json(req): Json<DeleteBloggerRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let deleted = state
+    let guard = state
+        .infra
+        .conflict_guard
+        .check_and_bump(OperationTarget::Blogger, &req.id.to_string(), req.expected_version)
+        .await?;
+    let deleted = match state
         .business
         .blogger_service
         .remove_auto_task(req.id)
-        .await?;
+        .await
+    {
+        Ok(deleted) => deleted,
+        Err(error) => {
+            let _ = guard.rollback().await;
+            return Err(error.into());
+        }
+    };
     if deleted.is_none() {
+        let _ = guard.rollback().await;
         return Err(AppError::NotFound("未找到该自动任务".to_string()));
     }
+    guard.commit();
     Ok(Json(ApiResponse::with_message(json!({}), "自动任务已删除")))
 }
 
@@ -397,6 +445,8 @@ pub(super) struct AddSavedBloggerRequest {
     sign: Option<String>,
     level: Option<i32>,
     fans: Option<i64>,
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 
 /// 搜索页"已添加博主"列表；不包含仅存在于自动任务中的博主。
@@ -414,16 +464,23 @@ pub(super) async fn add_saved_blogger(
     State(state): State<SharedState>,
     Json(req): Json<AddSavedBloggerRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = req.uid.trim().to_string();
-    if uid.is_empty() || !uid.chars().all(|character| character.is_ascii_digit()) {
-        return Err(AppError::BadRequest("请输入有效的数字 UID".to_string()));
-    }
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?
+        .as_str()
+        .to_string();
     if let Some(existing) = state.business.blogger_service.find_by_uid(&uid).await? {
         if existing.is_saved {
-            return Err(AppError::Conflict("该博主已在添加列表中".to_string()));
+            return Ok(Json(ApiResponse::with_message(
+                json!({ "blogger": existing.to_api() }),
+                "博主已在添加列表中",
+            )));
         }
         let id = existing.id;
-        state
+        let guard = state
+            .infra
+            .conflict_guard
+            .check_and_bump(OperationTarget::Blogger, &id.to_string(), req.expected_version)
+            .await?;
+        if let Err(error) = state
             .business
             .blogger_service
             .apply_update(
@@ -433,7 +490,12 @@ pub(super) async fn add_saved_blogger(
                     ..Default::default()
                 },
             )
-            .await?;
+            .await
+        {
+            let _ = guard.rollback().await;
+            return Err(error.into());
+        }
+        guard.commit();
         let blogger = state
             .business
             .blogger_service
@@ -474,7 +536,8 @@ pub(super) async fn add_saved_blogger(
             is_saved: true,
             has_auto_task: false,
         })
-        .await?;
+        .await
+        .map_err(map_blogger_insert_error)?;
     Ok(Json(ApiResponse::with_message(
         json!({ "blogger": blogger.to_api() }),
         "博主已添加",
@@ -485,6 +548,11 @@ pub(super) async fn delete_saved_blogger(
     State(state): State<SharedState>,
     Json(req): Json<DeleteBloggerRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
+    let guard = state
+        .infra
+        .conflict_guard
+        .check_and_bump(OperationTarget::Blogger, &req.id.to_string(), req.expected_version)
+        .await?;
     if state
         .business
         .blogger_service
@@ -492,7 +560,9 @@ pub(super) async fn delete_saved_blogger(
         .await?
         .is_none()
     {
+        let _ = guard.rollback().await;
         return Err(AppError::NotFound("未找到已添加博主".to_string()));
     }
+    guard.commit();
     Ok(Json(ApiResponse::with_message(json!({}), "博主已移除")))
 }

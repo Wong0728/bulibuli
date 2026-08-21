@@ -142,6 +142,7 @@ impl WebSocketManager {
             "uid": uid,
             "message": message,
             "level": level,
+            "ts": chrono::Utc::now().timestamp_millis(),
             "time": chrono::Local::now().format("%H:%M:%S").to_string(),
         });
 

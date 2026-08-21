@@ -2,23 +2,53 @@
     visibility: hidden;
 }
 
-.drawer-tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--color-border, #e5e5e5);
-  margin-bottom: 12px;
+/* “服务器到本机”选择模式勾选框：默认隐藏，主勾选框开启后显示（默认全选）。 */
+.drawer-file-check {
+    display: none;
+    align-items: center;
+    margin: 0;
+    cursor: pointer;
 }
-.drawer-tab {
-  background: none;
-  border: none;
-  padding: 6px 12px;
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--color-text-secondary, #666);
-  border-bottom: 2px solid transparent;
+#video-drawer.browser-select-on .drawer-file-check {
+    display: inline-flex;
 }
-.drawer-tab.active {
-  color: var(--color-primary, #00aeec);
-  border-bottom-color: var(--color-primary, #00aeec);
-  font-weight: 600;
+.drawer-file-check input {
+    width: var(--size-16);
+    height: var(--size-16);
+    accent-color: var(--brand);
+    cursor: pointer;
+}
+.drawer-file-actions .drawer-file-check {
+    flex: none;
+}
+/* 抽屉“服务器到本机”工具条：主勾选框 + 下载所选。 */
+.drawer-browser-download-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--size-8);
+    flex-wrap: wrap;
+    padding: var(--size-10);
+    margin-bottom: var(--size-12);
+    border: var(--size-1) solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+}
+.drawer-browser-master {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-6);
+    font-size: var(--size-13);
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+}
+.drawer-browser-master input {
+    width: var(--size-16);
+    height: var(--size-16);
+    accent-color: var(--brand);
+    cursor: pointer;
+}
+.drawer-browser-master i {
+    color: var(--brand);
 }

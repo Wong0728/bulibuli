@@ -1,4 +1,5 @@
 use crate::error::{ApiResponse, AppError};
+use crate::models::operation_log::OperationTarget;
 use crate::models::burn::BurnTask;
 use crate::services::auth::ClientInfo;
 use crate::services::live_recorder::RecordingTrigger;
@@ -49,6 +50,19 @@ pub fn router() -> Router<SharedState> {
 
 mod history;
 
+async fn persist_live_burn_snapshot(
+    db: &sea_orm::DatabaseConnection,
+    tasks: &crate::state::media::BurnTasks,
+    task_id: &str,
+) {
+    let task = tasks.lock().await.get(task_id).cloned();
+    if let Some(task) = task {
+        if let Err(error) = crate::models::burn::persist_burn_task(db, task_id, &task).await {
+            tracing::error!(task_id, "持久化直播烧录任务状态失败: {error}");
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct RoomQuery {
     room_id: i64,
@@ -56,6 +70,8 @@ struct RoomQuery {
 #[derive(Deserialize)]
 struct RoomBody {
     room_id: i64,
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 #[derive(Deserialize)]
 struct EventsQuery {
@@ -134,16 +150,39 @@ async fn start_recording(
         .live_source_service
         .find(body.room_id)
         .await?;
+    let guard = match source_before.as_ref() {
+        Some(source) => Some(
+            state
+                .infra
+                .conflict_guard
+                .check_and_bump(
+                    OperationTarget::LiveSource,
+                    &source.id.to_string(),
+                    body.expected_version,
+                )
+                .await?,
+        ),
+        None if body.expected_version.is_some() => {
+            return Err(AppError::NotFound("直播源不存在".to_string()));
+        }
+        None => None,
+    };
     let mode = source_before
         .as_ref()
         .map(|source| CaptureMode::parse(&source.capture_mode).unwrap_or_default())
         .unwrap_or(CaptureMode::Standard);
     if source_before.is_some() {
-        state
+        if let Err(error) = state
             .business
             .live_source_service
             .set_manual_latch(body.room_id, false)
-            .await?;
+            .await
+        {
+            if let Some(guard) = guard {
+                let _ = guard.rollback().await;
+            }
+            return Err(error.into());
+        }
     }
     let info = match state
         .media
@@ -160,9 +199,15 @@ async fn start_recording(
                     .set_manual_stop_session(body.room_id, source.manual_stop_session_key)
                     .await;
             }
+            if let Some(guard) = guard {
+                let _ = guard.rollback().await;
+            }
             return Err(error.into());
         }
     };
+    if let Some(guard) = guard {
+        guard.commit();
+    }
     Ok(Json(ApiResponse::with_message(json!(info), "录制已开始")))
 }
 
@@ -189,18 +234,47 @@ async fn stop_recording(
         .live_source_service
         .find(body.room_id)
         .await?;
+    let guard = match source_before.as_ref() {
+        Some(source) => Some(
+            state
+                .infra
+                .conflict_guard
+                .check_and_bump(
+                    OperationTarget::LiveSource,
+                    &source.id.to_string(),
+                    body.expected_version,
+                )
+                .await?,
+        ),
+        None if body.expected_version.is_some() => {
+            return Err(AppError::NotFound("直播源不存在".to_string()));
+        }
+        None => None,
+    };
     if session_key.is_some() {
-        state
+        if let Err(error) = state
             .business
             .live_source_service
             .set_manual_stop_session(body.room_id, session_key.clone())
-            .await?;
+            .await
+        {
+            if let Some(guard) = guard {
+                let _ = guard.rollback().await;
+            }
+            return Err(error.into());
+        }
     } else {
-        state
+        if let Err(error) = state
             .business
             .live_source_service
             .set_manual_latch(body.room_id, true)
-            .await?;
+            .await
+        {
+            if let Some(guard) = guard {
+                let _ = guard.rollback().await;
+            }
+            return Err(error.into());
+        }
     }
     let job = match state.media.live_recorder.request_stop(body.room_id).await {
         Ok(job) => job,
@@ -220,6 +294,9 @@ async fn stop_recording(
                         .await;
                 }
             }
+            if let Some(guard) = guard {
+                let _ = guard.rollback().await;
+            }
             return Err(AppError::BadRequest(
                 crate::services::live_recorder::ffmpeg_session::redact_diagnostics(
                     &error.to_string(),
@@ -227,6 +304,9 @@ async fn stop_recording(
             ));
         }
     };
+    if let Some(guard) = guard {
+        guard.commit();
+    }
     Ok(Json(ApiResponse::with_message(
         json!({"operation_id": job.id, "recording_id": job.recording_id, "status": job.status, "progress": job.progress}),
         "停止请求已接受，正在后台收尾与合并",
@@ -261,7 +341,7 @@ async fn dashboard(
     let items = sources.into_iter().map(|source| {
         let run = runtime.get(&source.room_id);
         json!({
-            "id": source.id, "room_id": source.room_id, "short_id": source.short_id, "uid": source.uid,
+            "id": source.id, "version": source.version, "room_id": source.room_id, "short_id": source.short_id, "uid": source.uid,
             "anchor_name": source.anchor_name, "face": source.face, "title": source.title, "cover": source.cover,
             "auto_record_enabled": source.auto_record_enabled, "capture_mode": source.capture_mode,
             "max_qn": source.max_qn,
@@ -353,12 +433,35 @@ async fn update_source(
     State(state): State<SharedState>,
     Json(body): Json<UpdateLiveSource>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let current = state
+        .business
+        .live_source_service
+        .find(body.room_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("直播源不存在".to_string()))?;
+    let guard = state
+        .infra
+        .conflict_guard
+        .check_and_bump(
+            OperationTarget::LiveSource,
+            &current.id.to_string(),
+            body.expected_version,
+        )
+        .await?;
     let source = state
         .business
         .live_source_service
         .update(body)
         .await
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+        .map_err(|e| AppError::BadRequest(e.to_string()));
+    let source = match source {
+        Ok(source) => source,
+        Err(error) => {
+            let _ = guard.rollback().await;
+            return Err(error);
+        }
+    };
+    guard.commit();
     state.business.live_monitor.wake_room(source.room_id).await;
     Ok(Json(ApiResponse::with_message(
         json!(source),
@@ -382,11 +485,38 @@ async fn delete_source(
     {
         return Err(AppError::Conflict("请先停止当前录制再删除直播源".into()));
     }
-    let deleted = state
+    let current = state
+        .business
+        .live_source_service
+        .find(body.room_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("直播源不存在".to_string()))?;
+    let guard = state
+        .infra
+        .conflict_guard
+        .check_and_bump(
+            OperationTarget::LiveSource,
+            &current.id.to_string(),
+            body.expected_version,
+        )
+        .await?;
+    let deleted = match state
         .business
         .live_source_service
         .delete(body.room_id)
-        .await?;
+        .await
+    {
+        Ok(deleted) => deleted,
+        Err(error) => {
+            let _ = guard.rollback().await;
+            return Err(error.into());
+        }
+    };
+    if !deleted {
+        let _ = guard.rollback().await;
+        return Err(AppError::NotFound("直播源不存在".to_string()));
+    }
+    guard.commit();
     Ok(Json(ApiResponse::success(json!({"deleted": deleted}))))
 }
 
@@ -434,7 +564,7 @@ async fn burn_recording_danmaku(
     // 去重检查与插入之间不再释放锁：否则两个并发请求都能通过检查各自 spawn
     // 一个 ffmpeg（对照 download/burn.rs 的实现——先插占位再 spawn，无此窗口）。
     // items 的读取放在持锁期间完成，load_live_burn_items 是本地文件解析，耗时可预期。
-    let (items, task_id, task_guard) = {
+    let (items, task_id, task_guard, initial_task) = {
         let mut task_guard = state.media.burn_tasks.lock().await;
         crate::models::burn::prune_burn_tasks(&mut task_guard);
         if task_guard.values().any(|task| {
@@ -460,7 +590,8 @@ async fn burn_recording_danmaku(
                 updated_at: chrono::Utc::now().timestamp(),
             },
         );
-        (items, task_id, task_guard)
+        let initial_task = task_guard.get(&task_id).cloned();
+        (items, task_id, task_guard, initial_task)
     };
     let settings = state.infra.settings_service.current();
     let burn_config = settings.burn.to_burn_config();
@@ -476,7 +607,13 @@ async fn burn_recording_danmaku(
     let burn_semaphore = state.media.burn_semaphore.clone();
     let response_task_id = task_id.clone();
     let download_dir = state.infra.paths.download_dir.clone();
+    let db = state.infra.db.clone();
     drop(task_guard);
+    if let Some(task) = initial_task {
+        crate::models::burn::persist_burn_task(&db, &task_id, &task)
+            .await
+            .map_err(|error| AppError::Internal(format!("保存直播烧录任务失败: {error}")))?;
+    }
     tokio::spawn(async move {
         let Ok(_permit) = burn_semaphore.acquire_owned().await else {
             let mut tasks = burn_tasks.lock().await;
@@ -485,6 +622,8 @@ async fn burn_recording_danmaku(
                 task.message = "获取烧录并发槽失败".to_string();
                 task.updated_at = chrono::Utc::now().timestamp();
             }
+            drop(tasks);
+            persist_live_burn_snapshot(&db, &burn_tasks, &task_id).await;
             return;
         };
         {
@@ -495,6 +634,7 @@ async fn burn_recording_danmaku(
                 task.updated_at = chrono::Utc::now().timestamp();
             }
         }
+        persist_live_burn_snapshot(&db, &burn_tasks, &task_id).await;
         let result = burner.burn_live_interactions(&output, items).await;
         let mut tasks = burn_tasks.lock().await;
         if let Some(task) = tasks.get_mut(&task_id) {
@@ -529,6 +669,8 @@ async fn burn_recording_danmaku(
                 }
             }
         }
+        drop(tasks);
+        persist_live_burn_snapshot(&db, &burn_tasks, &task_id).await;
     });
     Ok(Json(ApiResponse::with_message(
         json!({"task_id": response_task_id, "status": "queued"}),

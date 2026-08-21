@@ -234,6 +234,7 @@ pub(super) async fn get_videos(
 pub(super) struct GetVideoUrlsRequest {
     bvid: String,
     fnval: Option<i32>,
+    qn: Option<i32>,
     /// 多P时指定分P cid；为空则取默认（P1）cid，保持现状。
     cid: Option<i64>,
 }
@@ -263,7 +264,10 @@ pub(super) async fn get_video_urls(
     let fnval = req.fnval.unwrap_or(settings.query.video_format);
     crate::api::validate_fnval(fnval)?;
     let cookies = state.infra.settings_service.cookie_header().await?;
-    let preferred_quality = settings.query.video_quality;
+    let preferred_quality = req.qn.unwrap_or(settings.query.video_quality);
+    if !(16..=127).contains(&preferred_quality) {
+        return Err(AppError::BadRequest("视频画质代码无效".to_string()));
+    }
     let minimum_quality = settings.query.min_video_quality;
     let codecs = settings.query.prefer_codecs.clone();
     let allow_fallback = settings.query.allow_quality_fallback;

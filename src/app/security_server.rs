@@ -147,19 +147,45 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
     state.infra.ws.attach(io).await;
 
     let limiter = Arc::new(governor::RateLimiter::keyed(
+        // 正常页面切换会并发加载多个只读接口；认证/配对本身另有登录尝试限流。
+        governor::Quota::per_second(NonZeroU32::new(20).expect("non-zero quota"))
+            .allow_burst(NonZeroU32::new(60).expect("non-zero burst")),
+    ));
+    let expensive_limiter = Arc::new(governor::RateLimiter::keyed(
+        // 搜索、房间详情和视频详情会放大 B 站上游请求，单独限制每个客户端。
         governor::Quota::per_second(NonZeroU32::new(5).expect("non-zero quota"))
-            .allow_burst(NonZeroU32::new(15).expect("non-zero burst")),
+            .allow_burst(NonZeroU32::new(10).expect("non-zero burst")),
     ));
     let rate_limit = middleware::from_fn(move |request: Request<Body>, next: Next| {
         let limiter = limiter.clone();
+        let expensive_limiter = expensive_limiter.clone();
         async move {
+            // GET 包含健康检查、配对状态和页面轮询，不能让旧标签页的只读请求
+            // 抢占写请求限额；配对尝试本身另由 AuthService 做每 IP/全局限制。
             let client_ip = request
                 .extensions()
                 .get::<ClientInfo>()
                 .map(|client| client.ip)
                 .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-            if limiter.check_key(&client_ip).is_err() {
-                return api_error(StatusCode::TOO_MANY_REQUESTS, 429, "请求过于频繁");
+            if !matches!(
+                *request.method(),
+                Method::GET | Method::HEAD | Method::OPTIONS
+            ) {
+                if limiter.check_key(&client_ip).is_err() {
+                    return api_error(StatusCode::TOO_MANY_REQUESTS, 429, "请求过于频繁");
+                }
+            }
+            let path = request.uri().path();
+            let expensive_read = matches!(
+                path,
+                "/api/blogger/search"
+                    | "/api/blogger/series"
+                    | "/api/blogger/series-videos"
+                    | "/api/live/room-info"
+                    | "/api/video/info"
+            );
+            if expensive_read && expensive_limiter.check_key(&client_ip).is_err() {
+                return api_error(StatusCode::TOO_MANY_REQUESTS, 429, "查询过于频繁，请稍后再试");
             }
             next.run(request).await
         }
@@ -231,7 +257,12 @@ async fn trace_request(request: Request<Body>, next: Next) -> Response {
         .map(|path| path.as_str().to_string())
         .unwrap_or_else(|| request.uri().path().to_string());
     let response = next.run(request).await;
-    info!(%method, %route, status = response.status().as_u16(), "http request");
+    let status = response.status();
+    if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+        warn!(%method, %route, status = status.as_u16(), "http request");
+    } else {
+        tracing::debug!(%method, %route, status = status.as_u16(), "http request");
+    }
     response
 }
 
@@ -309,6 +340,7 @@ async fn enforce_request_security(
             // 旧版 vanilla-JS 兼容入口，与新版同等免认证。
             | "/legacy" | "/legacy/"
     ) || path.starts_with("/app/assets/")
+        || path.starts_with("/app/css/")
         || path.starts_with("/legacy/");
     let mut session = None;
     if !public {
@@ -373,11 +405,11 @@ fn authorize_session(request: &Request<Body>, session: &SessionAuth) -> Result<(
     let path = request.uri().path();
     let mutating = is_mutating(request.method());
 
-    // 账号凭证、全部基础设施设置和设备邀请仅限 Owner 操作。
-    // `/api/settings` 目前同时包含业务和进程级配置，因此在拆分出独立业务接口前，
-    // 在拆分出独立业务接口前，继续保持 Owner-only。
+    // 账号凭证、设置写入/敏感运维接口和设备邀请仅限 Owner 操作。
+    // 业务设置的精确 GET 允许 Operator/Viewer 只读查看真实值。
     let owner_only = path.starts_with("/api/cookies/")
-        || path.starts_with("/api/settings")
+        || path.starts_with("/api/settings/")
+        || (path == "/api/settings" && mutating)
         || path.starts_with("/api/auth/invitations")
         || path.starts_with("/api/update/check")
         || path.starts_with("/api/update/apply");
@@ -626,6 +658,7 @@ fn is_static_asset(path: &str) -> bool {
     ) || path.starts_with("/css/")
         || path.starts_with("/js/")
         || path.starts_with("/app/assets/")
+        || path.starts_with("/app/css/")
         || path.starts_with("/legacy/")
 }
 
@@ -759,7 +792,15 @@ mod role_tests {
             .body(Body::empty())
             .unwrap();
         assert!(authorize_session(&credentials, &session(SessionRole::Operator)).is_err());
-        assert!(authorize_session(&settings, &session(SessionRole::Viewer)).is_err());
+        assert!(authorize_session(&settings, &session(SessionRole::Viewer)).is_ok());
+        assert!(authorize_session(&settings, &session(SessionRole::Operator)).is_ok());
+        let settings_write = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/settings")
+            .body(Body::empty())
+            .unwrap();
+        assert!(authorize_session(&settings_write, &session(SessionRole::Viewer)).is_err());
+        assert!(authorize_session(&settings_write, &session(SessionRole::Operator)).is_err());
         assert!(authorize_session(&credentials, &session(SessionRole::Owner)).is_ok());
     }
 

@@ -9,8 +9,10 @@
          等宽字体 (JetBrains Mono) 在新 Vue 框架里仍按原版样式渲染。 -->
     <link rel="stylesheet" href="/app/css/lib/jetbrains-mono.css" />
     <link rel="stylesheet" href="/app/css/lib/fontawesome.min.css" />
-    <script type="module" crossorigin src="/app/assets/index-ZeWB_Ge_.js"></script>
-    <link rel="stylesheet" crossorigin href="/app/assets/index-CpvjSghc.css">
+    <!-- 复用旧版已验证的本地二维码渲染器，避免新增依赖。 -->
+    <script src="/js/qrcode.min.js"></script>
+    <script type="module" crossorigin src="/app/assets/index-0UnvH3pP.js"></script>
+    <link rel="stylesheet" crossorigin href="/app/assets/index-BJxnTHhD.css">
   </head>
   <body>
     <div id="app"></div>

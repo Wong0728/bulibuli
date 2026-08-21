@@ -1,6 +1,7 @@
 //! 历史记录读写接口：按博主查询、删除单条记录与关键字搜索。
 
 use crate::error::{ApiResponse, AppError};
+use crate::models::operation_log::OperationTarget;
 use crate::services::auth::ClientInfo;
 use crate::services::file_safety::ensure_existing_within_root;
 use crate::services::security_config::can_open_directory;
@@ -19,11 +20,8 @@ pub(super) async fn get_by_uid(
     State(state): State<SharedState>,
     Query(q): Query<ByUidQuery>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = q.uid.trim();
-    if uid.is_empty() {
-        return Err(AppError::BadRequest("请提供博主UID".to_string()));
-    }
-    let history = state.business.history_service.list_by_uid(uid).await?;
+    let uid = crate::services::file_safety::validate_uid(&q.uid)?.as_str().to_owned();
+    let history = state.business.history_service.list_by_uid(&uid).await?;
     Ok(Json(ApiResponse::success(json!({
         "history": history.iter().map(|h| h.to_api()).collect::<Vec<_>>(),
     }))))
@@ -37,6 +35,9 @@ pub(super) struct DeleteHistoryRequest {
     history_id: Option<i32>,
     /// 是否同时删除本地文件（视频/封面/弹幕/字幕）。默认 true。
     delete_files: Option<bool>,
+    /// 精确删除时使用的历史记录版本；缺省保持旧客户端的最后写入胜出语义。
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -137,21 +138,63 @@ pub(super) async fn delete_history(
     // 的预期一致）。API 文档已声明；需要仅删记录的调用方必须显式传 false。
     let delete_files = req.delete_files.unwrap_or(true);
 
+    let guard = if let Some(expected_version) = req.expected_version {
+        let history_id = req.history_id.ok_or_else(|| {
+            AppError::BadRequest("带版本删除时必须提供 history_id".to_string())
+        })?;
+        let history = state
+            .business
+            .history_service
+            .find_by_id(history_id)
+            .await?
+            .filter(|history| history.bvid == bvid)
+            .ok_or_else(|| AppError::NotFound("未找到该视频记录".to_string()))?;
+        Some(
+            state
+                .infra
+                .conflict_guard
+                .check_and_bump(
+                    OperationTarget::History,
+                    &history.id.to_string(),
+                    Some(expected_version),
+                )
+                .await?,
+        )
+    } else {
+        None
+    };
+
     match state
         .business
         .history_service
         .delete_record(bvid, delete_files, req.history_id)
-        .await?
+        .await
     {
-        Some((removed_files, removed_tasks)) => Ok(Json(ApiResponse::with_message(
+        Ok(Some((removed_files, removed_tasks))) => {
+            if let Some(guard) = guard {
+                guard.commit();
+            }
+            Ok(Json(ApiResponse::with_message(
             json!({
                 "bvid": bvid,
                 "removed_files": removed_files,
                 "removed_tasks": removed_tasks,
             }),
             "记录已删除",
-        ))),
-        None => Err(AppError::NotFound("未找到该视频记录".to_string())),
+            )))
+        }
+        Ok(None) => {
+            if let Some(guard) = guard {
+                let _ = guard.rollback().await;
+            }
+            Err(AppError::NotFound("未找到该视频记录".to_string()))
+        }
+        Err(error) => {
+            if let Some(guard) = guard {
+                let _ = guard.rollback().await;
+            }
+            Err(error)
+        }
     }
 }
 

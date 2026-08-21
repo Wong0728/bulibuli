@@ -202,6 +202,8 @@ pub struct UpdateLiveSource {
     pub clear_schedule: Option<bool>,
     pub capture_mode: Option<CaptureMode>,
     pub max_qn: Option<i32>,
+    #[serde(default)]
+    pub expected_version: Option<i32>,
 }
 
 #[derive(Clone)]

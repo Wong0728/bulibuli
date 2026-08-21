@@ -172,25 +172,73 @@ def check_cargo():
     print("  cargo 可用")
 
 
-def build_frontend_bundle():
-    """Build the optional portable bundle; development still serves raw modules."""
+def build_vue_bundle(skip: bool = False):
+    """Build the Vue 3 + Vite frontend bundle (web/) into static/app/.
+
+    Vite is configured with outDir='../static/app' and emptyOutDir=True,
+    so `npm run build:nocheck` is idempotent. `npm ci` is skipped to avoid
+    re-downloading node_modules on every build; run `npm ci` manually if
+    package.json/lock changed.
+    """
+    frontend_dir = ROOT / "web"
+    npm = "npm.cmd" if sys.platform == "win32" else "npm"
+    if shutil.which(npm) is None:
+        print("  [FAIL] npm is required for the Vue frontend bundle")
+        raise SystemExit(1)
+    if skip:
+        vue_index = ROOT / "static" / "app" / "index.html"
+        if not vue_index.is_file():
+            print(f"  [FAIL] --skip-frontend-vue requires {vue_index}")
+            raise SystemExit(1)
+        return vue_index
+    # `npm ci` is only run on first build or after package.json/lock changes.
+    # We rely on Vite's dependency pre-bundling cache to keep re-builds fast.
+    if not (frontend_dir / "node_modules").is_dir():
+        run([npm, "ci", "--ignore-scripts"], cwd=str(frontend_dir))
+    run([npm, "run", "build:nocheck"], cwd=str(frontend_dir))
+    vue_index = ROOT / "static" / "app" / "index.html"
+    if not vue_index.is_file():
+        print(f"  [FAIL] Vue bundle was not created: {vue_index}")
+        raise SystemExit(1)
+    return vue_index
+
+
+def build_frontend_bundle(skip_vue: bool = False, skip_legacy: bool = False):
+    """Build both the Vue 3 bundle (web/ → static/app/) and the legacy
+    vanilla-JS bundle (static/js → static/dist/app.bundle.js).
+
+    The Vue bundle is the primary frontend served at `/`. The legacy bundle
+    stays for the optional /legacy/ route (used as a compatibility fallback
+    while the Vue rewrite is incomplete).
+    """
+    bundle = build_vue_bundle(skip=skip_vue)
+    if skip_legacy:
+        legacy_bundle = ROOT / "static" / "dist" / "app.bundle.js"
+        if not legacy_bundle.is_file():
+            print(f"  [FAIL] --skip-frontend-legacy requires {legacy_bundle}")
+            raise SystemExit(1)
+        return bundle
     frontend_dir = ROOT / "static" / "js"
     npm = "npm.cmd" if sys.platform == "win32" else "npm"
     if shutil.which(npm) is None:
-        print("  [FAIL] npm is required for the frontend bundle")
+        print("  [FAIL] npm is required for the legacy frontend bundle")
         raise SystemExit(1)
-    run([npm, "ci", "--ignore-scripts"], cwd=str(frontend_dir))
+    if not (frontend_dir / "node_modules").is_dir():
+        run([npm, "ci", "--ignore-scripts"], cwd=str(frontend_dir))
     run([npm, "run", "build"], cwd=str(frontend_dir))
-    bundle = ROOT / "static" / "dist" / "app.bundle.js"
-    if not bundle.is_file():
-        print(f"  [FAIL] frontend bundle was not created: {bundle}")
+    legacy_bundle = ROOT / "static" / "dist" / "app.bundle.js"
+    if not legacy_bundle.is_file():
+        print(f"  [FAIL] legacy frontend bundle was not created: {legacy_bundle}")
         raise SystemExit(1)
+    # The legacy bundle is what check_portable_bundle_contract scans for
+    # portable-directory contract strings; we still return the Vue index so
+    # the caller can keep referencing it.
     return bundle
 
 
 def build_release(platform_name, target=None):
     """cargo build --release for the requested platform/target."""
-    print(f"[2/5] 编译 Rust 项目 (release, {platform_name})...")
+    print(f"[4/5] 编译 Rust 项目 (release, {platform_name})...")
     command = ["cargo", "build", "--locked", "--release"]
     if target:
         command.extend(["--target", target])
@@ -420,7 +468,7 @@ def validate_package_tree(package_dir, platform_name, variant):
 
 def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     """组装完整 portable 或不含媒体运行时的 core 归档。"""
-    print(f"[3/5] 组装 {variant} 包目录 ({platform_name})...")
+    print(f"[5/5] 组装 {variant} 包目录 ({platform_name})...")
     dist_dir = ROOT / "dist"
     stem = package_stem(platform_name, target, variant)
     package_dir = dist_dir / stem
@@ -553,10 +601,12 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     return package_dir, archive_path, checksum_path
 
 
-def run_test(platform_name):
-    """编译并直接启动程序（测试模式）"""
+def run_test(platform_name, skip_vue=False, skip_legacy=False):
+    """编译前端与 Rust，并直接启动程序（测试模式）。"""
     check_cargo()
-    print("[0/5] 清理残留的旧实例，避免端口被占用...")
+    print("[2/5] 构建前端...")
+    build_frontend_bundle(skip_vue=skip_vue, skip_legacy=skip_legacy)
+    print("[3/5] 清理残留的旧实例，避免端口被占用...")
     stop_existing_instances(platform_name)
     exe_path = build_release(platform_name)
     print("\n[测试模式] 启动程序...")
@@ -637,6 +687,32 @@ def check_portable_bundle_contract(bundle):
     for required in required_strings:
         if required not in bundle_text:
             ok = _quality_error(f"frontend bundle is missing contract field: {required}") and ok
+    return ok
+
+
+def check_vue_bundle_contract(vue_index):
+    """Ensure the Vue 3 bundle keeps the same portable-directory capability contract.
+
+    Scans the JS asset referenced by static/app/index.html (Vite names files
+    with a content hash; the link tag is the single source of truth).
+    """
+    index_text = vue_index.read_text(encoding="utf-8")
+    js_match = re.search(r'/app/assets/([^"\']+\.js)', index_text)
+    if not js_match:
+        return _quality_error("Vue bundle index.html does not reference an /app/assets/*.js entry")
+    js_path = vue_index.parent / "assets" / js_match.group(1)
+    if not js_path.is_file():
+        return _quality_error(f"Vue bundle asset missing: {js_path}")
+    js_text = js_path.read_text(encoding="utf-8")
+    required_strings = (
+        "can_browser_download",
+        "openDirectory",
+        "path_display_mode",
+    )
+    ok = True
+    for required in required_strings:
+        if required not in js_text:
+            ok = _quality_error(f"Vue bundle is missing contract field: {required}") and ok
     return ok
 
 
@@ -740,8 +816,12 @@ def run_quality_checks():
             raise SystemExit(1)
 
     bundle = build_frontend_bundle()
+    vue_bundle = bundle  # Vue index.html path; contract check scans assets/*.js instead
+    legacy_bundle = ROOT / "static" / "dist" / "app.bundle.js"
     ok = check_resource_hashes() and ok
-    ok = check_portable_bundle_contract(bundle) and ok
+    if legacy_bundle.is_file():
+        ok = check_portable_bundle_contract(legacy_bundle) and ok
+    ok = check_vue_bundle_contract(vue_bundle) and ok
     ok = check_windows_installer_encoding() and ok
 
     rust_source = "\n".join(path.read_text(encoding="utf-8") for path in rust_files)
@@ -833,7 +913,24 @@ def main():
     parser.add_argument("--check", action="store_true", help="运行全部规范门禁")
     parser.add_argument("--portable", action="store_true", help="构建当前平台完整便携版")
     parser.add_argument("--core", action="store_true", help="构建不含媒体运行时的轻量包")
-    parser.add_argument("--skip-frontend", action="store_true", help="复用已有 static/dist/app.bundle.js")
+    parser.add_argument(
+        "--skip-frontend-vue",
+        action="store_true",
+        help="复用已有的 Vue 3 产物（static/app/，由 web/ 的 vite build 产出）",
+    )
+    parser.add_argument(
+        "--skip-frontend-legacy",
+        action="store_true",
+        help="复用已有的旧版 vanilla-JS 产物（static/dist/app.bundle.js）",
+    )
+    parser.add_argument(
+        "--skip-frontend",
+        action="store_true",
+        help=(
+            "同时跳过 Vue 3 与 legacy 前端构建（向后兼容，等价于 "
+            "--skip-frontend-vue --skip-frontend-legacy）"
+        ),
+    )
     parser.add_argument("--skip-rust-build", action="store_true", help="复用已有 release 二进制")
     parser.add_argument(
         "--platform",
@@ -858,20 +955,18 @@ def main():
     if args.portable and args.core:
         parser.error("--portable 与 --core 不能同时使用")
 
+    skip_vue = args.skip_frontend_vue or args.skip_frontend
+    skip_legacy = args.skip_frontend_legacy or args.skip_frontend
+
     if not args.portable and not args.core:
-        run_test(platform_name)
+        run_test(platform_name, skip_vue=skip_vue, skip_legacy=skip_legacy)
         return
 
     dist_dir = ROOT / "dist"
     dist_dir.mkdir(exist_ok=True)
 
     check_cargo()
-    if args.skip_frontend:
-        bundle = ROOT / "static" / "dist" / "app.bundle.js"
-        if not bundle.is_file():
-            parser.error("--skip-frontend 要求已有 static/dist/app.bundle.js")
-    else:
-        build_frontend_bundle()
+    build_frontend_bundle(skip_vue=skip_vue, skip_legacy=skip_legacy)
     if args.skip_rust_build:
         exe_path = release_binary_path(platform_name, args.target)
         if not exe_path.is_file():

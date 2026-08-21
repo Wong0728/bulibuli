@@ -4,8 +4,66 @@
     color: var(--text-muted-deep);
 }
 
+.live-cover-placeholder,
+.drawer-cover-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+
+.blogger-notice-avatar-fallback {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    background: var(--bg);
+}
+
 .modal-overlay[role="dialog"] {
     overscroll-behavior: contain;
+    /* æ—§ç‰ˆ CSS ä¾èµ– .activeï¼›Vue ç»„ä»¶ç”¨ v-if æ§åˆ¶ç”Ÿå‘½å‘¨æœŸï¼Œä¸å†éœ€è¦è¯¥çŠ¶æ€ç±»ã€‚ */
+    opacity: 1;
+    visibility: visible;
+}
+
+.modal-overlay[role="dialog"] .modal-container {
+    transform: scale(1);
+}
+
+.toast-container {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 10000;
+    display: grid;
+    gap: 8px;
+    width: min(360px, calc(100vw - 32px));
+    pointer-events: none;
+}
+.toast {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    background: var(--card-bg, #fff);
+    color: var(--text, #1f2937);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .14);
+    pointer-events: auto;
+}
+.toast.error { border-color: var(--tone-error, #c0392b); }
+.toast.success { border-color: var(--tone-success, #2e9d58); }
+.toast-close {
+    flex: 0 0 auto;
+    border: 0;
+    padding: 0 2px;
+    background: transparent;
+    color: inherit;
+    font-size: 18px;
+    line-height: 1;
 }
 
 
@@ -48,4 +106,22 @@
 .blogger-notice-name {
     font-size: 12px;
     word-break: break-all;
+}
+
+/* ===== ÍøÂç½µ¼¶£¨¶ÔÆëÀÏ¿ò¼Ü network.js network-disabled£©=====
+ * ÀëÏß/ºó¶Ë²»¿ÉÓÃÊ±»Ò»¯ĞèÒªºó¶ËµÄ¿Ø¼ş£»´¿±¾µØ UI ²Ù×÷£¨LOCAL_ONLY_ACTIONS£©
+ * ¾­ :not() °×Ãûµ¥·ÅĞĞ£»data-network-required Óë¶ÀÁ¢°´Å¥ id ÎŞ»íÃâ
+ * £¨ÀÏ¿ò¼Ü updateNetworkDisabledButtons µÄÈıÀà½ûÓÃÄ¿±êÒ»ÖÂ£©¡£
+ * µã»÷À¹½ØÓÉ App.vue µÄ guardNetworkAction capture ÊØÎÀÅäºÏÍê³É¡£ */
+.network-degraded [data-action]:not([data-action="switch-tab"]):not([data-action="switch-board-tab"]):not([data-action="close-video-drawer"]):not([data-action="close-blogger-modal"]):not([data-action="close-add-blogger-modal"]):not([data-action="close-edit-blogger-modal"]):not([data-action="close-qr-modal"]):not([data-action="close-blogger-notice-modal"]):not([data-action="dismiss-network-toast"]):not([data-action="dismiss-cookie-warning"]):not([data-action="toggle-manual-cookie"]):not([data-action="add-time-point"]):not([data-action="remove-time-point"]):not([data-action="select-quality"]):not([data-action="toggle-all-pages"]):not([data-action="toggle-all-episodes"]):not([data-action="browser-download-master"]):not([data-action="browser-download-check"]),
+.network-degraded [data-network-required],
+.network-degraded :is(#blogger-search-btn, #manual-query-btn, #manual-resolve-btn, #show-add-blogger-btn, #detail-start-btn, #detail-stop-btn, #board-refresh-btn) {
+    opacity: 0.55;
+    cursor: not-allowed;
+    filter: grayscale(0.5);
+}
+
+/* ·şÎñÆ÷×´Ì¬Ö¸Ê¾Æ÷¿Éµã»÷£¨¶ÔÆëÀÏ¿ò¼Ü updateServerStatus µÄµã»÷·´À¡£©¡£ */
+.server-status {
+    cursor: pointer;
 }

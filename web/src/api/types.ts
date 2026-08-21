@@ -4,6 +4,8 @@ export interface ApiError {
   status: number;
   retryable: boolean;
   data?: unknown;
+  /** 网络层失败（fetch 抛错/响应无法解析）时为 true，对齐老框架 ApiError({offline: true}) 语义。 */
+  offline?: boolean;
 }
 
 export interface Envelope<T> {
@@ -14,26 +16,43 @@ export interface Envelope<T> {
 
 export interface AuthState {
   authenticated: boolean;
-  role?: 'owner' | 'guest' | null;
+  pairing_open?: boolean;
+  pairing_expires_at?: number | null;
+  csrf_token?: string | null;
+  role?: 'owner' | 'operator' | 'viewer' | null;
   user?: { mid?: number; name?: string; face?: string } | null;
 }
 
 export interface CookieStatus {
-  configured: boolean;
+  /** 前端归一化字段（由 has_cookies 合成）；后端 status 响应不返回它。 */
+  configured?: boolean;
+  has_cookies?: boolean;
   valid: boolean;
+  state?: 'authenticated' | 'unauthenticated' | 'risk_control' | 'unreachable' | 'malformed' | string;
+  /** 后端在上游检查失败时附带的业务码与错误分类。 */
+  business_code?: number;
+  error_kind?: string;
+  mid?: number;
+  uname?: string;
+  face?: string;
+  level?: number;
+  vip_status?: number;
+  vip_label?: string;
   message?: string;
 }
 
 export interface QrcodeGenerate {
   qrcode_key: string;
   url: string;
-  image_data?: string;
 }
 
 export interface QrcodePoll {
-  status: 'pending' | 'scanned' | 'confirmed' | 'expired' | 'failed';
+  /** 与 src/api/cookies.rs 的状态机保持一致。 */
+  status: 'pending' | 'authenticated' | 'expired' | 'partial';
   message?: string;
-  cookies?: string;
+  /** B 站上游业务码与最终登录结果标记。 */
+  code?: number;
+  authenticated?: boolean;
 }
 
 export interface NetworkStatus {
@@ -45,26 +64,38 @@ export interface FoundationStatus {
   configuration_status: string;
   access_mode: string;
   setup_access: string;
-  message?: string;
+  ai_skill_enabled?: boolean;
+  ai_skill_path?: string;
+  restart_required?: boolean;
 }
 
 export interface Blogger {
   id: number;
   uid: number;
+  version?: number;
   name: string;
   face?: string;
   sign?: string;
+  level?: number;
+  fans?: number;
   videos_count?: number;
   // 监控配置
   enabled?: boolean;
+  monitor_enabled?: boolean;
+  min_interval?: number;
+  max_interval?: number;
   filter_window_enabled?: boolean;
   filter_windows?: Array<{ start: string; end: string }>;
+  active_windows?: string[];
   // 增量选项
   download_video?: boolean;
   download_danmaku?: boolean;
   download_comments?: boolean;
   download_cover?: boolean;
   burn_after_merge?: boolean;
+  burn_danmaku?: boolean;
+  burn_subtitle?: boolean;
+  series_filter_regex?: string;
   // 其它
   next_check_at?: number;
   last_check_at?: number;
@@ -79,6 +110,7 @@ export interface Blogger {
 
 export interface SavedBlogger {
   id?: number;
+  version?: number;
   uid: number | string;
   name: string;
   face?: string;
@@ -94,18 +126,45 @@ export interface SavedBlogger {
   notice_visible?: boolean;
 }
 
+/** 前端归一化后的搜索结果（store 从后端 SearchedUser 映射而来）。 */
 export interface SearchBloggerResult {
   uid: number;
   name: string;
   face?: string;
   sign?: string;
+  level?: number;
   fans?: number;
   videos_count?: number;
+  uid_exact?: boolean;
+}
+
+/** 后端 /api/blogger/search 的原始元素（SearchedUser 序列化）。 */
+export interface SearchedUser {
+  mid: number;
+  uname: string;
+  upic: string;
+  fans: number;
+  level: number;
+  sign: string;
+  videos: number;
+}
+
+/** 后端 /api/blogger/validate-uid 的响应（UserProfile 序列化）。 */
+export interface UserProfileResult {
+  exists: boolean;
+  uid: number;
+  name: string;
+  face: string;
+  sign: string;
+  level: number;
+  fans: number;
 }
 
 export interface Series {
   series_id: number;
   title: string;
+  name?: string;
+  type?: 'season' | 'series' | string;
   count?: number;
 }
 
@@ -115,8 +174,12 @@ export interface VideoItem {
   title: string;
   pic?: string;
   duration?: number;
+  length?: string;
   pubdate?: number;
+  created?: number;
   play?: number;
+  is_charging_arc?: boolean;
+  comment?: number;
   cid?: number;
   // manual 模式相关
   pages?: Array<{ cid: number; part: string; duration?: number }>;
@@ -148,13 +211,13 @@ export interface ManualResolveResult {
 }
 
 export interface VideoUrlsResult {
-  accept_quality: Array<{ qn: number; name: string }>;
-  durl?: Array<{ id: number; url: string; size?: number; backup_urls?: string[] }>;
-  dash?: {
-    video?: Array<{ id: number; url: string; bandwidth?: number; codecs?: string }>;
-    audio?: Array<{ id: number; url: string; bandwidth?: number; codecs?: string }>;
-  };
-  expires_at?: number;
+  cid: number;
+  accept_quality: number[];
+  available_qualities?: number[];
+  qualities: Array<{ quality: number; quality_name: string; width: number; height: number; url: string; urls?: string[]; size?: number; format?: string; codec?: string }>;
+  selected_quality?: VideoUrlsResult['qualities'][number];
+  fallback_reason?: string | null;
+  default_quality?: number;
 }
 
 export interface VideoInfo {
@@ -167,12 +230,16 @@ export interface VideoInfo {
   tname?: string;
   up_name?: string;
   mid?: number;
-  pages?: Array<{ cid: number; part: string; duration?: number }>;
+  owner?: { mid?: number; name?: string; face?: string };
+  stat?: { view?: number; danmaku?: number; reply?: number; favorite?: number; coin?: number; share?: number; like?: number };
+  pub_timestamp?: number;
+  pages?: Array<{ cid: number; page?: number; part: string; duration?: number }>;
   cid?: number;
 }
 
 export interface DownloadTask {
   id: number;
+  version?: number;
   bvid: string;
   title: string;
   status: 'pending' | 'downloading' | 'completed' | 'failed' | 'paused' | 'burning' | 'retrying' | 'waiting_retry' | 'merge_failed' | 'cancelled' | 'removed' | 'merged' | string;
@@ -194,22 +261,27 @@ export interface DownloadTask {
   started_at?: number;
   completed_at?: number;
   updated_at?: string;
+  step?: number;
+  total_steps?: number;
+  step_label?: string;
 }
 
+/** 后端 /api/download/health 实际返回（src/services/download/status.rs）。 */
 export interface DownloadHealth {
-  aria2_ok: boolean;
-  queue_running: number;
-  queue_pending: number;
-  queue_paused: number;
+  aria2_connected: boolean;
+  aria2_status?: string;
+  aria2_diagnostics?: Record<string, any>;
 }
 
 export interface HistoryEntry {
   id: number;
+  version?: number;
   bvid: string;
   title: string;
   uid?: number | string;
   uploader_name?: string;
   status: string;
+  state?: string;
   is_completed?: boolean;
   has_danmaku?: boolean;
   has_comments?: boolean;
@@ -219,13 +291,25 @@ export interface HistoryEntry {
   local_path?: string;
   relative_path?: string;
   downloaded_at?: number;
+  download_time?: string;
+  pub_date?: string;
+  pub_timestamp?: number;
+  view?: number;
   duration?: number;
   page?: number;
   cid?: number;
   part_title?: string;
   pic?: string;
   failure?: { message?: string; kind?: string; fallback_reason?: string } | null;
-  task?: { status?: string; progress_percent?: number; speed?: number; total_size?: number; downloaded_size?: number; task_id?: number; priority?: number };
+  reupload_of?: string;
+  pay_note?: string;
+  md5?: string;
+  md5_last_checked_at?: string;
+  sha256?: string;
+  sha256_last_checked_at?: string;
+  can_open_directory?: boolean;
+  sidecar?: Record<string, any>;
+  task?: { status?: string; progress_percent?: number; speed?: number; total_size?: number; downloaded_size?: number; task_id?: number; version?: number; priority?: number; type?: string; error?: string; error_kind?: string; fallback_reason?: string; step?: number; total_steps?: number; step_label?: string };
   burned?: { danmaku?: boolean; subtitle?: boolean };
 }
 
@@ -296,6 +380,7 @@ export interface LiveRoom {
 
 export interface LiveSource {
   id: number;
+  version?: number;
   room_id: number;
   uid?: number;
   uname?: string;
@@ -311,6 +396,9 @@ export interface LiveSource {
   anchor_name?: string;
   face?: string;
   cover?: string;
+  capture_mode?: 'off' | 'standard' | 'full' | string;
+  schedule_all_day?: boolean;
+  weekly_schedule?: Record<string, string[]>;
   runtime?: {
     live_status?: number;
     live_time?: number;
@@ -322,6 +410,7 @@ export interface LiveSource {
 
 export interface LiveRecording {
   recording_id: string;
+  id?: number;
   room_id: number;
   uname?: string;
   title?: string;
@@ -329,7 +418,7 @@ export interface LiveRecording {
   segment_count?: number;
   duration?: number;
   size?: number;
-  status?: 'recording' | 'stopped' | 'merging' | 'merged' | 'failed';
+  status?: 'starting' | 'recording' | 'stopping' | 'finalizing' | 'stopped' | 'completed' | 'failed' | 'cancelled';
   // 扩展：来自 RecordingInfo 序列化
   duration_secs?: number;
   file_size?: number;
@@ -342,6 +431,11 @@ export interface LiveRecording {
   peak_watched?: number;
   estimated_paid_value?: number;
   error_msg?: string;
+  ended_at?: string;
+  has_output?: boolean;
+  can_open_directory?: boolean;
+  has_events?: boolean;
+  has_burned?: boolean;
   stream_quality?: number;
   stream_protocol?: string;
   stream_format?: string;
@@ -351,6 +445,9 @@ export interface LiveRecording {
   interaction_capture_status?: string;
   interaction_error?: string;
   danmu_unavailable?: boolean;
+  is_recoverable?: boolean;
+  segment_index?: number;
+  restart_attempts?: number;
 }
 
 export interface LiveMergeJob {
@@ -374,10 +471,17 @@ export interface LiveDashboard {
   // 扩展
   sources?: LiveSource[];
   sessions?: LiveRecording[];
-  monitor?: { running?: boolean; last_check_at?: string; [k: string]: any };
+  monitor?: {
+    running?: boolean;
+    last_heartbeat_at?: string;
+    last_success_at?: string;
+    last_error?: string;
+    risk_backoff_until?: string;
+    [k: string]: any;
+  };
   risk_notice?: string;
   merge_jobs?: LiveMergeJob[];
-  recovery?: any[];
+  recovery?: LiveRecording[];
   disk?: { available_bytes?: number; total_bytes?: number; path_hidden?: boolean };
   synced_at?: string;
   server_now?: string;
@@ -386,10 +490,14 @@ export interface LiveDashboard {
 }
 
 export interface Settings {
+  // 查询
+  manual_query_limit?: number;
+  auto_query_limit?: number;
   // 视频
   video_max_quality?: number;
   video_min_quality?: number;
   video_format?: number;
+  codec_preference?: string;
   video_download_video?: boolean;
   video_download_audio?: boolean;
   video_download_danmaku?: boolean;
@@ -404,6 +512,8 @@ export interface Settings {
   comments_main_limit?: number;
   comments_reply_mode?: string;
   comments_filter_regex?: string;
+  sidecar_archive_mode?: string;
+  sidecar_archive_limit?: number;
   // 智能下载
   enable_smart_download?: boolean;
   min_publish_hours?: number;
@@ -418,6 +528,12 @@ export interface Settings {
   aria2_dir?: string;
   aria2_max_concurrent?: number;
   aria2_mode?: string;
+  aria2_max_conn_per_server?: number;
+  aria2_split?: number;
+  aria2_min_split_size?: string;
+  aria2_max_tries?: number;
+  aria2_retry_wait?: number;
+  aria2_max_concurrent_downloads?: number;
   // ffmpeg
   ffmpeg_mode?: 'auto' | 'system' | 'embedded' | 'custom' | string;
   ffmpeg_custom_path?: string;
@@ -427,6 +543,13 @@ export interface Settings {
   // 烧录
   burn_font_size?: number;
   burn_opacity?: number;
+  burn_font_size_scale?: number;
+  burn_scroll_time?: number;
+  burn_fix_time?: number;
+  burn_bottom_reserve?: number;
+  burn_font_family?: string;
+  burn_color_mode?: string;
+  burn_color?: string;
   burn_bottom?: boolean;
   burn_top?: boolean;
   // CC 字幕
@@ -482,25 +605,58 @@ export interface UpdateStatus {
   release_notes?: string;
   last_checked_at?: number;
   policy?: string;
+  updatable?: boolean;
 }
 
 export interface LogEntry {
+  /** 毫秒时间戳（store 已从后端 timestamp 秒归一化）。 */
   ts: number;
   level: string;
   message: string;
+  uid?: string | null;
+  bvid?: string | null;
 }
 
+/** 后端 GET /api/setup/status（src/api/setup.rs::SetupStatus）。 */
 export interface SetupStatus {
-  configured: boolean;
-  mode?: 'standalone' | 'lan' | 'public';
-  access?: string;
-  bind_host?: string;
-  bind_port?: number;
-  ai_skill?: { content?: string };
+  completed: boolean;
+  mode: 'local' | 'lan' | 'proxy' | string;
+  configured_mode: string;
+  restart_required: boolean;
+  ai_skill_enabled: boolean;
+  ai_skill_path: string;
+  detected_ips: string[];
+  main_port: number;
+  setup_port: number;
+  main_url: string;
+  accessible_urls: string[];
 }
 
+/** 后端 GET /api/setup/detect。 */
 export interface DetectResult {
-  network_ok: boolean;
-  bilibili_ok?: boolean;
-  message?: string;
+  ipv4: string[];
+  ipv6: string[];
+}
+
+/** GET /api/settings 的套壳响应。 */
+export interface SettingsPayload {
+  current: Record<string, any>;
+  defaults?: Record<string, any>;
+  constraints?: Record<string, any>;
+  secret_configured?: boolean;
+}
+
+/** GET/POST /api/settings/ffmpeg-path|ffmpeg-test 的响应。 */
+export interface FfmpegStatus {
+  available: boolean;
+  path: string | null;
+  source: string;
+  version: string | null;
+}
+
+/** POST /api/update/apply 的响应。 */
+export interface UpdateApplyResult {
+  applied: boolean;
+  version?: string;
+  current_version?: string;
 }

@@ -1,4 +1,5 @@
 use crate::error::{ApiResponse, AppError};
+use crate::models::operation_log::OperationTarget;
 use crate::services::blogger::MonitorToggle;
 use crate::state::SharedState;
 use axum::{extract::State, routing::post, Json, Router};
@@ -37,34 +38,55 @@ pub fn router() -> Router<SharedState> {
 #[derive(Deserialize)]
 struct StartTaskRequest {
     uid: String,
+    #[serde(default)]
+    expected_version: Option<i32>,
 }
 
 async fn start_task(
     State(state): State<SharedState>,
     Json(req): Json<StartTaskRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = req.uid.trim();
-    if uid.is_empty() {
-        return Err(AppError::BadRequest("请提供博主UID".to_string()));
-    }
-    match state
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?.as_str().to_owned();
+    let blogger = state
         .business
         .blogger_service
-        .set_monitor_running(uid, true)
+        .find_by_uid(&uid)
         .await?
+        .filter(|blogger| blogger.has_auto_task)
+        .ok_or_else(|| AppError::NotFound("未找到该博主，请先添加".to_string()))?;
+    let guard = state
+        .infra
+        .conflict_guard
+        .check_and_bump(OperationTarget::Blogger, &blogger.id.to_string(), req.expected_version)
+        .await?;
+    let toggle = match state
+        .business
+        .blogger_service
+        .set_monitor_running(&uid, true)
+        .await
     {
+        Ok(toggle) => toggle,
+        Err(error) => {
+            let _ = guard.rollback().await;
+            return Err(error.into());
+        }
+    };
+    match toggle {
         MonitorToggle::NotFound => {
+            let _ = guard.rollback().await;
             return Err(AppError::NotFound("未找到该博主，请先添加".to_string()));
         }
         MonitorToggle::AlreadyInState => {
+            let _ = guard.rollback().await;
             return Err(AppError::Conflict("该博主监控已在运行中".to_string()));
         }
         MonitorToggle::Updated => {}
     }
+    guard.commit();
     let blogger = state
         .business
         .blogger_service
-        .find_by_uid(uid)
+        .find_by_uid(&uid)
         .await?
         .ok_or_else(|| AppError::NotFound("未找到该博主".to_string()))?;
     let now = Local::now();
@@ -88,7 +110,7 @@ async fn start_task(
     state
         .business
         .monitor_service
-        .add_log(Some(uid), None, &log_message, "success")
+        .add_log(Some(&uid), None, &log_message, "success")
         .await;
     Ok(Json(ApiResponse::with_message(
         json!({
@@ -105,28 +127,47 @@ async fn stop_task(
     State(state): State<SharedState>,
     Json(req): Json<StartTaskRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = req.uid.trim();
-    if uid.is_empty() {
-        return Err(AppError::BadRequest("请提供博主UID".to_string()));
-    }
-    match state
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?.as_str().to_owned();
+    let blogger = state
         .business
         .blogger_service
-        .set_monitor_running(uid, false)
+        .find_by_uid(&uid)
         .await?
+        .filter(|blogger| blogger.has_auto_task)
+        .ok_or_else(|| AppError::NotFound("未找到该博主".to_string()))?;
+    let guard = state
+        .infra
+        .conflict_guard
+        .check_and_bump(OperationTarget::Blogger, &blogger.id.to_string(), req.expected_version)
+        .await?;
+    let toggle = match state
+        .business
+        .blogger_service
+        .set_monitor_running(&uid, false)
+        .await
     {
+        Ok(toggle) => toggle,
+        Err(error) => {
+            let _ = guard.rollback().await;
+            return Err(error.into());
+        }
+    };
+    match toggle {
         MonitorToggle::NotFound => {
+            let _ = guard.rollback().await;
             return Err(AppError::NotFound("未找到该博主".to_string()));
         }
         MonitorToggle::AlreadyInState => {
+            let _ = guard.rollback().await;
             return Err(AppError::Conflict("该博主监控未在运行".to_string()));
         }
         MonitorToggle::Updated => {}
     }
+    guard.commit();
     state
         .business
         .monitor_service
-        .add_log(Some(uid), None, "监控已停止", "info")
+        .add_log(Some(&uid), None, "监控已停止", "info")
         .await;
     Ok(Json(ApiResponse::with_message(json!({}), "监控已停止")))
 }

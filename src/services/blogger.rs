@@ -318,6 +318,7 @@ impl BloggerService {
     /// 应用博主配置更新（字段级 patch；输入已由 API 层校验）。
     pub async fn apply_update(&self, current: blogger::Model, update: BloggerUpdate) -> Result<()> {
         let id = current.id;
+        let next_version = current.version.saturating_add(1);
         let current_monitor_enabled = current.is_running;
         let current_next_check = current.next_check;
         let current_active_windows = current.active_windows.clone();
@@ -406,6 +407,7 @@ impl BloggerService {
             model.next_check = Set(next);
         }
         model.updated_at = Set(Some(Local::now()));
+        model.version = Set(next_version);
         model.update(&self.db).await?;
         info!("更新博主配置成功: {id}");
         Ok(())

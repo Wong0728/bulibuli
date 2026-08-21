@@ -4,18 +4,23 @@
  * - POST 用 body
  * - 二进制流/下载直接用 fetch 返回的 Response
  */
-import { get, post } from './client';
+import { get, post, put, request } from './client';
 import type {
   AuthState, CookieStatus, QrcodeGenerate, QrcodePoll, FoundationStatus, SetupStatus, DetectResult,
-  Blogger, SavedBlogger, SearchBloggerResult, Series, VideoItem, ManualResolveResult, VideoUrlsResult, VideoInfo,
-  DownloadTask, DownloadHealth, HistoryBoard, HistoryBoardResponse, HistoryEntry, LiveRoom, LiveSource, LiveRecording, LiveDashboard, Settings,
-  UpdateStatus, LogEntry,
+  Blogger, SavedBlogger, SearchedUser, UserProfileResult, Series, VideoItem, VideoUrlsResult, VideoInfo,
+  DownloadTask, DownloadHealth, HistoryBoardResponse, HistoryEntry, LiveRoom, LiveSource, LiveRecording, LiveDashboard, LiveMergeJob,
+  SettingsPayload, FfmpegStatus,
+  UpdateStatus, UpdateApplyResult,
 } from './types';
 
 /** ---------- auth ---------- */
 export const auth = {
-  state: () => get<AuthState>('/api/auth/state'),
-  logout: () => post<{ ok: boolean }>('/api/auth/logout'),
+  // 配对刚写入会话 Cookie，入口状态不能读到旧的 GET 缓存。
+  state: () => request<AuthState>('/api/auth/state', { method: 'GET', cache: 'no-store' }),
+  pair: (code: string, device_name?: string) =>
+    post<{ paired: boolean }>('/api/auth/pair', { code, device_name }),
+  // 后端响应是 { logged_out: true }（src/api/auth.rs::logout）。
+  logout: () => post<{ logged_out: boolean }>('/api/auth/logout'),
 };
 
 /** ---------- foundation ---------- */
@@ -28,7 +33,8 @@ export const cookies = {
   status: () => get<CookieStatus>('/api/cookies/status'),
   // 后端期望的字段是 `cookies`（src/api/cookies.rs::CookiesRequest），
   // 旧前端发 `content` 所以保存永远失败；这里在 client 侧直接对齐。
-  save: (content: string) => post<{ ok: boolean }>('/api/cookies/save', { cookies: content }),
+  // 响应是 { configured: boolean }。
+  save: (content: string) => post<{ configured: boolean }>('/api/cookies/save', { cookies: content }),
   qrcodeGenerate: () => get<QrcodeGenerate>('/api/cookies/qrcode/generate'),
   qrcodePoll: (qrcode_key: string) => get<QrcodePoll>('/api/cookies/qrcode/poll', { qrcode_key }),
 };
@@ -43,18 +49,21 @@ export const cookies = {
  *   - series 返回合集列表
  */
 export const blogger = {
-  list: () => get<Blogger[]>('/api/blogger/list'),
+  list: () => get<{ bloggers: Blogger[] }>('/api/blogger/list'),
   savedList: () => get<{ bloggers: SavedBlogger[] }>('/api/blogger/saved/list'),
-  savedAdd: (uid: number | string) => post<{ ok: boolean }>('/api/blogger/saved/add', { uid: String(uid) }),
+  savedAdd: (uid: number | string, details: Partial<Pick<SavedBlogger, 'name' | 'face' | 'sign' | 'level' | 'fans'>> = {}) =>
+    post<{ ok: boolean }>('/api/blogger/saved/add', { uid: String(uid), ...details }),
   savedDelete: (id: number) => post<{ ok: boolean }>('/api/blogger/saved/delete', { id }),
-  add: (uid: number, config: Partial<Blogger>) => post<Blogger>('/api/blogger/add', { uid: String(uid), ...config }),
-  update: (id: number, patch: Partial<Blogger>) => post<Blogger>('/api/blogger/update', { id, ...patch }),
+  add: (uid: number, config: Partial<Blogger>) =>
+    post<{ blogger: Blogger }>('/api/blogger/add', { uid: String(uid), ...config }),
+  update: (id: number, patch: Partial<Blogger>) =>
+    post<{ blogger: Blogger }>('/api/blogger/update', { id, ...patch }),
   remove: (id: number) => post<{ ok: boolean }>('/api/blogger/delete', { id }),
-  search: (keyword: string) => get<SearchBloggerResult[]>('/api/blogger/search', { keyword }),
-  validateUid: (uid: number | string) => get<Blogger>('/api/blogger/validate-uid', { uid: String(uid) }),
-  series: (uid: number | string) => get<Series[]>('/api/blogger/series', { uid: String(uid) }),
+  search: (q: string) => get<{ users: SearchedUser[]; total: number }>('/api/blogger/search', { q }),
+  validateUid: (uid: number | string) => get<UserProfileResult>('/api/blogger/validate-uid', { uid: String(uid) }),
+  series: (uid: number | string) => get<{ series: Series[] }>('/api/blogger/series', { uid: String(uid) }),
   seriesVideos: (uid: number | string, seriesId: number, opts: { collection_type?: 'series' | 'season'; offset?: number; limit?: number } = {}) =>
-    get<{ items: any[]; has_more?: boolean }>('/api/blogger/series-videos', {
+    get<{ videos: any[]; has_more?: boolean }>('/api/blogger/series-videos', {
       uid: String(uid),
       series_id: seriesId,
       collection_type: opts.collection_type ?? 'series',
@@ -70,7 +79,8 @@ export const blogger = {
  * 后端约定（src/api/video/stream.rs）：
  *   - POST /api/video/resolve  body: { input }    ← 不叫 bvid
  *   - POST /api/video/get-videos body: { uid: String, limit?, offset? }
- *   - POST /api/video/get-video-urls body: { bvid, fnval?, cid? }   ← 没有 qn
+ *   - POST /api/video/get-video-urls body: { bvid, qn?, cid?, fnval? }
+ *       fnval 不传时后端用 settings.query.video_format，前端不要硬编码覆盖用户设置
  *   - POST /api/video/get-audio-url body: { bvid }                    ← 没有 cid
  *   - GET  /api/video/info  ?bvid=...
  *   - 没有 /api/video/resolve-link —— 用 /api/video/resolve + { input } 替代
@@ -78,44 +88,61 @@ export const blogger = {
 export const video = {
   resolve: (bvid: string) => post<any>('/api/video/resolve', { input: bvid }),
   getVideos: (uid: number | string, opts: { limit?: number; offset?: number } = {}) =>
-    post<{ items: VideoItem[]; has_more?: boolean; total?: number }>('/api/video/get-videos', { uid: String(uid), ...opts }),
-  getVideoUrls: (bvid: string, cid?: number, _qn?: number) =>
-    post<VideoUrlsResult>('/api/video/get-video-urls', { bvid, cid, fnval: 4048 }),
-  getAudioUrl: (bvid: string) => post<{ url: string; expires_at?: number }>('/api/video/get-audio-url', { bvid }),
+    post<{ videos: VideoItem[]; has_more?: boolean; total?: number }>('/api/video/get-videos', { uid: String(uid), ...opts }),
+  getVideoUrls: (bvid: string, cid?: number, qn?: number) =>
+    post<VideoUrlsResult>('/api/video/get-video-urls', { bvid, cid, qn }),
+  getAudioUrl: (bvid: string) => post<{ audio_url: string; qualities?: Array<{ id: number; bandwidth: number; url: string }>; ext?: string }>('/api/video/get-audio-url', { bvid }),
   info: (bvid: string) => get<VideoInfo>('/api/video/info', { bvid }),
-  gateDownload: (bvid: string) => post<{ ok: boolean; reason?: string }>('/api/video/gate-download', { bvid }),
+  // 后端响应 { allow, state, pay_note, message }（src/api/video/stream.rs::gate_download）。
+  gateDownload: (bvid: string) => post<{ allow: boolean; state?: string; pay_note?: string; message?: string }>('/api/video/gate-download', { bvid }),
   /** 解析番剧/课程/单视频链接：后端没有独立路由，复用 /api/video/resolve。 */
   resolveLink: (link: string) => post<any>('/api/video/resolve', { input: link }),
-  comments: (bvid: string) => get<{ count: number }>('/api/video/comments', { bvid }),
-  danmaku: (bvid: string) => get<{ count: number }>('/api/video/danmaku', { bvid }),
+  comments: (bvid: string, opts: { path?: string; history_id?: number; uid?: number | string } = {}) =>
+    get<any>('/api/video/comments', { bvid, ...opts, uid: opts.uid == null ? undefined : String(opts.uid) }),
+  danmaku: (bvid: string, path: string, history_id?: number) =>
+    get<any>('/api/video/danmaku', { bvid, path, history_id }),
+  downloadDanmaku: (bvid: string, opts: { source?: string; page?: number; history_id?: number } = {}) =>
+    post<{ count: number }>('/api/video/download-danmaku', { bvid, source: opts.source, page: opts.page, history_id: opts.history_id }),
+  downloadComments: (bvid: string, opts: { source?: string; history_id?: number } = {}) =>
+    post<{ count: number }>('/api/video/download-comments', { bvid, source: opts.source, history_id: opts.history_id }),
   proxyImage: (url: string) => `/api/video/proxy-image?url=${encodeURIComponent(url)}`,
-  downloadCover: (bvid: string) => post<{ ok: boolean; path?: string }>('/api/video/download-cover', { bvid }),
+  // 后端响应 { filename, size }（src/api/video/cover.rs）。
+  downloadCover: (bvid: string) => post<{ filename: string; size: number }>('/api/video/download-cover', { bvid }),
 };
 
 /** ---------- download ----------
  * 后端约定（src/api/download/queue_ops.rs）：
  *   POST /api/download/add  body: { bvid, title, url, quality?, type? }
  *   type 默认 "video"，合法值：video / audio / danmaku / comments / cover
- *   start / retry / remove / pause / resume / priority 走 task_id (i32)
- *   没有 pause-all / resume-all 路由 → 前端在 store 里循环
- *   /api/download/status 是按 uid 查的（不是单 task）
+ *   start / retry / remove / priority 使用 bvid/type；pause/resume 使用 task_id
+ *   （传 null 表示后端原子执行全局暂停/恢复）。
+ *   retry-all 的时间过滤是 query 参数 ?since=，响应是 { download_id }。
+ *   /api/download/status 返回按任务键组织的活动快照，可选 uid 过滤。
+ *   burn 的 source 合法值是 danmaku / subtitle / both（没有 all）。
+ *   proxy 是资源代理：query 必填 url，可选 filename（没有 task_id）。
  */
 export const download = {
   add: (bvid: string, opts: { title: string; url: string; quality?: number; type?: 'video' | 'audio' | 'danmaku' | 'comments' | 'cover' } = { title: '', url: '' }) =>
-    post<DownloadTask>('/api/download/add', { bvid, ...opts }),
-  start: (task_id: number) => post<DownloadTask>('/api/download/start', { task_id }),
-  retry: (task_id: number) => post<DownloadTask>('/api/download/retry', { task_id }),
-  retryAll: () => post<{ count: number }>('/api/download/retry-all', {}),
-  remove: (task_id: number) => post<{ ok: boolean }>('/api/download/remove', { task_id }),
-  pause: (task_id: number) => post<{ ok: boolean }>('/api/download/pause', { task_id }),
-  resume: (task_id: number) => post<{ ok: boolean }>('/api/download/resume', { task_id }),
-  priority: (task_id: number, priority: number) => post<{ ok: boolean }>('/api/download/priority', { task_id, priority }),
-  status: (uid?: string, limit?: number) => get<any>('/api/download/status', { uid, limit }),
+    post<{ download_id: number }>('/api/download/add', { bvid, ...opts }),
+  start: (bvid: string, opts: { qn?: number; uid?: string; pages?: any[]; media_type?: string; season_title?: string } = {}) =>
+    post<DownloadTask>('/api/download/start', { bvid, ...opts }),
+  retry: (bvid: string, type = 'video') => post<DownloadTask>('/api/download/retry', { bvid, type }),
+  retryAll: (since?: number) =>
+    post<{ download_id: number }>(`/api/download/retry-all${since != null ? `?since=${encodeURIComponent(since)}` : ''}`, {}),
+  remove: (bvid: string, type = 'video') => post<{ ok: boolean }>('/api/download/remove', { bvid, type }),
+  // task_id=null 由后端解释为全局暂停/恢复，旧前端也使用这个契约。
+  pause: (task_id: number | null) => post<{ ok?: boolean }>('/api/download/pause', { task_id }),
+  resume: (task_id: number | null) => post<{ ok?: boolean }>('/api/download/resume', { task_id }),
+  priority: (bvid: string, type: string, priority: number) => post<{ ok: boolean }>('/api/download/priority', { bvid, type, priority }),
+  status: (uid?: string) => get<any>('/api/download/status', { uid }),
   health: () => get<DownloadHealth>('/api/download/health'),
   metrics: () => get<{ statuses: Record<string, number>; error_kinds: Record<string, number>; waiting_retry: number }>('/api/download/metrics'),
-  burn: (bvid: string, source: 'danmaku' | 'subtitle' | 'all', history_id?: number | null) =>
+  burn: (bvid: string, source: 'danmaku' | 'subtitle' | 'both', history_id?: number | null) =>
     post<{ ok: boolean; task_id?: string }>('/api/download/burn', { bvid, source, history_id: history_id ?? null }),
-  proxy: (task_id: number) => `/api/download/proxy?task_id=${task_id}`,
+  burnStatus: (task_id: string) =>
+    get<{ task_id: string; status: string; message?: string; output_path?: string }>(`/api/download/burn/status/${encodeURIComponent(task_id)}`),
+  proxy: (url: string, filename?: string) =>
+    `/api/download/proxy?url=${encodeURIComponent(url)}${filename ? `&filename=${encodeURIComponent(filename)}` : ''}`,
 };
 
 /** ---------- history ----------
@@ -132,25 +159,32 @@ export const history = {
     get<HistoryBoardResponse>('/api/history/list', { tab, page, page_size }),
   detail: (bvid: string, history_id?: number) =>
     get<{ server_time: number; video: any }>('/api/history/list', { bvid, history_id }),
-  byUid: (uid: number, page = 1, page_size = 50) => get<HistoryBoardResponse>('/api/history/by-uid', { uid, page, page_size }),
-  search: (keyword: string, tab: 'completed' | 'failed' = 'completed', page = 1) =>
-    get<{ items: HistoryEntry[]; total: number }>('/api/history/search', { keyword, tab, page }),
-  delete: (id: number) => post<{ ok: boolean }>('/api/history/delete', { id }),
-  openDirectory: (id: number) => post<{ ok: boolean }>('/api/history/open-directory', { id }),
-  fileDownloadUrl: (bvid: string, path: string) =>
-    `/api/history/file-download?bvid=${encodeURIComponent(bvid)}&path=${encodeURIComponent(path)}`,
+  // 后端 by-uid 只接受 uid，返回平铺 { history: [...] }，不是分页看板。
+  byUid: (uid: number) => get<{ history: HistoryEntry[] }>('/api/history/by-uid', { uid }),
+  search: (keyword: string, page = 1, page_size = 50) =>
+    get<{ history: HistoryEntry[]; total: number; page: number; page_size: number }>('/api/history/search', { keyword, page, page_size }),
+  delete: (bvid: string, history_id?: number, delete_files?: boolean) =>
+    post<{ ok: boolean }>('/api/history/delete', { bvid, history_id, delete_files }),
+  openDirectory: (bvid: string, history_id?: number, path?: string) =>
+    post<{ ok: boolean }>('/api/history/open-directory', { bvid, history_id, path }),
+  fileDownloadUrl: (bvid: string, path: string, history_id?: number) =>
+    `/api/history/file-download?bvid=${encodeURIComponent(bvid)}&path=${encodeURIComponent(path)}${history_id == null ? '' : `&history_id=${encodeURIComponent(String(history_id))}`}`,
 };
 
 /** ---------- task ----------
  * 后端约定（src/api/task.rs）：
  *   - POST /api/task/start  body: { uid: String }    （uid 是字符串，不是数字）
- *   - POST /api/task/stop   body: { uid: String }
+ *       响应是调度快照 { next_check, schedule, server_timestamp, server_utc_offset }
+ *   - POST /api/task/stop   body: { uid: String }，响应 data 为空对象
  *   - GET  /api/task/status 无参，返回全局聚合；不要按 uid 查
  *   - GET  /api/task/next-check 无参，返回 { bloggers: { uid: {schedule} }, ... }
  */
 export const task = {
-  start: (uid: number | string) => post<{ ok: boolean }>('/api/task/start', { uid: String(uid) }),
-  stop: (uid: number | string) => post<{ ok: boolean }>('/api/task/stop', { uid: String(uid) }),
+  start: (uid: number | string) =>
+    post<{ next_check?: number; schedule?: Record<string, any>; server_timestamp?: number; server_utc_offset?: string }>(
+      '/api/task/start', { uid: String(uid) }),
+  stop: (uid: number | string) =>
+    post<Record<string, never>>('/api/task/stop', { uid: String(uid) }),
   status: () => get<any>('/api/task/status'),
   nextCheck: () => get<{ bloggers: Record<string, any>; server_timestamp: number; server_utc_offset: string }>('/api/task/next-check'),
 };
@@ -158,60 +192,80 @@ export const task = {
 /** ---------- live ---------- */
 export const live = {
   roomInfo: (room_id: number) => get<LiveRoom>('/api/live/room-info', { room_id }),
-  start: (source_id: number) => post<LiveRecording>('/api/live/start', { source_id }),
-  stop: (recording_id: string) => post<{ ok: boolean }>('/api/live/stop', { recording_id }),
-  status: (recording_id: string) => get<LiveRecording>('/api/live/status', { recording_id }),
+  start: (room_id: number) => post<LiveRecording>('/api/live/start', { room_id }),
+  // 后端响应 { operation_id, recording_id, status, progress }（停止是异步收尾）。
+  stop: (room_id: number) =>
+    post<{ operation_id: string; recording_id: number | string; status: string; progress: number }>('/api/live/stop', { room_id }),
+  status: () => get<{ count: number; sessions: LiveRecording[] }>('/api/live/status'),
   dashboard: () => get<LiveDashboard>('/api/live/dashboard'),
   sourceAdd: (room_id: number, config: Partial<LiveSource> = {}) => post<LiveSource>('/api/live/source/add', { room_id, ...config }),
-  sourceUpdate: (id: number, patch: Partial<LiveSource>) => post<LiveSource>('/api/live/source/update', { id, ...patch }),
-  sourceDelete: (id: number) => post<{ ok: boolean }>('/api/live/source/delete', { id }),
-  history: (page = 1) => get<{ items: LiveRecording[]; total: number }>('/api/live/history', { page }),
-  recovery: () => get<{ recordings: LiveRecording[] }>('/api/live/recovery'),
-  events: (recording_id: string) => get<{ events: Array<{ ts: number; category: string; label: string }> }>('/api/live/events', { recording_id }),
-  startMerge: (recording_id: string) => post<{ job_id: string }>(`/api/live/history/${recording_id}/merge`, {}),
-  mergeJob: (job_id: string) => get<{ status: string; progress?: number; error?: string; output_path?: string }>(`/api/live/merge/${job_id}`),
+  sourceUpdate: (room_id: number, patch: Partial<LiveSource>) =>
+    post<LiveSource>('/api/live/source/update', { room_id, ...patch }),
+  sourceDelete: (room_id: number) => post<{ ok: boolean }>('/api/live/source/delete', { room_id }),
+  history: (limit = 30) => get<{ items: LiveRecording[]; total?: number }>('/api/live/history', { limit }),
+  // 后端返回 { items }（src/api/live/history.rs::recovery）。
+  recovery: () => get<{ items: LiveRecording[] }>('/api/live/recovery'),
+  events: (room_id: number, recording_id?: number, after_seq = 0, limit = 100) =>
+    get<{ recording_id?: string | number; events: Array<Record<string, any>>; next_seq?: number }>('/api/live/events', { room_id, recording_id, after_seq, limit }),
+  burnDanmaku: (recording_id: string | number) =>
+    post<{ ok: boolean; task_id?: string }>(`/api/live/history/${encodeURIComponent(String(recording_id))}/burn-danmaku`, {}),
+  startMerge: (recording_id: string) => post<LiveMergeJob>(`/api/live/history/${recording_id}/merge`, {}),
+  mergeJob: (job_id: string) => get<LiveMergeJob>(`/api/live/merge/${job_id}`),
   cancelMerge: (job_id: string) => post<{ ok: boolean }>(`/api/live/merge/${job_id}/cancel`, {}),
+  openDirectory: (recording_id: number) =>
+    post<{ ok: boolean }>(`/api/live/history/${recording_id}/open-directory`, {}),
 };
 
-/** ---------- settings ---------- */
+/** ---------- settings ----------
+ * 后端约定（src/api/settings.rs）：
+ *   - GET /api/settings → { current, defaults, constraints, secret_configured }（套壳）
+ *   - PUT /api/settings → body 是嵌套 RuntimeSettings 顶层展开 + expected_revision，
+ *     响应是裸 RuntimeSettings；reset 同型。
+ *   - ffmpeg-path / ffmpeg-test 都返回 { available, path, source, version }。
+ *   - path-preview body 是扁平变量字段 { template, title?, uid?, ... }，响应 { path }。
+ */
 export const settings = {
-  get: () => get<Settings>('/api/settings'),
-  save: (s: Settings) => post<Settings>('/api/settings', s),
-  reset: () => post<Settings>('/api/settings/reset', {}),
-  aria2Restart: () => post<{ ok: boolean }>('/api/settings/aria2-restart'),
-  ffmpegPath: () => get<{ path: string; bundled: boolean; mode: string }>('/api/settings/ffmpeg-path'),
-  ffmpegTest: (opts: { mode?: string; custom_path?: string }) =>
-    post<{ ok: boolean; version?: string; probe?: string; message?: string }>('/api/settings/ffmpeg-test', opts),
-  pathPreview: (opts: { template: string; vars: Record<string, string> }) =>
-    post<{ preview: string }>('/api/settings/path-preview', opts),
+  get: () => get<SettingsPayload>('/api/settings'),
+  save: (nestedSettings: Record<string, any>) =>
+    put<Record<string, any>>('/api/settings', { ...nestedSettings, expected_revision: nestedSettings.revision }),
+  reset: () => post<Record<string, any>>('/api/settings/reset'),
+  aria2Restart: () => post<{ restarted: boolean; error?: string | null; aria2_diagnostics?: unknown }>('/api/settings/aria2-restart'),
+  ffmpegPath: () => get<FfmpegStatus>('/api/settings/ffmpeg-path'),
+  ffmpegTest: (opts: { mode?: string; custom_path?: string }) => post<FfmpegStatus>('/api/settings/ffmpeg-test', opts),
+  pathPreview: (body: { template: string } & Record<string, string | number | undefined>) =>
+    post<{ path: string }>('/api/settings/path-preview', body),
 };
 
 /** ---------- logs ----------
- * 后端 3 个日志接口都返回 { logs: [...] } 包装对象
- * （src/api/logs.rs），老前端当数组遍历会拿到 undefined 链。
+ * 后端 3 个日志接口都返回 { logs: [...] } 包装对象（src/api/logs.rs），
+ * 条目字段是 { id, level, msg, uid, bvid, time, timestamp }，由 store 归一化成 LogEntry。
+ * 后端 limit 被 clamp 到 1-100，且没有 level 参数（前端需自行过滤）。
  */
 export const logs = {
-  get: (limit = 500, level?: string) => get<{ logs: LogEntry[] }>('/api/logs/get', { limit, level }),
-  blogger: (uid: number | string, limit = 500) =>
-    get<{ logs: LogEntry[] }>('/api/logs/blogger', { uid: String(uid), limit }),
-  bvid: (bvid: string, limit = 500) =>
-    get<{ logs: LogEntry[] }>('/api/logs/bvid', { bvid, limit }),
+  get: (limit = 100) => get<{ logs: any[] }>('/api/logs/get', { limit: Math.min(limit, 100) }),
+  blogger: (uid: number | string, limit = 100) =>
+    get<{ logs: any[] }>('/api/logs/blogger', { uid: String(uid), limit: Math.min(limit, 100) }),
+  bvid: (bvid: string, limit = 100) =>
+    get<{ logs: any[] }>('/api/logs/bvid', { bvid, limit: Math.min(limit, 100) }),
 };
 
 /** ---------- refresh ----------
- * 后端 /api/refresh 是 GET + query(kind=board|blogger|video|verify)（src/api/refresh.rs）
+ * 后端 /api/refresh 是 POST + query(kind=board|blogger|video|verify)（src/api/refresh.rs）
  * 旧前端发 {} 空 body，会返回 400。
  */
 export const refresh = {
   trigger: (kind: 'board' | 'blogger' | 'video' | 'verify' = 'board', bvid?: string) =>
-    get<{ refreshed?: number; bvid?: string; verified?: number }>('/api/refresh', { kind, bvid }),
+    post<{ refreshed?: number; bvid?: string; verified?: number }>(
+      `/api/refresh?kind=${encodeURIComponent(kind)}${bvid ? `&bvid=${encodeURIComponent(bvid)}` : ''}`,
+    ),
 };
 
 /** ---------- update ---------- */
 export const update = {
   status: () => get<UpdateStatus>('/api/update/status'),
   check: () => post<UpdateStatus>('/api/update/check'),
-  apply: () => post<{ ok: boolean; need_restart?: boolean }>('/api/update/apply'),
+  // 后端响应 { applied, version }（或 applied:false + current_version）。
+  apply: () => post<UpdateApplyResult>('/api/update/apply'),
 };
 
 /** ---------- setup ----------
@@ -223,23 +277,26 @@ export const update = {
  *   - GET  /api/setup/ports   返回端口 / URL 信息
  */
 export const setup = {
-  status: () => get<any>('/api/setup/status'),
+  status: () => get<SetupStatus>('/api/setup/status'),
   apply: (config: { mode: 'local' | 'lan' | 'proxy'; access_default?: 'allow' | 'deny'; proxy_domain?: string; mark_completed?: boolean }) =>
     post<any>('/api/setup/apply', config),
   aiSkill: (enabled: boolean) => post<{ ai_skill_enabled: boolean }>('/api/setup/ai-skill', { enabled }),
-  detect: () => get<{ ipv4: string[]; ipv6: string[] }>('/api/setup/detect'),
+  detect: () => get<DetectResult>('/api/setup/detect'),
   ports: () => get<{ main_port: number; setup_port: number; main_url: string; setup_url: string; accessible_urls: string[] }>('/api/setup/ports'),
 };
 
-/** ---------- cover (static) ---------- */
+/** ---------- cover (static) ----------
+ * 封面统一走 /api/cover/{bvid}（本地优先 + 兜底下载），history_id 用于同一 bvid 多条记录定位。
+ */
 export const cover = {
-  url: (bvid: string) => `/api/cover/${bvid}`,
+  url: (bvid: string, history_id?: number) =>
+    `/api/cover/${bvid}${history_id == null ? '' : `?history_id=${encodeURIComponent(history_id)}`}`,
 };
 
 /** ---------- health ---------- */
 export const health = {
-  health: () => get<{ ok: boolean }>('/api/health'),
-  ready: () => get<{ ok: boolean }>('/api/ready'),
+  health: () => get<{ status: 'ok' | 'degraded'; aria2: boolean; ffmpeg: boolean }>('/api/health'),
+  ready: () => get<{ status: 'ok' | 'degraded'; db: boolean; aria2: boolean }>('/api/ready'),
 };
 
 /** ---------- default export for convenience ---------- */

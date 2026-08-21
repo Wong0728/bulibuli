@@ -1,4 +1,5 @@
 use serde::Serialize;
+use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 use std::collections::HashMap;
 
 /// 终态烧录任务在内存表中的保留时长（秒）。
@@ -46,4 +47,88 @@ pub struct BurnTask {
     pub created_at: i64,
     #[serde(skip_serializing)]
     pub updated_at: i64,
+}
+
+pub async fn persist_burn_task(
+    db: &DatabaseConnection,
+    id: &str,
+    task: &BurnTask,
+) -> Result<(), sea_orm::DbErr> {
+    db.execute_raw(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "INSERT INTO burn_tasks (id, bvid, status, message, output_path, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET bvid=excluded.bvid, status=excluded.status,
+           message=excluded.message, output_path=excluded.output_path,
+           created_at=excluded.created_at, updated_at=excluded.updated_at",
+        [
+            id.to_owned().into(),
+            task.bvid.clone().into(),
+            task.status.clone().into(),
+            task.message.clone().into(),
+            task.output_path.clone().into(),
+            task.created_at.into(),
+            task.updated_at.into(),
+        ],
+    ))
+    .await?;
+    Ok(())
+}
+
+pub async fn find_burn_task(
+    db: &DatabaseConnection,
+    id: &str,
+) -> Result<Option<BurnTask>, sea_orm::DbErr> {
+    let row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT bvid, status, message, output_path, created_at, updated_at
+             FROM burn_tasks WHERE id = ?",
+            [id.to_owned().into()],
+        ))
+        .await?;
+    row.map(|row| {
+        Ok(BurnTask {
+            bvid: row.try_get("", "bvid")?,
+            status: row.try_get("", "status")?,
+            message: row.try_get("", "message")?,
+            output_path: row.try_get("", "output_path")?,
+            created_at: row.try_get("", "created_at")?,
+            updated_at: row.try_get("", "updated_at")?,
+        })
+    })
+    .transpose()
+}
+
+pub async fn restore_burn_tasks(
+    db: &DatabaseConnection,
+) -> Result<HashMap<String, BurnTask>, sea_orm::DbErr> {
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT id, bvid, status, message, output_path, created_at, updated_at
+             FROM burn_tasks ORDER BY updated_at DESC LIMIT 200"
+                .to_owned(),
+        ))
+        .await?;
+    let mut tasks = HashMap::new();
+    for row in rows {
+        let id: String = row.try_get("", "id")?;
+        let mut task = BurnTask {
+            bvid: row.try_get("", "bvid")?,
+            status: row.try_get("", "status")?,
+            message: row.try_get("", "message")?,
+            output_path: row.try_get("", "output_path")?,
+            created_at: row.try_get("", "created_at")?,
+            updated_at: row.try_get("", "updated_at")?,
+        };
+        if burn_status_active(&task.status) {
+            task.status = "failed".to_owned();
+            task.message = "程序重启前烧录未完成，请重新发起烧录".to_owned();
+            task.updated_at = chrono::Utc::now().timestamp();
+            persist_burn_task(db, &id, &task).await?;
+        }
+        tasks.insert(id, task);
+    }
+    Ok(tasks)
 }

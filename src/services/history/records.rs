@@ -56,10 +56,21 @@ impl HistoryService {
                 return Ok(cached.clone());
             }
         }
+        // 活跃集合 = 所有非终态任务（含 paused/retrying/merging）：
+        // 暂停的任务必须继续留在「下载中」看板（history.state 仍是 completed/pending，
+        // 一旦漏出活跃集合就会掉进「已下载」或从三个 tab 全部消失）。
         let active_tasks = download_task::Entity::find()
             .select_only()
             .column(download_task::Column::Bvid)
-            .filter(download_task::Column::Status.is_in(["pending", "downloading"]))
+            .filter(
+                download_task::Column::Status.is_in([
+                    "pending",
+                    "downloading",
+                    "paused",
+                    "retrying",
+                    "merging",
+                ]),
+            )
             .into_tuple::<String>()
             .all(&self.db)
             .await?;
@@ -245,6 +256,21 @@ impl HistoryService {
                 .into_iter()
                 .flatten()
                 {
+                    // 历史表可能包含旧版本写入的绝对路径；删除操作也必须经过
+                    // 下载根目录和现有父目录校验，不能因为“明确记录”而绕过边界。
+                    if crate::services::file_safety::ensure_existing_within_root(
+                        &self.paths.download_dir,
+                        path,
+                    )
+                    .await
+                    .is_err()
+                    {
+                        warn!(
+                            "[delete_history] 跳过下载根目录外的历史路径 {}",
+                            path.display()
+                        );
+                        continue;
+                    }
                     if seen.insert(path.to_path_buf()) {
                         Self::remove_file_logged(bvid, path, "历史记录", &mut removed_files).await;
                     }

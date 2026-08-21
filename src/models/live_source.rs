@@ -25,6 +25,8 @@ pub struct Model {
     pub manual_stop_session_key: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[sea_orm(default_value = 0)]
+    pub version: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
