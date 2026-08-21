@@ -7,17 +7,6 @@ use tokio::process::Command;
 
 use super::VideoProcessor;
 
-const LIVE_FFMPEG_UNAVAILABLE: &str =
-    "未找到支持直播录制的 FFmpeg（需支持 http 协议、FLV 封装与 concat 拼接）：请安装完整版 FFmpeg 或在设置中指定路径";
-
-fn windows_exe_name() -> &'static str {
-    if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    }
-}
-
 impl VideoProcessor {
     pub async fn detect_ffmpeg(
         &self,
@@ -69,72 +58,6 @@ impl VideoProcessor {
             }
         }
         (None, "unknown".to_string())
-    }
-
-    /// 直播录制需要支持网络流（http 协议）、FLV 封装与 concat 拼接的 FFmpeg。
-    /// 精简构建（如 `--disable-network`，仅 file/pipe 协议）不能用于直播：进程会因
-    /// 不认识 `-user_agent` 等选项立即退出。按 auto 顺序探测候选，结果缓存；
-    /// 全部不合格时返回明确错误。
-    pub async fn detect_ffmpeg_for_live(&self) -> anyhow::Result<PathBuf> {
-        if let Some(cached) = self.live_ffmpeg_cache.lock().await.clone() {
-            return cached.ok_or_else(|| anyhow::anyhow!(LIVE_FFMPEG_UNAVAILABLE));
-        }
-        let mut candidates: Vec<PathBuf> = Vec::new();
-        if let Some(value) = self.custom_ffmpeg_path.clone() {
-            if let Some(path) = Self::ffmpeg_path_from_value(&value, windows_exe_name()) {
-                candidates.push(path);
-            }
-        }
-        if let Some(path) = self.embedded_ffmpeg() {
-            candidates.push(path);
-        }
-        if let Some(path) = Self::ffmpeg_from_env() {
-            candidates.push(path);
-        }
-        if let Ok(path) = which::which("ffmpeg") {
-            candidates.push(path);
-        }
-        let mut capable = None;
-        for candidate in &candidates {
-            if Self::supports_live_capture(candidate).await {
-                capable = Some(candidate.clone());
-                break;
-            }
-        }
-        *self.live_ffmpeg_cache.lock().await = Some(capable.clone());
-        capable.ok_or_else(|| anyhow::anyhow!(LIVE_FFMPEG_UNAVAILABLE))
-    }
-
-    /// 依次校验 http 协议、FLV muxer/demuxer 与 concat demuxer 是否存在。
-    async fn supports_live_capture(path: &Path) -> bool {
-        for (arg, needle) in [
-            ("-protocols", "http"),
-            ("-muxers", "flv"),
-            ("-demuxers", "concat"),
-        ] {
-            let Ok(output) = Command::new(path)
-                .args(["-hide_banner", arg])
-                .stdin(Stdio::null())
-                .kill_on_drop(true)
-                .output()
-                .await
-            else {
-                return false;
-            };
-            if !output.status.success() {
-                return false;
-            }
-            let text = format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            // 能力清单按列输出（如 " flv FLV (Flash Video)"），按整词匹配避免误报。
-            if !text.split_whitespace().any(|word| word == needle) {
-                return false;
-            }
-        }
-        true
     }
 
     fn ffmpeg_from_env() -> Option<PathBuf> {
