@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ffmpeg_ref:
-        description: "FFmpeg 源码 tag（如 n8.1.2�?
+        description: "FFmpeg source tag (e.g. n8.1.2)"
         required: false
         default: "n8.1.2"
 
@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 120
     env:
       DEPS: /opt/ffdeps
-      # 只信任自编译依赖�?.pc，避免探测到宿主库导致非静态链�?      PKG_CONFIG_PATH: /opt/ffdeps/lib/pkgconfig
+      PKG_CONFIG_PATH: /opt/ffdeps/lib/pkgconfig
       PKG_CONFIG_LIBDIR: /opt/ffdeps/lib/pkgconfig
     steps:
       - name: Install cross toolchain
@@ -44,7 +44,7 @@ jobs:
       - name: Record tool paths
         run: mkdir -p "$DEPS" src
 
-      # ---------- 静态依�?----------
+      # ---------- static dependencies ----------
       - name: Build x264 (static)
         working-directory: src
         run: |
@@ -145,8 +145,16 @@ jobs:
           tar xzf ffmpeg-src.tar.gz
           mv "FFmpeg-${FFMPEG_REF#v}" ffmpeg-src
 
-      # 只保留项目实际用到的能力�?      # - 直播录制：http(s)/tcp/tls(schannel) 协议 + flv demuxer/muxer（含 reconnect/user_agent 选项�?      # - 分段合并：concat demuxer + mp4 muxer（movflags/faststart�?      # - 音视频合�?/ remux：mov/matroska/mp3/aac/ac3/eac3/flac 容器，全�?-c copy
-      # - 弹幕/字幕烧录：ass 滤镜(libass/DirectWrite) + libx264 编码�?+ h264/hevc/av1/vp9 解码�?      # TLS �?Windows 系统实现（schannel），不引入第三方加密库�?      - name: Configure FFmpeg
+      # Keep only the capabilities this project actually uses:
+      # - live recording: http(s)/tcp/tls(schannel) protocols + flv demuxer/muxer
+      #   (reconnect/user_agent options included)
+      # - segment merge: concat demuxer + mp4 muxer (movflags/faststart)
+      # - audio/video merge & remux: mov/matroska/mp3/aac/ac3/eac3/flac containers,
+      #   all stream-copy (-c copy)
+      # - danmaku/subtitle burn: ass filter (libass/DirectWrite) + libx264 encoder
+      #   + h264/hevc/av1/vp9 decoders
+      # TLS uses the Windows-native schannel backend; no third-party crypto lib.
+      - name: Configure FFmpeg
         working-directory: ffmpeg-src
         run: >
           ./configure
@@ -185,8 +193,10 @@ jobs:
           make -j"$(nproc)"
           x86_64-w64-mingw32-strip ffmpeg.exe ffprobe.exe
 
-      # runner �?wine，不能执�?exe；这里只做产物形态校验，
-      # 功能验证（协议清�?http 录制/concat 合并/烧录）在 Windows 本地完成�?      - name: Sanity check artifacts
+      # The runner has no wine, so the exes cannot be executed here.
+      # Verify artifact shape only; functional checks (protocol listing,
+      # http capture, concat merge, burn) are done locally on Windows.
+      - name: Sanity check artifacts
         working-directory: ffmpeg-src
         run: |
           file ffmpeg.exe | grep -q "PE32+"
@@ -200,14 +210,14 @@ jobs:
         run: |
           {
             echo "ffmpeg: ${FFMPEG_REF} (https://github.com/FFmpeg/FFmpeg/tree/${FFMPEG_REF})"
-            echo "x264:   master @ ${x264_commit} (${X264_REPO})"
-            echo "freetype: ${FREETYPE_VER}"
-            echo "fribidi:  ${FRIBIDI_VER}"
+            echo "x264: master @ ${x264_commit} (${X264_REPO})"
+            echo "freetype: VER-${FREETYPE_VER} @ ${freetype_commit} (github.com/freetype/freetype)"
+            echo "fribidi: ${FRIBIDI_VER}"
             echo "harfbuzz: ${HARFBUZZ_VER}"
-            echo "libass:   ${LIBASS_VER} (DirectWrite font provider)"
-            echo "license: GPL-2.0+ (libx264); 其余组件 ISC/BSD/MIT/Zlib/Freetype"
-            echo "build:   GitHub Actions ubuntu-latest, x86_64-w64-mingw32 交叉编译, 全静态链�?
-            echo "TLS:     Windows schannel"
+            echo "libass: ${LIBASS_VER} (DirectWrite font provider)"
+            echo "license: GPL-2.0+ overall (libx264); deps ISC/BSD/MIT/Zlib/Freetype"
+            echo "build: GitHub Actions ubuntu-latest, x86_64-w64-mingw32 cross, fully static"
+            echo "tls: Windows schannel"
             echo
             echo "configure:"
             grep -E "^#define FFMPEG_CONFIGURATION" config.h || true
