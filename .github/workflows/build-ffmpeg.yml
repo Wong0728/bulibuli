@@ -1,0 +1,85 @@
+name: Build minimal FFmpeg
+
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_ref:
+        description: "FFmpeg 源码 tag（如 n8.1.2）"
+        required: false
+        default: "n8.1.2"
+
+permissions:
+  contents: read
+
+jobs:
+  build-win64:
+    name: Cross-compile static win64 FFmpeg
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Install cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+            make pkg-config nasm yasm
+
+      - name: Download FFmpeg source
+        run: |
+          ref="${{ inputs.ffmpeg_ref || 'n8.1.2' }}"
+          curl -sSL -o ffmpeg-src.tar.gz \
+            "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${ref}.tar.gz"
+          tar xzf ffmpeg-src.tar.gz
+          mv "FFmpeg-${ref#v}" ffmpeg-src
+
+      # 只保留项目实际用到的能力（全部 -c copy，无编码器、无滤镜）：
+      # - 直播录制：http(s)/tcp/tls(schannel) 协议 + flv demuxer/muxer
+      # - 分段合并：concat demuxer + mp4 muxer（movflags/faststart）
+      # - 音视频合并 / remux：mov/matroska/mp3/aac/ac3/eac3/flac 容器
+      # TLS 走 Windows 系统实现（schannel），不引入第三方加密库。
+      - name: Configure
+        working-directory: ffmpeg-src
+        run: >
+          ./configure
+          --target-os=mingw32
+          --arch=x86_64
+          --cross-prefix=x86_64-w64-mingw32-
+          --pkg-config=pkg-config
+          --enable-static
+          --disable-shared
+          --disable-everything
+          --disable-autodetect
+          --disable-doc
+          --disable-debug
+          --disable-ffplay
+          --enable-ffmpeg
+          --enable-ffprobe
+          --enable-protocol=file,pipe,tcp,tls,http,https
+          --enable-demuxer=flv,concat,mov,matroska,mpegts,mp3,aac,ac3,eac3,flac
+          --enable-muxer=flv,mp4,ipod,matroska
+          --enable-parser=aac,ac3,flac,h264,hevc,mpegaudio,vp9,opus
+          --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb
+          --enable-decoder=aac,mp3,flac,ac3,eac3,h264,hevc,mjpeg,vp9,opus
+          --enable-schannel
+
+      - name: Build
+        working-directory: ffmpeg-src
+        run: make -j"$(nproc)" ffmpeg.exe ffprobe.exe
+
+      - name: Smoke test capabilities
+        working-directory: ffmpeg-src
+        run: |
+          ./ffmpeg.exe -version
+          ./ffmpeg.exe -hide_banner -protocols 2>&1 | grep -qw http
+          ./ffmpeg.exe -hide_banner -muxers 2>&1 | grep -qw " flv "
+          ./ffmpeg.exe -hide_banner -demuxers 2>&1 | grep -qw concat
+          ./ffprobe.exe -version
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-minimal-win64-${{ inputs.ffmpeg_ref || 'n8.1.2' }}
+          path: |
+            ffmpeg-src/ffmpeg.exe
+            ffmpeg-src/ffprobe.exe
+          if-no-files-found: error
