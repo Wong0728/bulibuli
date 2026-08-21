@@ -87,7 +87,7 @@ jobs:
       - name: Build FreeType (static)
         working-directory: src
         run: |
-          git clone --depth 1 --branch "VER-${FREETYPE_VER}" \
+          git clone --depth 1 --branch "VER-${FREETYPE_VER//./-}" \
             https://github.com/freetype/freetype.git freetype-src
           cd freetype-src
           echo "freetype_commit=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
