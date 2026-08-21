@@ -61,6 +61,7 @@ jobs:
           make install
 
       - name: Write meson cross file
+        working-directory: src
         run: |
           cat > cross-win64.ini <<'EOF'
           [binaries]
@@ -104,7 +105,7 @@ jobs:
         run: |
           curl -fsSLO "https://github.com/fribidi/fribidi/releases/download/v${FRIBIDI_VER}/fribidi-${FRIBIDI_VER}.tar.xz"
           tar xf "fribidi-${FRIBIDI_VER}.tar.xz"
-          meson setup "fribidi-${FRIBIDI_VER}/build" --cross-file ../cross-win64.ini \
+          meson setup "fribidi-${FRIBIDI_VER}/build" --cross-file cross-win64.ini \
             --prefix="$DEPS" --buildtype=release \
             -Ddocs=false -Dtests=false
           ninja -C "fribidi-${FRIBIDI_VER}/build"
@@ -115,7 +116,7 @@ jobs:
         run: |
           curl -fsSLO "https://github.com/harfbuzz/harfbuzz/releases/download/${HARFBUZZ_VER}/harfbuzz-${HARFBUZZ_VER}.tar.xz"
           tar xf "harfbuzz-${HARFBUZZ_VER}.tar.xz"
-          meson setup "harfbuzz-${HARFBUZZ_VER}/build" --cross-file ../cross-win64.ini \
+          meson setup "harfbuzz-${HARFBUZZ_VER}/build" --cross-file cross-win64.ini \
             --prefix="$DEPS" --buildtype=release \
             -Dglib=disabled -Dgobject=disabled -Dcairo=disabled \
             -Dicu=disabled -Dtests=disabled -Ddocs=disabled \
