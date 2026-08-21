@@ -8,10 +8,28 @@ Windows 的 `aria2c.exe` 和 `ffmpeg.exe` 作为已审计资源存放在仓库�
 | 文件 | 版本 | 用途 | 官方来源 |
 | --- | --- | --- | --- |
 | `aria2c.exe` | aria2 1.37.0 | 多线程下载引擎（RPC 模式） | https://github.com/aria2/aria2/releases |
-| `ffmpeg.exe` | ffmpeg 5.1.6 | 音视频合并 / 字幕烧录 | https://www.gyan.dev/ffmpeg/builds/ 或 https://ffmpeg.org/download.html |
+| `ffmpeg.exe` | ffmpeg n8.1.2（本项目 Actions 自编译精简版） | 直播录制（http/FLV）/ 音视频合并 / remux / 弹幕字幕烧录 | `.github/workflows/build-ffmpeg.yml`（源码 https://github.com/FFmpeg/FFmpeg/tree/n8.1.2 ） |
+| `ffprobe.exe` | ffmpeg n8.1.2（与 `ffmpeg.exe` 同次构建） | 媒体流校验与时长探测；缺失时由 FFmpeg 回退 | 同上 |
 | `aria2c` / `ffmpeg` | 按 Release 平台构建 | Linux/macOS 便携包运行时 | https://aria2.github.io/ / https://ffmpeg.org/ |
-| `ffprobe` | CI runner 可选 | 媒体流校验与时长探测；缺失时由 FFmpeg 回退 | https://ffmpeg.org/ |
 | `geo/GeoLite2-Country.mmdb` | dbip-country-lite 2026-07 | GeoIP 国家库（用于 `geo cn on` 大陆 IP 配对限制） | https://db-ip.com/db/download/ip-to-country-lite （CC BY 4.0） |
+
+## 内置 FFmpeg 构建说明
+
+Windows 包内 `ffmpeg.exe` / `ffprobe.exe` 由本仓库的 GitHub Actions 工作流
+`.github/workflows/build-ffmpeg.yml` 交叉编译（ubuntu runner + mingw-w64，
+全静态链接，TLS 走 Windows 系统 schannel），只保留项目实际使用的能力：
+
+- 直播录制：`file/tcp/tls/http/https` 协议、FLV demuxer/muxer、reconnect/user_agent 选项
+- 分段合并：concat demuxer、MP4 muxer（faststart）
+- 音视频合并 / remux：mov/matroska/mpegts/mp3/aac/ac3/eac3/flac 容器（全部 `-c copy`）
+- 弹幕/字幕烧录：ass 滤镜（libass 0.17.3 + DirectWrite 字体后端）、libx264 编码器、
+  h264/hevc/av1/vp9 解码器
+
+外部依赖版本记录在本目录 `BUILD_INFO.txt`（与产物内一致）：x264（master 固定 commit）、
+FreeType 2.13.3、FriBidi 1.0.16、HarfBuzz 8.5.0、libass 0.17.3。
+整体许可证为 GPL-2.0+（因链接 libx264）。重新构建：Actions 页面手动触发
+"Build minimal FFmpeg"，下载 artifact 后替换本目录两个 exe 与 `BUILD_INFO.txt`，
+并更新下方校验和。
 
 ## 校验和（SHA-256）
 
@@ -19,14 +37,15 @@ Windows 的 `aria2c.exe` 和 `ffmpeg.exe` 作为已审计资源存放在仓库�
 
 ```
 aria2c.exe                   E9B871710234F9DF7C545C8AF2BBDF04D2958B5110CB3D129495CEBF3E649D5B
-ffmpeg.exe                   AD90D0C517B4910A7CF521B5366E2CD8D919D26F444A381022D18ABB3F7BA999
+ffmpeg.exe                   4502C83A2C4389CF8B076F68F95D78403C9CBABE468BD4C6E7D8F2E583697A32
+ffprobe.exe                  BA7B3376653F017A292DC8BC9EA45BA35FF36853ECAE0DB1064F7D5ABC28C141
 geo/GeoLite2-Country.mmdb    B98568CEF7CEE1A588C9C78A9DB02936C4A4D94F20AFF7629DA22C74563B0F5B
 ```
 
 ### 在 Windows 上核对
 
 ```powershell
-Get-FileHash -Algorithm SHA256 resources\aria2c.exe, resources\ffmpeg.exe, resources\geo\GeoLite2-Country.mmdb |
+Get-FileHash -Algorithm SHA256 resources\aria2c.exe, resources\ffmpeg.exe, resources\ffprobe.exe, resources\geo\GeoLite2-Country.mmdb |
     Format-List Algorithm, Hash, Path
 ```
 
@@ -41,9 +60,12 @@ sha256sum resources/geo/GeoLite2-Country.mmdb
 
 ## 更新与安全说明
 
-- ffmpeg 属高频出 CVE 组件，建议定期跟进官方发布版本；每次更新务必从上述官方来源下载，
-  核对上游发布页公布的校验和后再替换，并更新本文件的版本与 SHA-256。
-- 二进制无法通过代码审查（diff）核实，校验和是完整性凭据。Release 安装器会先校验归档，再校验包内 Unix 运行时；请勿从非官方镜像获取。
+- 内置 FFmpeg 为自编译产物：来源是本仓库 Actions 工作流 + 上游固定版本源码，
+  构建日志与产物内 `BUILD_INFO.txt` 即完整性凭据；每次重建后务必更新上方 SHA-256。
+- 若改用第三方预编译版（如 gyan.dev / BtbN），必须从官方发布页下载并核对上游校验和，
+  同时确认其包含直播录制（http/FLV/concat）与烧录（ass 滤镜、libx264）所需能力。
+- ffmpeg 属高频出 CVE 组件，建议定期跟进上游版本；更新时同步调整工作流中的
+  `ffmpeg_ref` 并重新构建。
 - `geo/GeoLite2-Country.mmdb` 来源于 DB-IP 官方免费版（IP to Country Lite，CC BY 4.0），
   每月更新。如需更准确或更新的数据，可从 https://db-ip.com/db/download/ip-to-country-lite
   下载最新 `dbip-country-lite-YYYY-MM.mmdb.gz`，解压后替换本文件并同步更新上面的 SHA-256。
@@ -52,4 +74,5 @@ sha256sum resources/geo/GeoLite2-Country.mmdb
   `127.0.0.1`，配对请求均走 IPv4，不受影响；LAN/proxy 模式下若有 IPv6 客户端配对，
   会被安全策略以"无法判断网络区域"拒绝。需要 IPv6 支持时请用 `geo db <path>` 显式
   指定同时包含 IPv4+IPv6 的 mmdb 数据库。
-- 如需减小仓库体积或历史膨胀，可改为构建期按固定版本 + SHA-256 校验下载（推荐用 Git LFS 管理本目录）。
+- 内置 FFmpeg 已精简为按需能力（约 15 MB/exe，原通用完整构建约 144 MB/exe）；
+  如仍需进一步减小仓库体积，可改用 Git LFS 管理本目录或构建期下载。

@@ -1,0 +1,12 @@
+ffmpeg: n8.1.2 (https://github.com/FFmpeg/FFmpeg/tree/n8.1.2)
+x264: master @ 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee (https://code.videolan.org/videolan/x264.git)
+freetype: VER-2.13.3 @ 42608f77f20749dd6ddc9e0536788eaad70ea4b5 (github.com/freetype/freetype)
+fribidi: 1.0.16
+harfbuzz: 8.5.0
+libass: 0.17.3 (DirectWrite font provider)
+license: GPL-2.0+ overall (libx264); deps ISC/BSD/MIT/Zlib/Freetype
+build: GitHub Actions ubuntu-latest, x86_64-w64-mingw32 cross, fully static
+tls: Windows schannel
+
+configure:
+#define FFMPEG_CONFIGURATION "--target-os=mingw32 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32- --pkg-config=pkg-config --enable-static --disable-shared --disable-everything --disable-autodetect --disable-doc --disable-debug --disable-ffplay --enable-ffmpeg --enable-ffprobe --enable-gpl --enable-protocol='file,pipe,tcp,tls,http,https' --enable-demuxer='flv,concat,mov,matroska,mpegts,mp3,aac,ac3,eac3,flac' --enable-muxer='flv,mp4,ipod,matroska' --enable-parser='aac,ac3,flac,h264,hevc,mpegaudio,vp9,opus,av1,vorbis' --enable-bsf='aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb' --enable-decoder='h264,hevc,av1,vp9,mjpeg' --enable-encoder='libx264,mpeg4' --enable-libx264 --enable-libass --enable-filter='buffer,buffersink,abuffer,abuffersink,ass,scale,format,null' --enable-schannel --extra-cflags=-I/opt/ffdeps/include --extra-ldflags='-static -L/opt/ffdeps/lib' --extra-libs='-lstdc++ -ldwrite'"
