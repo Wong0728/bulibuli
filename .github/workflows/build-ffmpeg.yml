@@ -89,7 +89,7 @@ jobs:
         working-directory: src
         run: |
           curl -sSL -o ft.tar.gz \
-            "https://gitlab.freedesktop.org/freetype/freetype/-/archive/VER-${FREETYPE_VER}/freetype-VER-${FREETYPE_VER}.tar.gz"
+            "https://github.com/freetype/freetype/archive/refs/tags/VER-${FREETYPE_VER}.tar.gz"
           tar xzf ft.tar.gz
           mv "freetype-VER-${FREETYPE_VER}" freetype-src
           test -f freetype-src/meson.build
