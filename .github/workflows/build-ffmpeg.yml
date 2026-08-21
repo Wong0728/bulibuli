@@ -88,14 +88,17 @@ jobs:
       - name: Build FreeType (static)
         working-directory: src
         run: |
-          curl -sSLO "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VER}.tar.xz"
-          tar xf "freetype-${FREETYPE_VER}.tar.xz"
-          meson setup "freetype-${FREETYPE_VER}/build" --cross-file ../cross-win64.ini \
+          curl -sSL -o ft.tar.gz \
+            "https://gitlab.freedesktop.org/freetype/freetype/-/archive/VER-${FREETYPE_VER}/freetype-VER-${FREETYPE_VER}.tar.gz"
+          tar xzf ft.tar.gz
+          mv "freetype-VER-${FREETYPE_VER}" freetype-src
+          test -f freetype-src/meson.build
+          meson setup freetype-src/build --cross-file ../cross-win64.ini \
             --prefix="$DEPS" --buildtype=release \
             -Dzlib=disabled -Dbzip2=disabled -Dpng=disabled \
             -Dbrotli=disabled -Dharfbuzz=disabled -Dtests=disabled
-          ninja -C "freetype-${FREETYPE_VER}/build"
-          ninja -C "freetype-${FREETYPE_VER}/build" install
+          ninja -C freetype-src/build
+          ninja -C freetype-src/build install
 
       - name: Build FriBidi (static)
         working-directory: src
