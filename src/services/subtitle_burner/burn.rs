@@ -40,8 +40,8 @@ pub(super) async fn ffmpeg_listing_contains(ffmpeg: &Path, flag: &str, name: &st
     listing_has_named_entry(&String::from_utf8_lossy(&output.stdout), name)
 }
 
-/// 烧录能力不足时的统一指引：内置 FFmpeg 是合并专用精简版，缺 ass 滤镜与视频编码器。
-const FULL_FFMPEG_HINT: &str = "内置 FFmpeg 为下载合并专用的精简版，无法烧录；请在“设置 → FFmpeg”中改为自定义路径，指向完整版 FFmpeg（需包含 libass 与 libx264，例如 gyan.dev 的 full 构建或系统包管理器安装的版本）";
+/// 烧录能力不足时的统一指引：当前 FFmpeg 缺少 ass 滤镜或视频编码器。
+const FULL_FFMPEG_HINT: &str = "当前使用的 FFmpeg 不具备烧录能力（需要 ass 滤镜与 libx264/mpeg4 编码器）；请在“设置 → FFmpeg”中改为完整版 FFmpeg（例如 gyan.dev 的 full 构建或系统包管理器安装的版本）";
 
 impl SubtitleBurner {
     /// 烧录弹幕到视频（source=danmaku）。
@@ -505,7 +505,7 @@ impl SubtitleBurner {
             false,
             Some(ass_output),
             format!(
-                "当前 FFmpeg 为精简版，未烧录进视频；已导出同名 ASS 字幕文件（{name}），用 PotPlayer / mpv 等播放器打开视频即可自动加载弹幕。如需真正烧录：{FULL_FFMPEG_HINT}"
+                "当前 FFmpeg 缺少烧录能力，未烧录进视频；已导出同名 ASS 字幕文件（{name}），用 PotPlayer / mpv 等播放器打开视频即可自动加载弹幕。如需真正烧录：{FULL_FFMPEG_HINT}"
             ),
         ))
     }
