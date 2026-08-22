@@ -26,12 +26,10 @@ import time
 import platform as host_platform
 from pathlib import Path
 
-# tomllib 为标准库仅 3.11+ 提供，提前给出清晰提示而非 ImportError
-if sys.version_info < (3, 11):
-    raise SystemExit(f"build.py 需要 Python 3.11+（依赖标准库 tomllib），当前为 "
-                     f"{sys.version_info.major}.{sys.version_info.minor}")
-
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10（ubuntu:22.04 CI 容器）：仅回退版本号解析
+    tomllib = None
 
 ROOT = Path(__file__).resolve().parent
 
@@ -43,8 +41,19 @@ if hasattr(sys.stderr, "reconfigure"):
 APP_SLUG = "bulibuli"
 APP_DISPLAY_NAME = "补哩补哩"
 APP_SLOGAN = "下架之前，先下为敬。"
-with (ROOT / "Cargo.toml").open("rb") as _cargo_file:
-    APP_VERSION = tomllib.load(_cargo_file)["package"]["version"]
+
+
+def _read_cargo_version(path):
+    if tomllib is not None:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)["package"]["version"]
+    match = re.search(r'^version\s*=\s*"([^"]+)"', path.read_text(encoding="utf-8"), re.M)
+    if not match:
+        raise SystemExit(f"无法从 {path} 解析 package.version（Python 3.10 回退路径）")
+    return match.group(1)
+
+
+APP_VERSION = _read_cargo_version(ROOT / "Cargo.toml")
 PORTABLE_RESOURCE_DIRS = ("geo",)
 PLATFORM_NAMES = {"windows", "linux", "macos", "termux"}
 PACKAGE_MANIFEST_NAME = "bulibuli.package.json"
