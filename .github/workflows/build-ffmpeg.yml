@@ -314,7 +314,7 @@ jobs:
             https://github.com/freetype/freetype.git freetype-src
           cd freetype-src
           echo "freetype_commit=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          meson setup build --prefix="$DEPS" --buildtype=release \
+          meson setup build --prefix="$DEPS" --libdir=lib --buildtype=release \
             -Ddefault_library=static \
             -Dzlib=disabled -Dbzip2=disabled -Dpng=disabled \
             -Dbrotli=disabled -Dharfbuzz=disabled -Dtests=disabled
@@ -328,7 +328,7 @@ jobs:
           echo "${FRIBIDI_SHA256}  fribidi-${FRIBIDI_VER}.tar.xz" | sha256sum -c -
           tar xf "fribidi-${FRIBIDI_VER}.tar.xz"
           meson setup "fribidi-${FRIBIDI_VER}/build" "fribidi-${FRIBIDI_VER}" \
-            --prefix="$DEPS" --buildtype=release -Ddefault_library=static \
+            --prefix="$DEPS" --libdir=lib --buildtype=release -Ddefault_library=static \
             -Ddocs=false -Dtests=false
           ninja -C "fribidi-${FRIBIDI_VER}/build"
           ninja -C "fribidi-${FRIBIDI_VER}/build" install
@@ -340,7 +340,7 @@ jobs:
           echo "${HARFBUZZ_SHA256}  harfbuzz-${HARFBUZZ_VER}.tar.xz" | sha256sum -c -
           tar xf "harfbuzz-${HARFBUZZ_VER}.tar.xz"
           meson setup "harfbuzz-${HARFBUZZ_VER}/build" "harfbuzz-${HARFBUZZ_VER}" \
-            --prefix="$DEPS" --buildtype=release -Ddefault_library=static \
+            --prefix="$DEPS" --libdir=lib --buildtype=release -Ddefault_library=static \
             -Dglib=disabled -Dgobject=disabled -Dcairo=disabled \
             -Dicu=disabled -Dtests=disabled -Ddocs=disabled \
             -Dintrospection=disabled -Dbenchmark=disabled -Dutilities=disabled
