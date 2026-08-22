@@ -90,6 +90,7 @@ impl DownloadManager {
         let cache_key_for_cb = cache_key.clone();
         let cb_cid = cid;
         let cb_page = video.page;
+        let cb_task_id = video.id;
         let source_for_cb = video.source.clone().unwrap_or_else(|| "auto".to_string());
         let callback: Option<crate::services::video_processor::MergeCallback> = Some(Box::new(
             move |result| {
@@ -100,7 +101,7 @@ impl DownloadManager {
                 let merge_in_progress = merge_in_progress_for_cb.clone();
                 let cache_key_for_cb = cache_key_for_cb.clone();
                 let source = source_for_cb.clone();
-                tokio::spawn(async move {
+                crate::services::spawn_util::spawn_logged("merge_callback", async move {
                     // 合并任务结束，释放幂等标记
                     {
                         let mut guard = match merge_in_progress.lock() {
@@ -124,6 +125,8 @@ impl DownloadManager {
                     }
                     let payload = serde_json::json!({
                         "bvid": bvid,
+                        // 前端按 task_id 匹配任务卡；缺失时合并终态无法落到对应条目。
+                        "task_id": cb_task_id,
                         "cid": cb_cid,
                         "page": cb_page,
                         "type": "video",

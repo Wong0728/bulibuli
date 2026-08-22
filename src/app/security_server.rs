@@ -1,7 +1,7 @@
 use crate::api;
 use crate::api::auth::{session_cookie, set_session_cookie};
 use crate::error::ApiResponse;
-use crate::services::auth::{ClientInfo, SessionAuth};
+use crate::services::auth::{ClientInfo, SessionAuth, SessionRole};
 use crate::services::security_config::{is_effectively_loopback, AccessMode};
 use crate::state::bili::BiliState;
 use crate::state::SharedState;
@@ -141,24 +141,135 @@ fn validate_tls_policy(mode: &AccessMode, tls_verify: bool) -> anyhow::Result<()
     Ok(())
 }
 
-async fn build_router(state: SharedState) -> anyhow::Result<Router> {
+/// governor keyed 限流器的 key 集合容量上限：governor 默认不回收 key，
+/// LAN/Proxy 模式下轮换 IPv6 源地址（或对公开路径高频打点）会让内部状态
+/// 无界增长。与 services/auth.rs 的 MAX_TRACKED_IPS 同值同模式。
+const MAX_RATE_LIMIT_KEYS: usize = 10_000;
+/// governor 状态清理的最小间隔：攻击者轮换源地址时避免每次请求都做
+/// O(n) 的 retain_recent 扫描（该扫描本身就是一种 CPU 放大面）。
+const RATE_LIMIT_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// 带 key 集合上限的 governor 限流器（S1）。
+///
+/// governor 的 keyed 状态（内部 DashMap）没有按 key 删除的 API，key 一旦
+/// 创建只能整体等待回收。这里复用 `services/auth.rs::evict_stalest_ip` 的
+/// 有界近似 LRU 模式：自己维护一份有界的"key 最近活动时间"表，总量超上限
+/// 时淘汰最久未活动的 key；同时按节流频率调用 `retain_recent` +
+/// `shrink_to_fit`，让 governor 丢弃已离开限流窗口（空闲数秒）的 key 桶并
+/// 归还内存。被限流拒绝的请求同样计入 key 集合（公开路径被匿名刷也会占用
+/// 桶），因此有界化必须在 check 路径而非放行路径上做。
+struct KeyedRateLimiter {
+    limiter: governor::RateLimiter<
+        IpAddr,
+        governor::state::keyed::DefaultKeyedStateStore<IpAddr>,
+        governor::clock::DefaultClock,
+    >,
+    /// key 最近活动时间（近似 LRU 的淘汰依据）。
+    last_seen: std::sync::Mutex<std::collections::HashMap<IpAddr, std::time::Instant>>,
+    /// 上次 governor 状态清理时间（节流用）。
+    last_cleanup: std::sync::Mutex<std::time::Instant>,
+    /// 累计检查次数：周期性触发清理，避免低流量时 key 长期滞留。
+    checks: std::sync::atomic::AtomicU64,
+}
+
+impl KeyedRateLimiter {
+    fn new(quota: governor::Quota) -> Self {
+        Self {
+            limiter: governor::RateLimiter::keyed(quota),
+            last_seen: Default::default(),
+            last_cleanup: std::sync::Mutex::new(std::time::Instant::now()),
+            checks: Default::default(),
+        }
+    }
+
+    /// 检查一次限额并记录 key 活动；返回是否放行。
+    fn check(&self, key: IpAddr) -> bool {
+        let allowed = self.limiter.check_key(&key).is_ok();
+        self.track(key);
+        allowed
+    }
+
+    /// 记录 key 活动并按需淘汰/清理：有界集合超上限时淘汰最久未活动的 key
+    /// （仅淘汰自记账表；governor 内部桶由 retain_recent 兜底回收）。
+    fn track(&self, key: IpAddr) {
+        let overflowed = {
+            let mut last_seen = self
+                .last_seen
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if !last_seen.contains_key(&key) {
+                evict_stalest_key(&mut last_seen, MAX_RATE_LIMIT_KEYS);
+            }
+            last_seen.insert(key, std::time::Instant::now());
+            last_seen.len() >= MAX_RATE_LIMIT_KEYS
+        };
+        // 每 4096 次检查或 key 集合溢出时尝试清理 governor 内部状态。
+        let due = overflowed
+            || self
+                .checks
+                .fetch_add(1, Ordering::Relaxed)
+                .is_multiple_of(4096);
+        if !due {
+            return;
+        }
+        let mut last_cleanup = self
+            .last_cleanup
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if last_cleanup.elapsed() < RATE_LIMIT_CLEANUP_INTERVAL {
+            return;
+        }
+        *last_cleanup = std::time::Instant::now();
+        drop(last_cleanup);
+        // retain_recent 只保留仍处于限流窗口内的 key（本项目的配额下为
+        // 空闲 2-3 秒内），一次性攻击地址随后即被整体丢弃。
+        self.limiter.retain_recent();
+        self.limiter.shrink_to_fit();
+    }
+}
+
+/// 总量达到上限时淘汰最久未活动的 key（近似 LRU；仅在超限时执行 O(n)
+/// 扫描，与 services/auth.rs::evict_stalest_ip 同模式同取舍）。
+fn evict_stalest_key(
+    last_seen: &mut std::collections::HashMap<IpAddr, std::time::Instant>,
+    cap: usize,
+) {
+    while last_seen.len() >= cap {
+        let Some(stalest) = last_seen
+            .iter()
+            .min_by_key(|(ip, at)| (*at, *ip))
+            .map(|(ip, _)| *ip)
+        else {
+            return;
+        };
+        last_seen.remove(&stalest);
+    }
+}
+
+pub(crate) async fn build_router(state: SharedState) -> anyhow::Result<Router> {
     let (socket_layer, io) = SocketIo::new_layer();
     WebSocketManager::setup_handlers(&io);
     state.infra.ws.attach(io).await;
 
-    let limiter = Arc::new(governor::RateLimiter::keyed(
+    let limiter = Arc::new(KeyedRateLimiter::new(
         // 正常页面切换会并发加载多个只读接口；认证/配对本身另有登录尝试限流。
         governor::Quota::per_second(NonZeroU32::new(20).expect("non-zero quota"))
             .allow_burst(NonZeroU32::new(60).expect("non-zero burst")),
     ));
-    let expensive_limiter = Arc::new(governor::RateLimiter::keyed(
+    let expensive_limiter = Arc::new(KeyedRateLimiter::new(
         // 搜索、房间详情和视频详情会放大 B 站上游请求，单独限制每个客户端。
         governor::Quota::per_second(NonZeroU32::new(5).expect("non-zero quota"))
+            .allow_burst(NonZeroU32::new(10).expect("non-zero burst")),
+    ));
+    let health_limiter = Arc::new(KeyedRateLimiter::new(
+        // /api/health 是免认证公开端点，匿名可刷；限到每 IP 2/s（前端心跳远低于此）。
+        governor::Quota::per_second(NonZeroU32::new(2).expect("non-zero quota"))
             .allow_burst(NonZeroU32::new(10).expect("non-zero burst")),
     ));
     let rate_limit = middleware::from_fn(move |request: Request<Body>, next: Next| {
         let limiter = limiter.clone();
         let expensive_limiter = expensive_limiter.clone();
+        let health_limiter = health_limiter.clone();
         async move {
             // GET 包含健康检查、配对状态和页面轮询，不能让旧标签页的只读请求
             // 抢占写请求限额；配对尝试本身另由 AuthService 做每 IP/全局限制。
@@ -170,12 +281,16 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
             if !matches!(
                 *request.method(),
                 Method::GET | Method::HEAD | Method::OPTIONS
-            ) {
-                if limiter.check_key(&client_ip).is_err() {
-                    return api_error(StatusCode::TOO_MANY_REQUESTS, 429, "请求过于频繁");
-                }
+            ) && !limiter.check(client_ip)
+            {
+                return api_error(StatusCode::TOO_MANY_REQUESTS, 429, "请求过于频繁");
             }
             let path = request.uri().path();
+            // 免认证公开端点单独限流（复用有界 key 集合设施），防止匿名打点
+            // 占用连接与探测资源。
+            if (path == "/api/health" || path == "/api/ready") && !health_limiter.check(client_ip) {
+                return api_error(StatusCode::TOO_MANY_REQUESTS, 429, "请求过于频繁");
+            }
             let expensive_read = matches!(
                 path,
                 "/api/blogger/search"
@@ -184,8 +299,12 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
                     | "/api/live/room-info"
                     | "/api/video/info"
             );
-            if expensive_read && expensive_limiter.check_key(&client_ip).is_err() {
-                return api_error(StatusCode::TOO_MANY_REQUESTS, 429, "查询过于频繁，请稍后再试");
+            if expensive_read && !expensive_limiter.check(client_ip) {
+                return api_error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    429,
+                    "查询过于频繁，请稍后再试",
+                );
             }
             next.run(request).await
         }
@@ -206,29 +325,9 @@ async fn build_router(state: SharedState) -> anyhow::Result<Router> {
             "/favicon.ico",
             ServeFile::new(static_root.join("bulibuli.ico")),
         )
-        .route_service(
-            "/pair-font.woff2",
-            ServeFile::new(
-                static_root
-                    .join("css")
-                    .join("lib")
-                    .join("webfonts")
-                    .join("JetBrains Mono.woff2"),
-            ),
-        )
         .route("/index.html", get(index))
-        // /settings.html 是设置页的 HTML 片段（无 <html>/<head>，被 settings.js fetch 拉取），
-        // 直链访问得到裸文本；对外 302 回主界面，片段加载改走内部 /_fragments/settings.html。
+        // 历史书签统一回到单一 Vue 入口。
         .route("/settings.html", get(redirect_to_main))
-        .route_service(
-            "/_fragments/settings.html",
-            ServeFile::new(static_root.join("settings.html")),
-        )
-        .nest_service("/css", ServeDir::new(static_root.join("css")))
-        .nest_service("/js", ServeDir::new(static_root.join("js")))
-        // 旧版 vanilla-JS 兼容入口：整棵 static/ 挂在 /legacy/ 下。
-        // 当 Vue 改写完成后此路由将被移除（迁移第三档）。
-        .nest_service("/legacy", ServeDir::new(static_root.clone()))
         // Vue3 + Vite 重写的新主界面，产物落在 static/app/ 下，
         // 由 Vite 自动写入带 hash 的资源文件名，可走长缓存。
         .nest_service("/app", ServeDir::new(static_root.join("app")))
@@ -326,27 +425,20 @@ async fn enforce_request_security(
     });
 
     let path = request.uri().path().to_string();
-    let public = matches!(
-        path.as_str(),
-        "/" | "/favicon.ico"
-            | "/settings.html"
-            // 新版 Vue3 主界面：静态资源全部免认证，仅 /api/* 仍走会话校验。
-            | "/app" | "/app/"
-            | "/app/index.html"
-            | "/api/health"
-            | "/api/ready"
-            | "/api/auth/state"
-            | "/api/auth/pair"
-            // 旧版 vanilla-JS 兼容入口，与新版同等免认证。
-            | "/legacy" | "/legacy/"
-    ) || path.starts_with("/app/assets/")
-        || path.starts_with("/app/css/")
-        || path.starts_with("/legacy/");
+    let public = is_public_path(&path);
+    let bypassed_auth = config.should_bypass_auth(client_ip);
     let mut session = None;
     if !public {
-        // 仅当 IP 在 auth_bypass_ips 配置中明确列出时才跳过认证
-        if config.should_bypass_auth(client_ip) {
-            tracing::info!(%client_ip, "请求来源 IP 在认证跳过白名单中，跳过认证");
+        if bypassed_auth {
+            // auth_bypass_ips 白名单命中：跳过凭证校验，但仍以 Owner 身份走
+            // authorize_session 的 RBAC 流程，避免白名单把角色授权一并绕过。
+            tracing::info!(%client_ip, "请求来源 IP 在认证跳过白名单中，以 Owner 身份免凭证放行");
+            let value = bypass_session();
+            if let Err(response) = authorize_session(&request, &value) {
+                return *response;
+            }
+            request.extensions_mut().insert(Some(value.clone()));
+            session = Some(value);
         } else {
             let token = session_cookie(request.headers()).unwrap_or_default();
             match state.bili.auth.authenticate(&token, client_ip).await {
@@ -362,11 +454,10 @@ async fn enforce_request_security(
             }
         }
     }
-    // 总是注入 Option<SessionAuth>：auth_bypass_ips 命中时没有 SessionAuth，
+    // 总是注入 Option<SessionAuth>：公开路径无会话时为 None，
     // 依赖会话上下文的 handler（logout/邀请）以 Extension<Option<SessionAuth>> 提取，
     // 避免 axum MissingExtension 直接 500。
     request.extensions_mut().insert(session.clone());
-    let bypassed_auth = config.should_bypass_auth(client_ip);
     if path.starts_with("/socket.io/") {
         // Socket.IO 轮询/升级请求无法附带自定义 CSRF 头，改用同源校验兜底：
         // 浏览器同源 GET 不发送 Origin，仅在存在时校验；POST 必带 Origin 且必须匹配。
@@ -399,6 +490,34 @@ async fn enforce_request_security(
     response
 }
 
+fn is_public_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/" | "/favicon.ico"
+            | "/settings.html"
+            // Vue3 主界面：静态资源全部免认证，仅 /api/* 仍走会话校验。
+            | "/app" | "/app/"
+            | "/app/index.html"
+            | "/api/health"
+            | "/api/ready"
+            | "/api/auth/state"
+            | "/api/auth/pair"
+    ) || path.starts_with("/app/assets/")
+        || path.starts_with("/app/css/")
+}
+
+/// auth_bypass_ips 命中时注入的合成会话：跳过凭证校验但保留 Owner 角色的
+/// RBAC 边界（owner-only 接口放行、Viewer/Operator 限制不适用——白名单本意
+/// 就是完全信任该来源）。无 csrf_token：写请求走 sec-fetch-site 同源校验分支。
+fn bypass_session() -> SessionAuth {
+    SessionAuth {
+        id: "auth-bypass".to_string(),
+        csrf_token: String::new(),
+        rotated_token: None,
+        role: SessionRole::Owner,
+    }
+}
+
 /// 主 Web 界面的服务端 RBAC 边界。隐藏 UI 仅改善使用体验；
 /// 此检查阻止已配对的 Operator/Viewer 会话通过直接调用 API 越权。
 fn authorize_session(request: &Request<Body>, session: &SessionAuth) -> Result<(), Box<Response>> {
@@ -407,12 +526,16 @@ fn authorize_session(request: &Request<Body>, session: &SessionAuth) -> Result<(
 
     // 账号凭证、设置写入/敏感运维接口和设备邀请仅限 Owner 操作。
     // 业务设置的精确 GET 允许 Operator/Viewer 只读查看真实值。
+    // /api/setup/* 能改写访问模式与默认策略（提权面），且暴露本机网络拓扑，
+    // 全部端点仅限 Owner；未完成 onboarding 的新用户走仅回环的独立 setup 端口。
     let owner_only = path.starts_with("/api/cookies/")
         || path.starts_with("/api/settings/")
         || (path == "/api/settings" && mutating)
         || path.starts_with("/api/auth/invitations")
         || path.starts_with("/api/update/check")
-        || path.starts_with("/api/update/apply");
+        || path.starts_with("/api/update/apply")
+        || path.starts_with("/api/setup/")
+        || path == "/api/backup";
     if owner_only && !session.role.is_owner() {
         return Err(Box::new(api_error(
             StatusCode::FORBIDDEN,
@@ -448,6 +571,17 @@ fn effective_client_ip(
             403,
             "proxy 模式只信任本机反向代理",
         ));
+    }
+    // 默认不信任 XFF：反代若透传（而非覆盖）该头，客户端可伪造来源 IP，
+    // 命中 auth_bypass_ips 白名单即免凭证获得 Owner。反代部署必须显式设置
+    // BILI__TRUST_PROXY_HEADERS=true（并保证反代覆盖而非透传该头）才启用。
+    let trust_proxy = std::env::var("BILI__TRUST_PROXY_HEADERS")
+        .is_ok_and(|value| matches!(value.trim(), "true" | "1" | "on" | "yes"));
+    if !trust_proxy {
+        tracing::debug!(
+            "proxy 模式未设置 BILI__TRUST_PROXY_HEADERS=true，忽略 x-forwarded-for，使用 TCP 对端地址"
+        );
+        return Ok(peer);
     }
     let forwarded = headers
         .get("x-forwarded-for")
@@ -650,16 +784,10 @@ fn is_static_asset(path: &str) -> bool {
         path,
         "/favicon.ico"
             | "/index.html"
-            | "/_fragments/settings.html"
             // Vue 3 + Vite 产物带 hash，可长缓存。
             | "/app" | "/app/" | "/app/index.html"
-            // 旧版 vanilla-JS 兼容入口（迁移完成前缓存）。
-            | "/legacy" | "/legacy/" | "/legacy/index.html"
-    ) || path.starts_with("/css/")
-        || path.starts_with("/js/")
-        || path.starts_with("/app/assets/")
+    ) || path.starts_with("/app/assets/")
         || path.starts_with("/app/css/")
-        || path.starts_with("/legacy/")
 }
 
 fn api_error(status: StatusCode, code: i64, message: &'static str) -> Response {
@@ -816,6 +944,53 @@ mod role_tests {
     }
 
     #[test]
+    fn auth_bypass_injects_owner_identity_through_rbac() {
+        // 白名单命中：合成 Owner 会话必须通过 owner-only 路径的授权检查。
+        let setup = Request::builder()
+            .method(Method::POST)
+            .uri("/api/setup/apply")
+            .body(Body::empty())
+            .unwrap();
+        let credentials = Request::builder()
+            .method(Method::POST)
+            .uri("/api/cookies/save")
+            .body(Body::empty())
+            .unwrap();
+        let bypass = bypass_session();
+        assert_eq!(bypass.role, SessionRole::Owner);
+        assert!(authorize_session(&setup, &bypass).is_ok());
+        assert!(authorize_session(&credentials, &bypass).is_ok());
+        // 对照：同样的请求换成 Operator 会话必须被拒——bypass 不得降低 RBAC 强度，
+        // 也不能让非 Owner 角色借白名单越权。
+        let operator = session(SessionRole::Operator);
+        assert!(authorize_session(&setup, &operator).is_err());
+        // Viewer 的只读限制同样照常生效。
+        let viewer_read = Request::builder()
+            .uri("/api/settings")
+            .body(Body::empty())
+            .unwrap();
+        assert!(authorize_session(&viewer_read, &bypass).is_ok());
+    }
+
+    #[test]
+    fn legacy_paths_are_neither_public_nor_static_assets() {
+        for path in [
+            "/legacy",
+            "/legacy/",
+            "/legacy/index.html",
+            "/legacy/js/app.js",
+        ] {
+            assert!(!is_public_path(path), "{path} must require authentication");
+            assert!(
+                !is_static_asset(path),
+                "{path} must not be served as an asset"
+            );
+        }
+        assert!(is_public_path("/app/assets/index.js"));
+        assert!(is_static_asset("/app/assets/index.js"));
+    }
+
+    #[test]
     fn proxy_requires_tls_verification() {
         assert!(validate_tls_policy(&AccessMode::Local, false).is_ok());
         assert!(validate_tls_policy(&AccessMode::Lan, false).is_ok());
@@ -880,5 +1055,58 @@ mod role_tests {
             None,
             &host_header("evil.example:5000")
         ));
+    }
+}
+
+#[cfg(test)]
+mod rate_limiter_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    /// 淘汰必须钳制集合容量并优先丢掉最久未活动的 key（近似 LRU）。
+    #[test]
+    fn evict_stalest_key_bounds_map_and_drops_oldest() {
+        let ip = |last: u8| IpAddr::V4(Ipv4Addr::new(192, 0, 2, last));
+        let mut last_seen = HashMap::new();
+        let base = Instant::now();
+        for index in 0..3u8 {
+            last_seen.insert(ip(index), base - Duration::from_secs(100 - index as u64));
+        }
+        // ip(0) 最久未活动，应被优先淘汰。
+        evict_stalest_key(&mut last_seen, 3);
+        assert_eq!(last_seen.len(), 2);
+        assert!(!last_seen.contains_key(&ip(0)));
+        assert!(last_seen.contains_key(&ip(2)));
+    }
+
+    /// 限流器在超容量写入 distinct key 时自记账集合不得无界增长
+    /// （governor 原生 keyed 状态没有此约束，这是 S1 的修复点）。
+    /// O(n) 淘汰扫描仅在到达上限后触发（10k 之后每次插入一次），
+    /// 全量 10k+50 个 key 的写入保持测试轻量。
+    #[test]
+    fn keyed_limiter_tracks_bounded_key_set() {
+        let limiter = KeyedRateLimiter::new(
+            governor::Quota::per_second(NonZeroU32::new(1_000_000).expect("quota"))
+                .allow_burst(NonZeroU32::new(1_000_000).expect("burst")),
+        );
+        for index in 0..(MAX_RATE_LIMIT_KEYS + 50) {
+            let key = IpAddr::V4(Ipv4Addr::new(
+                198,
+                51,
+                (index / 256 % 256) as u8,
+                (index % 256) as u8,
+            ));
+            limiter.check(key);
+        }
+        let len = limiter
+            .last_seen
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .len();
+        assert!(
+            len <= MAX_RATE_LIMIT_KEYS,
+            "key 集合在容量 {MAX_RATE_LIMIT_KEYS} 之外增长: len={len}"
+        );
     }
 }

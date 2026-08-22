@@ -2,8 +2,8 @@
 
 use crate::error::{ApiResponse, AppError};
 use crate::models::{download_task, operation_log::OperationTarget};
-use crate::services::download::{PageInfo, TaskOutcome};
 use crate::services::conflict_guard::ConflictGuard;
+use crate::services::download::{PageInfo, TaskOutcome};
 use crate::state::SharedState;
 use axum::{extract::Query, extract::State, Json};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -70,7 +70,11 @@ async fn guard_task_batch(
         match state
             .infra
             .conflict_guard
-            .check_and_bump(OperationTarget::Task, &task.id.to_string(), expected_version)
+            .check_and_bump(
+                OperationTarget::Task,
+                &task.id.to_string(),
+                expected_version,
+            )
             .await
         {
             Ok(guard) => guards.push(guard),

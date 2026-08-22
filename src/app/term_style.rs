@@ -13,15 +13,6 @@ fn colored() -> bool {
     std::io::stdout().is_terminal()
 }
 
-/// 重点 URL / 入口地址：青色加粗。
-pub fn url(text: &str) -> String {
-    if colored() {
-        format!("{}", text.with(Color::Cyan).attribute(Attribute::Bold))
-    } else {
-        text.to_string()
-    }
-}
-
 /// 配对码等一次性凭证：黄色加粗。
 pub fn code(text: &str) -> String {
     if colored() {
@@ -31,28 +22,10 @@ pub fn code(text: &str) -> String {
     }
 }
 
-/// 正常状态 / 成功信息：绿色。
-pub fn ok(text: &str) -> String {
-    if colored() {
-        format!("{}", text.with(Color::Green))
-    } else {
-        text.to_string()
-    }
-}
-
 /// 错误：红色加粗。
 pub fn error(text: &str) -> String {
     if colored() {
         format!("{}", text.with(Color::Red).attribute(Attribute::Bold))
-    } else {
-        text.to_string()
-    }
-}
-
-/// 次要提示：灰色。
-pub fn dim(text: &str) -> String {
-    if colored() {
-        format!("{}", text.with(Color::DarkGrey))
     } else {
         text.to_string()
     }
@@ -88,7 +61,6 @@ mod tests {
     fn helpers_fall_back_to_plain_text_when_not_a_terminal() {
         // 测试进程的 stdout 通常被捕获（非终端），此时所有助手都应原样返回。
         if !std::io::stdout().is_terminal() {
-            assert_eq!(url("http://x"), "http://x");
             assert_eq!(code("ABCD-1234"), "ABCD-1234");
             assert_eq!(error("boom"), "boom");
             assert_eq!(log_line("2026 ERROR boom"), "2026 ERROR boom");

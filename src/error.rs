@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use tracing::error;
+use tracing::{error, info};
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -79,6 +79,13 @@ impl BiliApiError {
     }
 }
 
+#[derive(Clone, Debug, thiserror::Error)]
+#[error("反序列化 B站 API 响应失败: {0}")]
+/// 带类型标记的上游响应解析错误：anyhow 链中用它替代字符串匹配
+/// （`detail.contains("反序列化 B站 API")`）做分类，`From<anyhow::Error>`
+/// 通过 downcast 识别。
+pub struct BiliDeserializeError(pub String);
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error(transparent)]
@@ -132,6 +139,11 @@ pub enum AppError {
     #[error("内部错误: {0}")]
     Internal(String),
 
+    /// 充电专属/付费内容无观看权限等确定性拦截：HTTP 402 + 真实文案。
+    /// 不用 403，因为前端把所有 403 统一按"B站风控"弹窗处理。
+    #[error("需要充电或付费权限: {0}")]
+    PaymentRequired(String),
+
     #[error("JSON 解析/序列化错误: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -141,10 +153,24 @@ impl From<anyhow::Error> for AppError {
         if let Some(error) = value.downcast_ref::<BiliApiError>() {
             return error.clone().into();
         }
-        let detail = format!("{value:#}");
-        if value.chain().any(|cause| cause.is::<reqwest::Error>())
-            || detail.contains("反序列化 B站 API")
+        // 类型化标记优先：bili_api 解析失败统一抛 BiliDeserializeError。
+        if value.downcast_ref::<BiliDeserializeError>().is_some() {
+            return Self::Upstream(format!("{value:#}"));
+        }
+        // 流不可下载的业务性错误（充电/付费无权限、多分段 durl）：
+        // 确定性失败，透传真实文案给前端（此前裸 anyhow 会归为 Internal(500)，
+        // 用户只能看到"服务器内部错误"，也是充电视频"报错两次"的噪声来源之一）。
+        if let Some(error) =
+            value.downcast_ref::<crate::services::bili_api::StreamUnavailableError>()
         {
+            return if error.permission {
+                Self::PaymentRequired(error.message.clone())
+            } else {
+                Self::BadRequest(error.message.clone())
+            };
+        }
+        let detail = format!("{value:#}");
+        if value.chain().any(|cause| cause.is::<reqwest::Error>()) {
             return Self::Upstream(detail);
         }
         Self::Internal(detail)
@@ -208,9 +234,12 @@ impl AppError {
             },
             Self::Database(err) => {
                 error!(error = %err, "数据库错误");
+                // 内部错误码统一落在 1xxx 区间，避免与 B 站原始业务码（-352/-101/
+                // 86038 等）及 HTTP 状态码语义混淆；前端只对 0/502/-101/-352/-403
+                // 做特殊分支，1xxx 走通用错误提示，不受影响。
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    500,
+                    1500,
                     "服务器内部错误，请稍后重试".to_string(),
                 )
             }
@@ -236,7 +265,7 @@ impl AppError {
                 error!(error = %message, "配置错误");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    500,
+                    1501,
                     "配置无效，请检查设置后重试".to_string(),
                 )
             }
@@ -245,7 +274,7 @@ impl AppError {
                 error!(error = %err, "IO错误");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    500,
+                    1502,
                     "文件操作失败，请稍后重试".to_string(),
                 )
             }
@@ -271,15 +300,20 @@ impl AppError {
                 error!(error = %message, "内部错误");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    500,
+                    1503,
                     "服务器内部错误，请稍后重试".to_string(),
                 )
+            }
+            Self::PaymentRequired(message) => {
+                info!(message = %message, "下载被充电/付费权限拦截");
+                // 402 Payment Required：语义精确且不会触发前端的 403 风控弹窗分支
+                (StatusCode::PAYMENT_REQUIRED, 402, message.clone())
             }
             Self::Json(err) => {
                 error!(error = %err, "JSON错误");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    500,
+                    1504,
                     "数据处理失败，请稍后重试".to_string(),
                 )
             }
@@ -330,10 +364,53 @@ mod tests {
     }
 
     #[test]
+    fn typed_deserialize_error_downcasts_to_upstream() {
+        let error = AppError::from(anyhow::Error::new(BiliDeserializeError(
+            "playurl data".to_string(),
+        )));
+        assert!(matches!(error, AppError::Upstream(_)));
+    }
+
+    #[test]
+    fn stream_unavailable_maps_to_client_visible_errors() {
+        use crate::services::bili_api::StreamUnavailableError;
+        // 权限型 → 402 + 真实文案（不触发前端风控弹窗）
+        let permission = AppError::from(anyhow::anyhow!(StreamUnavailableError::permission(
+            "该视频为充电专属内容，当前账号没有观看权限，仅能获取试看片段",
+        )));
+        assert!(matches!(permission, AppError::PaymentRequired(_)));
+        let (status, code, message) = permission.response_parts();
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
+        assert_eq!(code, 402);
+        assert!(message.contains("充电专属"));
+        // 格式不支持 → 400 + 真实文案
+        let unsupported = AppError::from(anyhow::anyhow!(StreamUnavailableError::unsupported(
+            "该视频仅提供 2 段分段流（durl），暂不支持分段下载拼接",
+        )));
+        let (status, _, message) = unsupported.response_parts();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("分段"));
+    }
+
+    #[test]
+    fn internal_error_codes_live_in_1xxx_range() {
+        for error in [
+            AppError::Database(sea_orm::DbErr::Custom("x".into())),
+            AppError::Config("x".into()),
+            AppError::Io(std::io::Error::other("x")),
+            AppError::Internal("x".into()),
+            AppError::Json(serde_json::from_str::<serde_json::Value>("").unwrap_err()),
+        ] {
+            let (_, code, _) = error.response_parts();
+            assert!((1000..2000).contains(&code), "code {code} 应落在 1xxx 区间");
+        }
+    }
+
+    #[test]
     fn malformed_bili_payload_is_reported_as_bad_gateway() {
-        let error = AppError::from(anyhow::anyhow!(
-            "反序列化 B站 API playurl data 失败，字段路径=dash.dolby.audio"
-        ));
+        let error = AppError::from(anyhow::Error::new(BiliDeserializeError(
+            "反序列化 B站 API playurl data 失败，字段路径=dash.dolby.audio".to_string(),
+        )));
         assert!(matches!(error, AppError::Upstream(_)));
         let (status, code, message) = error.response_parts();
         assert_eq!(status, StatusCode::BAD_GATEWAY);

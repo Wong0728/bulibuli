@@ -19,6 +19,20 @@ use super::BiliApi;
 /// 直播清晰度代码：原画（1080P）。
 const LIVE_QN_RAW: i32 = 10000;
 
+/// uid 无效（<=0）警告的进程级闸门：只告警一次，避免每个监控周期刷屏。
+static WARNED_INVALID_LIVE_UID: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn warn_invalid_live_uid_once() {
+    use std::sync::atomic::Ordering;
+    if !WARNED_INVALID_LIVE_UID.swap(true, Ordering::Relaxed) {
+        warn!(
+            "存在 uid<=0 的直播源：UID 批量探测永远无法覆盖（已跳过），\
+             请重新保存直播源以解析真实 uid（本警告仅记录一次）"
+        );
+    }
+}
+
 impl BiliApi {
     /// 监控服务使用的批量状态探测。
     /// 一次请求覆盖所有已保存的主播，避免按房间同步轮询造成请求尖峰。
@@ -27,17 +41,22 @@ impl BiliApi {
         uids: &[i64],
         cookies: &str,
     ) -> Result<HashMap<i64, LiveBatchStatus>> {
+        let uids_len = uids.len();
+        // uid<=0 的直播源（历史脏数据/解析失败遗留）永远无法通过 UID 批量探测：
+        // 跳过且只警告一次，而不是每个监控周期（约 30s）重复报错。
         let uids = uids
             .iter()
             .copied()
             .filter(|uid| *uid > 0)
             .collect::<Vec<_>>();
+        if uids.len() != uids_len {
+            warn_invalid_live_uid_once();
+        }
         if uids.is_empty() {
             return Ok(HashMap::new());
         }
         let url = "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids";
         let enriched = self.enrich_cookies(cookies).await?;
-        self.rate_limiter.until_ready().await;
         let credential = crate::services::credential::Credential::from_cookie_header(&enriched);
         let request = self
             .client_for(url)
@@ -48,7 +67,11 @@ impl BiliApi {
             .header("Origin", "https://www.bilibili.com")
             .header("Accept", "application/json, text/plain, */*")
             .header("Cookie", credential.to_cookie_header());
-        let response = self.send_with_retry(request).await?;
+        // 后台批量探测走专用限流器：仅在发送处扣减后台配额，
+        // 不再先过 background limiter 又在发送时扣前台配额（双扣减）。
+        let response = self
+            .send_with_retry_limited(request, &self.background_rate_limiter)
+            .await?;
         let data: LiveBatchStatusMap = self
             .parse_data_silent(response, "live_status_info_by_uids")
             .await?;

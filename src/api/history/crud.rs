@@ -20,7 +20,9 @@ pub(super) async fn get_by_uid(
     State(state): State<SharedState>,
     Query(q): Query<ByUidQuery>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = crate::services::file_safety::validate_uid(&q.uid)?.as_str().to_owned();
+    let uid = crate::services::file_safety::validate_uid(&q.uid)?
+        .as_str()
+        .to_owned();
     let history = state.business.history_service.list_by_uid(&uid).await?;
     Ok(Json(ApiResponse::success(json!({
         "history": history.iter().map(|h| h.to_api()).collect::<Vec<_>>(),
@@ -139,9 +141,9 @@ pub(super) async fn delete_history(
     let delete_files = req.delete_files.unwrap_or(true);
 
     let guard = if let Some(expected_version) = req.expected_version {
-        let history_id = req.history_id.ok_or_else(|| {
-            AppError::BadRequest("带版本删除时必须提供 history_id".to_string())
-        })?;
+        let history_id = req
+            .history_id
+            .ok_or_else(|| AppError::BadRequest("带版本删除时必须提供 history_id".to_string()))?;
         let history = state
             .business
             .history_service
@@ -175,12 +177,12 @@ pub(super) async fn delete_history(
                 guard.commit();
             }
             Ok(Json(ApiResponse::with_message(
-            json!({
-                "bvid": bvid,
-                "removed_files": removed_files,
-                "removed_tasks": removed_tasks,
-            }),
-            "记录已删除",
+                json!({
+                    "bvid": bvid,
+                    "removed_files": removed_files,
+                    "removed_tasks": removed_tasks,
+                }),
+                "记录已删除",
             )))
         }
         Ok(None) => {

@@ -6,9 +6,9 @@ updates:
       interval: monthly
     open-pull-requests-limit: 5
   - package-ecosystem: npm
-    directory: "/static/js"
+    directory: "/web"
     schedule:
-      interval: monthly
+      interval: weekly
     open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: "/"

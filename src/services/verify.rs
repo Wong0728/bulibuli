@@ -214,19 +214,25 @@ async fn verify_periodic(
             }
             match compute_sha256_blocking(&path).await {
                 Ok(digest) => {
+                    // 审计修复：哈希不一致时保留首次基线（sha256）不动——基线是
+                    // "下载完成时的可信快照"，被观测值覆盖后篡改将无法再被发现。
+                    // 差异只进日志并标记 tampered；last_seen_hash 语义由日志承载，
+                    // 避免为单次观测新增列。仅刷新 sha256_last_checked_at 控制重扫节奏。
                     let tampered = h.sha256.as_deref().is_some_and(|old| old != digest);
                     let mut model: history::ActiveModel = h.clone().into();
                     if tampered {
                         warn!(
-                            "[verify] SHA-256 不一致，标记 tampered: {} (旧={}, 新={})",
+                            "[verify] SHA-256 与基线不一致，标记 tampered（基线保留）: {} (基线={}, 本次观测={})",
                             h.bvid,
                             h.sha256.as_deref().unwrap_or(""),
                             digest
                         );
                         model.state = Set(Some("tampered".to_string()));
+                        model.sha256_last_checked_at = Set(Some(Local::now()));
+                    } else {
+                        // 一致：基线即观测值，刷新检查时间即可。
+                        model.sha256_last_checked_at = Set(Some(Local::now()));
                     }
-                    model.sha256 = Set(Some(digest));
-                    model.sha256_last_checked_at = Set(Some(Local::now()));
                     if let Err(e) = model.update(db).await {
                         warn!("[verify] 更新 {} 失败: {e}", h.bvid);
                         0usize

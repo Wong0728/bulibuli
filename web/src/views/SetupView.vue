@@ -42,7 +42,9 @@ function next() {
 async function finish() {
   const r: any = await setup.applyConfig({
     mode: mode.value,
-    access_default: accessDefault.value,
+    // 访问策略只对 LAN 模式有意义；local 模式回环始终放行（后端兜底），
+    // proxy 模式来源由反代决定，均不传该字段。
+    access_default: mode.value === 'lan' ? accessDefault.value : undefined,
     proxy_domain: proxyDomain.value || undefined,
     mark_completed: true,
   });
@@ -53,8 +55,9 @@ async function finish() {
   } else {
     toast.success('配置已保存');
   }
-  // 顺便把 AI Skill 设置一起同步
-  await setup.setAiSkill(aiSkillEnabled.value);
+  // 顺便把 AI Skill 设置一起同步；失败必须提示，不能让用户误以为已启用。
+  const aiSaved = await setup.setAiSkill(aiSkillEnabled.value);
+  if (!aiSaved) toast.error(setup.error || 'AI Skill 设置保存失败，可稍后在设置页重试');
   // 重新拉状态
   await setup.loadStatus();
   // 通知父组件切换 phase
@@ -115,8 +118,8 @@ const emit = defineEmits<{ (e: 'done'): void }>();
       <!-- Step 2 -->
       <section v-else-if="step === 2" class="setup-step-body">
         <h2>访问策略</h2>
-        <p class="form-note">{{ mode === 'lan' ? '局域网模式：默认允许所有内网 IP 访问。' : '本机/反代模式通常无需配置此项。' }}</p>
-        <div class="setup-radio-group">
+        <p class="form-note">{{ mode === 'lan' ? '局域网模式：默认仅允许白名单 IP 访问，也可选择放行全部内网设备。' : '本机/反代模式下本机访问始终放行，无需配置访问策略。' }}</p>
+        <div v-if="mode === 'lan'" class="setup-radio-group">
           <label>
             <input v-model="accessDefault" type="radio" value="allow" />
             允许所有内网访问

@@ -39,7 +39,7 @@
     margin-top: .25rem;
 }
 
-/* 全局日志里的博主 UID 标记（对齐老框架 static/css/style.css .log-entry .log-uid）。 */
+/* 全局日志里的博主 UID 标记。 */
 .log-entry .log-uid {
     color: var(--brand);
     margin-right: var(--size-4);

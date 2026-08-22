@@ -9,6 +9,8 @@
 /static/js/test-results/
 /playwright-report/
 /static/js/playwright-report/
+/web/test-results/
+/web/playwright-report/
 /.trash/
 /test-screenshots/
 /test_*.log
@@ -34,11 +36,12 @@ clippy_output*.txt
 【example】*/
 
 # Local review, migration, and release-analysis notes.
-AUDIT_REPORT.md
-bulibuli-linux-report.md
-代码规范.md
-docs/问题归因与优化方案.md
-docs/release-security-status-*.md
-docs/v2-main-migration-status.md
-CODE_REVIEW.md
-安全审计报告_*.md
+# 兜底规则: 即使将来在仓库内创建, 也避免意外提交. 当前实际不存在这些文件.
+# AUDIT_REPORT.md
+# bulibuli-linux-report.md
+# 代码规范.md
+# docs/问题归因与优化方案.md
+# docs/release-security-status-*.md
+# docs/v2-main-migration-status.md
+# CODE_REVIEW.md
+# 安全审计报告_*.md

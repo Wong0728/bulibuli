@@ -36,9 +36,10 @@ jobs:
       - name: Install media test dependency
         run: sudo apt-get update && sudo apt-get install -y aria2 ffmpeg
       - run: cargo fmt --all -- --check
-      - run: cargo check --all-targets
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all-targets
+      # --locked：Cargo.toml 与 Cargo.lock 漂移的 PR 必须在此失败，而不是拖到发版
+      - run: cargo check --all-targets --locked
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --all-targets --locked
 
   frontend-and-policy:
     name: Frontend and source policy
@@ -51,25 +52,58 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
+      # 缓存 Playwright 浏览器，避免每次冷下载 chromium
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
       - name: Install media test dependency
         run: sudo apt-get update && sudo apt-get install -y aria2 ffmpeg
       - run: npm ci --ignore-scripts
-        working-directory: static/js
+        working-directory: web
       - run: npm run build
-        working-directory: static/js
+        working-directory: web
       - run: npx playwright install --with-deps chromium
-        working-directory: static/js
-      - shell: bash
-        run: find static/js -maxdepth 1 -type f -name '*.js' ! -name '*.min.js' -print0 | xargs -0 -n1 node --check
-      - run: node --test tests/frontend_live_drawer.mjs
+        working-directory: web
       - run: npm run test:smoke
-        working-directory: static/js
+        working-directory: web
       - run: python build.py --check
       - shell: bash
         run: bash -n deploy/linux/install.sh deploy/termux/install.sh
+
+  e2e-real-backend:
+    name: E2E real backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Install media test dependency
+        run: sudo apt-get update && sudo apt-get install -y aria2 ffmpeg
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: web
+      # e2e 必须测当前源码重建的前端产物，而不是仓库里可能过期的提交产物
+      - run: npm run build
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run test:e2e
+        working-directory: web
 
   dependency-audit:
     name: Dependency audit
@@ -102,17 +136,20 @@ jobs:
       - name: Install Rust toolchain on Windows
         shell: pwsh
         run: |
-          rustup toolchain install $env:RUST_TOOLCHAIN --profile minimal --component rustfmt --component clippy
+          rustup toolchain install $env:RUST_TOOLCHAIN --profile minimal
           "RUSTUP_TOOLCHAIN=$env:RUST_TOOLCHAIN" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        if: runner.os != 'Windows'
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       - name: Install media test dependency
         run: choco install ffmpeg -y --no-progress
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
       - run: cargo build --locked --release
-      - run: python build.py --check
+      # Rust 门禁已由上方 rust job 全量覆盖；这里只跑 Windows 特有的打包/产物检查，
+      # 避免 --check 重复执行 fmt/check/clippy/test 造成冷缓存双份全量编译。
+      - run: python build.py --check --skip-rust-gates

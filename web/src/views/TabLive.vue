@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 直播页：行为对齐老框架 static/js/live.js（唯一基准）。
+ * 直播页：保留迁移前已验证的交互语义。
  * - dashboard 轮询 30s（后端 poll_interval_secs）、事件轮询 2s、时长 tick 1s；
  *   页面隐藏时暂停，恢复可见立即刷新（对齐 polling.js / live.js visibilitychange）。
  * - 状态映射、文案、确认弹窗、toast 均以 live.js 逐字对齐。
@@ -260,7 +260,8 @@ async function confirmAdd() {
       toast.success(`成功添加 ${results.ok.length} 个直播源（自动录制默认关闭）`);
       closeAddModal();
       await live.refreshDashboard();
-      selectRoomByRoomId(results.ok[0], true);
+      const firstOkRoom = results.ok[0];
+      if (firstOkRoom != null) selectRoomByRoomId(firstOkRoom, true);
     }
     if (results.fail.length) {
       toast.error(`添加失败 ${results.fail.length} 个：${results.fail.join('；')}`);
@@ -313,10 +314,11 @@ function openSettingsModal() {
   if (!source) return;
   const schedule = emptySchedule();
   for (const [day, windows] of Object.entries(source.weekly_schedule || {})) {
-    if (!schedule[day]) continue;
+    const dayWindows = schedule[day];
+    if (!dayWindows) continue;
     windows.slice(0, 2).forEach((window, index) => {
       const [start, end] = String(window).split('-');
-      schedule[day][index] = [start || '', end || ''];
+      dayWindows[index] = [start || '', end || ''];
     });
   }
   settingsAutoRecord.value = !!source.auto_record;
@@ -483,9 +485,6 @@ async function refreshRoomInfo() {
 
 // ===== B 站同步状态组（对齐 live.js setSyncStates 文案与指示点）=====
 
-const pageSyncState = computed(() => (live.dashboardFailedAt ? 'error' : 'ok'));
-const pageSyncLabel = computed(() => (live.dashboardFailedAt ? '页面同步中断，保留上次数据' : '页面已连接'));
-const pageSyncDot = computed(() => (live.dashboardFailedAt ? 'failed' : 'connected'));
 const monitorState = computed(() => (live.monitorRunning === null ? 'stale' : live.monitorRunning ? 'ok' : 'error'));
 const monitorLabel = computed(() => {
   if (live.monitorRunning === null) return '监控：等待数据';
@@ -580,7 +579,8 @@ function stopEventPolling() {
 
 function eventCategory(event: any): 'user' | 'stats' | 'system' | 'unknown' {
   if (event.event_category) return event.event_category as 'user' | 'stats' | 'system' | 'unknown';
-  const cmd = String(event.cmd || '').split(':', 1)[0];
+  // split 结果可能为空数组（理论上不会），空串兜底走 unknown 分类。
+  const cmd = String(event.cmd || '').split(':', 1)[0] || '';
   if (['danmaku', 'gift', 'super_chat', 'guard', 'interact', 'like', 'entry', 'link_mic_pk'].includes(event.event_type)) return 'user';
   if (['watched', 'stats'].includes(event.event_type)
     || ['WATCHED_CHANGE', 'ONLINE_RANK_V3', 'ONLINE_RANK_V2', 'ONLINE_RANK_TOP3', 'ONLINE_RANK_COUNT', 'LIKE_INFO_V3_UPDATE', 'ROOM_REAL_TIME_MESSAGE_UPDATE', 'HOT_RANK_CHANGED', 'AREA_RANK_CHANGED'].includes(cmd)) return 'stats';
@@ -597,7 +597,8 @@ function eventTypeLabel(event: any): string {
     link_mic_pk: '连麦 / PK', interact: '进场', watched: '看过人数',
     like: '点赞', entry: '进场特效', stats: '统计', system: '系统', unknown: '未识别命令',
   };
-  if (map[event.event_type]) return map[event.event_type];
+  const label = map[event.event_type];
+  if (label) return label;
   if (event.event_label) return String(event.event_label);
   const categoryMap: Record<string, string> = { user: '用户互动', stats: '统计', system: '系统', unknown: '未识别命令' };
   return categoryMap[eventCategory(event)] || '事件';
@@ -707,9 +708,6 @@ const nextScheduleText = computed(() => {
       <div class="card-title">
         <span><i class="fa-solid fa-tower-broadcast"></i> 直播录制看板</span>
         <div class="live-sync-group" id="live-sync-group" aria-live="polite">
-          <span class="live-sync-item" id="live-sync-page" :data-state="pageSyncState" title="本地页面与服务的连接状态">
-            <span class="aria2-dot" :class="pageSyncDot"></span>{{ pageSyncLabel }}
-          </span>
           <span class="live-sync-item" id="live-sync-monitor" :data-state="monitorState" title="后端开播监控 worker 的运行状态">
             <span class="aria2-dot" :class="monitorState === 'ok' ? 'connected' : monitorState === 'error' ? 'failed' : ''"></span>{{ monitorLabel }}
           </span>

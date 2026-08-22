@@ -76,6 +76,9 @@ impl DownloadManager {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "下载完成"
         );
+        // 记录完成时刻：完成窗口内的重复入队请求由 add_task 幂等吸收
+        self.record_recent_completion(&task.bvid, task.cid, &task.task_type)
+            .await;
 
         // 获取下载目录与 UP 主 UID（用于 SHA-256 去重与历史记录）。
         let uid = self.get_blogger_uid_from_history(&task.bvid).await;

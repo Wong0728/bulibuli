@@ -8,9 +8,10 @@ import { get, post, put, request } from './client';
 import type {
   AuthState, CookieStatus, QrcodeGenerate, QrcodePoll, FoundationStatus, SetupStatus, DetectResult,
   Blogger, SavedBlogger, SearchedUser, UserProfileResult, Series, VideoItem, VideoUrlsResult, VideoInfo,
-  DownloadTask, DownloadHealth, HistoryBoardResponse, HistoryEntry, LiveRoom, LiveSource, LiveRecording, LiveDashboard, LiveMergeJob,
-  SettingsPayload, FfmpegStatus,
+  DownloadHealth, DownloadStatusSnapshot, HistoryBoardResponse, HistoryEntry, LiveRoom, LiveRecording, LiveDashboard, LiveMergeJob,
+  SettingsPayload, Settings, FfmpegStatus,
   UpdateStatus, UpdateApplyResult,
+  ManualResolveResult, TaskStatusSummary, TaskSchedule, SetupApplyResult, RawLogEntry,
 } from './types';
 
 /** ---------- auth ---------- */
@@ -52,26 +53,27 @@ export const blogger = {
   list: () => get<{ bloggers: Blogger[] }>('/api/blogger/list'),
   savedList: () => get<{ bloggers: SavedBlogger[] }>('/api/blogger/saved/list'),
   savedAdd: (uid: number | string, details: Partial<Pick<SavedBlogger, 'name' | 'face' | 'sign' | 'level' | 'fans'>> = {}) =>
-    post<{ ok: boolean }>('/api/blogger/saved/add', { uid: String(uid), ...details }),
-  savedDelete: (id: number) => post<{ ok: boolean }>('/api/blogger/saved/delete', { id }),
+    post<{ blogger: Blogger }>('/api/blogger/saved/add', { uid: String(uid), ...details }),
+  // 后端删除/清理/确认类操作 data 恒为空对象（src/api/blogger/manage.rs + actions.rs）。
+  savedDelete: (id: number) => post<Record<string, never>>('/api/blogger/saved/delete', { id }),
   add: (uid: number, config: Partial<Blogger>) =>
     post<{ blogger: Blogger }>('/api/blogger/add', { uid: String(uid), ...config }),
   update: (id: number, patch: Partial<Blogger>) =>
     post<{ blogger: Blogger }>('/api/blogger/update', { id, ...patch }),
-  remove: (id: number) => post<{ ok: boolean }>('/api/blogger/delete', { id }),
+  remove: (id: number) => post<Record<string, never>>('/api/blogger/delete', { id }),
   search: (q: string) => get<{ users: SearchedUser[]; total: number }>('/api/blogger/search', { q }),
   validateUid: (uid: number | string) => get<UserProfileResult>('/api/blogger/validate-uid', { uid: String(uid) }),
   series: (uid: number | string) => get<{ series: Series[] }>('/api/blogger/series', { uid: String(uid) }),
   seriesVideos: (uid: number | string, seriesId: number, opts: { collection_type?: 'series' | 'season'; offset?: number; limit?: number } = {}) =>
-    get<{ videos: any[]; has_more?: boolean }>('/api/blogger/series-videos', {
+    get<{ videos: VideoItem[]; has_more?: boolean }>('/api/blogger/series-videos', {
       uid: String(uid),
       series_id: seriesId,
       collection_type: opts.collection_type ?? 'series',
       offset: opts.offset ?? 0,
       limit: opts.limit ?? 30,
     }),
-  cleanupNow: (uid: number | string) => post<{ ok: boolean }>('/api/blogger/cleanup-now', { uid: String(uid) }),
-  acknowledgeChange: (uid: number | string) => post<{ ok: boolean }>('/api/blogger/acknowledge', { uid: String(uid) }),
+  cleanupNow: (uid: number | string) => post<Record<string, never>>('/api/blogger/cleanup-now', { uid: String(uid) }),
+  acknowledgeChange: (uid: number | string) => post<Record<string, never>>('/api/blogger/acknowledge', { uid: String(uid) }),
   acknowledgeBatch: (uids: Array<number | string>) => post<{ affected: number }>('/api/blogger/acknowledge-batch', { uids: uids.map(String) }),
 };
 
@@ -86,7 +88,8 @@ export const blogger = {
  *   - 没有 /api/video/resolve-link —— 用 /api/video/resolve + { input } 替代
  */
 export const video = {
-  resolve: (bvid: string) => post<any>('/api/video/resolve', { input: bvid }),
+  // resolve 同时承接单视频/番剧/课程链接解析，返回 ManualResolveResult（见 types.ts）。
+  resolve: (bvid: string) => post<ManualResolveResult>('/api/video/resolve', { input: bvid }),
   getVideos: (uid: number | string, opts: { limit?: number; offset?: number } = {}) =>
     post<{ videos: VideoItem[]; has_more?: boolean; total?: number }>('/api/video/get-videos', { uid: String(uid), ...opts }),
   getVideoUrls: (bvid: string, cid?: number, qn?: number) =>
@@ -96,11 +99,12 @@ export const video = {
   // 后端响应 { allow, state, pay_note, message }（src/api/video/stream.rs::gate_download）。
   gateDownload: (bvid: string) => post<{ allow: boolean; state?: string; pay_note?: string; message?: string }>('/api/video/gate-download', { bvid }),
   /** 解析番剧/课程/单视频链接：后端没有独立路由，复用 /api/video/resolve。 */
-  resolveLink: (link: string) => post<any>('/api/video/resolve', { input: link }),
+  resolveLink: (link: string) => post<ManualResolveResult>('/api/video/resolve', { input: link }),
+  // comments / danmaku 返回旁挂内容聚合结构，消费方（VideoDrawer）原样展示，不在此处强约定字段。
   comments: (bvid: string, opts: { path?: string; history_id?: number; uid?: number | string } = {}) =>
-    get<any>('/api/video/comments', { bvid, ...opts, uid: opts.uid == null ? undefined : String(opts.uid) }),
+    get<unknown>('/api/video/comments', { bvid, ...opts, uid: opts.uid == null ? undefined : String(opts.uid) }),
   danmaku: (bvid: string, path: string, history_id?: number) =>
-    get<any>('/api/video/danmaku', { bvid, path, history_id }),
+    get<unknown>('/api/video/danmaku', { bvid, path, history_id }),
   downloadDanmaku: (bvid: string, opts: { source?: string; page?: number; history_id?: number } = {}) =>
     post<{ count: number }>('/api/video/download-danmaku', { bvid, source: opts.source, page: opts.page, history_id: opts.history_id }),
   downloadComments: (bvid: string, opts: { source?: string; history_id?: number } = {}) =>
@@ -124,21 +128,24 @@ export const video = {
 export const download = {
   add: (bvid: string, opts: { title: string; url: string; quality?: number; type?: 'video' | 'audio' | 'danmaku' | 'comments' | 'cover' } = { title: '', url: '' }) =>
     post<{ download_id: number }>('/api/download/add', { bvid, ...opts }),
-  start: (bvid: string, opts: { qn?: number; uid?: string; pages?: any[]; media_type?: string; season_title?: string } = {}) =>
-    post<DownloadTask>('/api/download/start', { bvid, ...opts }),
-  retry: (bvid: string, type = 'video') => post<DownloadTask>('/api/download/retry', { bvid, type }),
+  // start 单P 返回 { download_id }，多P/番剧多集返回 { ok_count, total }
+  // （src/api/download/queue_ops.rs::start_download / outcome_to_response）。
+  start: (bvid: string, opts: { qn?: number; uid?: string; pages?: Array<{ cid?: number; page?: number; part?: string; part_title?: string }>; media_type?: string; season_title?: string } = {}) =>
+    post<{ download_id?: number; ok_count?: number; total?: number }>('/api/download/start', { bvid, ...opts }),
+  retry: (bvid: string, type = 'video') => post<{ download_id: number }>('/api/download/retry', { bvid, type }),
   retryAll: (since?: number) =>
     post<{ download_id: number }>(`/api/download/retry-all${since != null ? `?since=${encodeURIComponent(since)}` : ''}`, {}),
-  remove: (bvid: string, type = 'video') => post<{ ok: boolean }>('/api/download/remove', { bvid, type }),
+  remove: (bvid: string, type = 'video') => post<{ download_id: number | null }>('/api/download/remove', { bvid, type }),
   // task_id=null 由后端解释为全局暂停/恢复，旧前端也使用这个契约。
-  pause: (task_id: number | null) => post<{ ok?: boolean }>('/api/download/pause', { task_id }),
-  resume: (task_id: number | null) => post<{ ok?: boolean }>('/api/download/resume', { task_id }),
-  priority: (bvid: string, type: string, priority: number) => post<{ ok: boolean }>('/api/download/priority', { bvid, type, priority }),
-  status: (uid?: string) => get<any>('/api/download/status', { uid }),
+  pause: (task_id: number | null) => post<{ download_id: number | null }>('/api/download/pause', { task_id }),
+  resume: (task_id: number | null) => post<{ download_id: number | null }>('/api/download/resume', { task_id }),
+  // 后端返回 { success, priority }（src/services/download/status.rs::set_priority）。
+  priority: (bvid: string, type: string, priority: number) => post<{ success: boolean; priority: number }>('/api/download/priority', { bvid, type, priority }),
+  status: (uid?: string) => get<DownloadStatusSnapshot>('/api/download/status', { uid }),
   health: () => get<DownloadHealth>('/api/download/health'),
   metrics: () => get<{ statuses: Record<string, number>; error_kinds: Record<string, number>; waiting_retry: number }>('/api/download/metrics'),
   burn: (bvid: string, source: 'danmaku' | 'subtitle' | 'both', history_id?: number | null) =>
-    post<{ ok: boolean; task_id?: string }>('/api/download/burn', { bvid, source, history_id: history_id ?? null }),
+    post<{ task_id: string }>('/api/download/burn', { bvid, source, history_id: history_id ?? null }),
   burnStatus: (task_id: string) =>
     get<{ task_id: string; status: string; message?: string; output_path?: string }>(`/api/download/burn/status/${encodeURIComponent(task_id)}`),
   proxy: (url: string, filename?: string) =>
@@ -155,18 +162,18 @@ export const download = {
  *       浏览器下载产物文件（流式响应，非 envelope）
  */
 export const history = {
-  list: (tab: 'downloading' | 'completed' | 'failed', page = 1, page_size = 50) =>
-    get<HistoryBoardResponse>('/api/history/list', { tab, page, page_size }),
+  list: (tab: 'downloading' | 'completed' | 'failed', page = 1, page_size = 50, fresh = false) =>
+    // fresh 只能传 "true"/"false"：serde_urlencoded 的 bool 不接受 "1"（会 400）。
+    get<HistoryBoardResponse>('/api/history/list', { tab, page, page_size, fresh: fresh ? 'true' : undefined }),
   detail: (bvid: string, history_id?: number) =>
-    get<{ server_time: number; video: any }>('/api/history/list', { bvid, history_id }),
-  // 后端 by-uid 只接受 uid，返回平铺 { history: [...] }，不是分页看板。
-  byUid: (uid: number) => get<{ history: HistoryEntry[] }>('/api/history/by-uid', { uid }),
+    get<{ server_time: number; video: unknown }>('/api/history/list', { bvid, history_id }),
   search: (keyword: string, page = 1, page_size = 50) =>
     get<{ history: HistoryEntry[]; total: number; page: number; page_size: number }>('/api/history/search', { keyword, page, page_size }),
+  // 后端返回 { bvid, removed_files, removed_tasks }（src/api/history/crud.rs::delete_history）。
   delete: (bvid: string, history_id?: number, delete_files?: boolean) =>
-    post<{ ok: boolean }>('/api/history/delete', { bvid, history_id, delete_files }),
+    post<{ bvid: string; removed_files: boolean; removed_tasks: number }>('/api/history/delete', { bvid, history_id, delete_files }),
   openDirectory: (bvid: string, history_id?: number, path?: string) =>
-    post<{ ok: boolean }>('/api/history/open-directory', { bvid, history_id, path }),
+    post<{ bvid: string }>('/api/history/open-directory', { bvid, history_id, path }),
   fileDownloadUrl: (bvid: string, path: string, history_id?: number) =>
     `/api/history/file-download?bvid=${encodeURIComponent(bvid)}&path=${encodeURIComponent(path)}${history_id == null ? '' : `&history_id=${encodeURIComponent(String(history_id))}`}`,
 };
@@ -181,12 +188,12 @@ export const history = {
  */
 export const task = {
   start: (uid: number | string) =>
-    post<{ next_check?: number; schedule?: Record<string, any>; server_timestamp?: number; server_utc_offset?: string }>(
+    post<{ next_check?: number; schedule?: TaskSchedule; server_timestamp?: number; server_utc_offset?: string }>(
       '/api/task/start', { uid: String(uid) }),
   stop: (uid: number | string) =>
     post<Record<string, never>>('/api/task/stop', { uid: String(uid) }),
-  status: () => get<any>('/api/task/status'),
-  nextCheck: () => get<{ bloggers: Record<string, any>; server_timestamp: number; server_utc_offset: string }>('/api/task/next-check'),
+  status: () => get<TaskStatusSummary>('/api/task/status'),
+  nextCheck: () => get<{ bloggers: Record<string, TaskSchedule>; server_timestamp: number; server_utc_offset: string }>('/api/task/next-check'),
 };
 
 /** ---------- live ---------- */
@@ -196,24 +203,23 @@ export const live = {
   // 后端响应 { operation_id, recording_id, status, progress }（停止是异步收尾）。
   stop: (room_id: number) =>
     post<{ operation_id: string; recording_id: number | string; status: string; progress: number }>('/api/live/stop', { room_id }),
-  status: () => get<{ count: number; sessions: LiveRecording[] }>('/api/live/status'),
   dashboard: () => get<LiveDashboard>('/api/live/dashboard'),
-  sourceAdd: (room_id: number, config: Partial<LiveSource> = {}) => post<LiveSource>('/api/live/source/add', { room_id, ...config }),
-  sourceUpdate: (room_id: number, patch: Partial<LiveSource>) =>
-    post<LiveSource>('/api/live/source/update', { room_id, ...patch }),
-  sourceDelete: (room_id: number) => post<{ ok: boolean }>('/api/live/source/delete', { room_id }),
+  // status / sourceAdd / sourceUpdate / sourceDelete 已删除：无调用方的死函数
+  // （直播源写操作统一走 stores/live.ts 的 addSource/updateSource/deleteSource，
+  //  字段映射 auto_record→auto_record_enabled、quality→max_qn 在那里完成）。
   history: (limit = 30) => get<{ items: LiveRecording[]; total?: number }>('/api/live/history', { limit }),
   // 后端返回 { items }（src/api/live/history.rs::recovery）。
   recovery: () => get<{ items: LiveRecording[] }>('/api/live/recovery'),
   events: (room_id: number, recording_id?: number, after_seq = 0, limit = 100) =>
-    get<{ recording_id?: string | number; events: Array<Record<string, any>>; next_seq?: number }>('/api/live/events', { room_id, recording_id, after_seq, limit }),
+    get<{ recording_id?: string | number; events: Array<Record<string, unknown>>; next_seq?: number }>('/api/live/events', { room_id, recording_id, after_seq, limit }),
+  // 后端返回 { task_id, status: "queued" }（src/api/live/mod.rs::burn_recording_danmaku）。
   burnDanmaku: (recording_id: string | number) =>
-    post<{ ok: boolean; task_id?: string }>(`/api/live/history/${encodeURIComponent(String(recording_id))}/burn-danmaku`, {}),
+    post<{ task_id: string; status: string }>(`/api/live/history/${encodeURIComponent(String(recording_id))}/burn-danmaku`, {}),
   startMerge: (recording_id: string) => post<LiveMergeJob>(`/api/live/history/${recording_id}/merge`, {}),
   mergeJob: (job_id: string) => get<LiveMergeJob>(`/api/live/merge/${job_id}`),
-  cancelMerge: (job_id: string) => post<{ ok: boolean }>(`/api/live/merge/${job_id}/cancel`, {}),
+  cancelMerge: (job_id: string) => post<LiveMergeJob>(`/api/live/merge/${job_id}/cancel`, {}),
   openDirectory: (recording_id: number) =>
-    post<{ ok: boolean }>(`/api/live/history/${recording_id}/open-directory`, {}),
+    post<{ recording_id: number }>(`/api/live/history/${recording_id}/open-directory`, {}),
 };
 
 /** ---------- settings ----------
@@ -226,14 +232,13 @@ export const live = {
  */
 export const settings = {
   get: () => get<SettingsPayload>('/api/settings'),
-  save: (nestedSettings: Record<string, any>) =>
-    put<Record<string, any>>('/api/settings', { ...nestedSettings, expected_revision: nestedSettings.revision }),
-  reset: () => post<Record<string, any>>('/api/settings/reset'),
+  save: (nestedSettings: Record<string, unknown>) =>
+    put<Settings>('/api/settings', { ...nestedSettings, expected_revision: nestedSettings.revision }),
+  reset: () => post<Settings>('/api/settings/reset'),
   aria2Restart: () => post<{ restarted: boolean; error?: string | null; aria2_diagnostics?: unknown }>('/api/settings/aria2-restart'),
   ffmpegPath: () => get<FfmpegStatus>('/api/settings/ffmpeg-path'),
   ffmpegTest: (opts: { mode?: string; custom_path?: string }) => post<FfmpegStatus>('/api/settings/ffmpeg-test', opts),
-  pathPreview: (body: { template: string } & Record<string, string | number | undefined>) =>
-    post<{ path: string }>('/api/settings/path-preview', body),
+  // pathPreview 已删除：路径预览是纯前端 replaceAll（TabSettings 的 pathPreviewText），无组件调用。
 };
 
 /** ---------- logs ----------
@@ -242,11 +247,11 @@ export const settings = {
  * 后端 limit 被 clamp 到 1-100，且没有 level 参数（前端需自行过滤）。
  */
 export const logs = {
-  get: (limit = 100) => get<{ logs: any[] }>('/api/logs/get', { limit: Math.min(limit, 100) }),
+  get: (limit = 100) => get<{ logs: RawLogEntry[] }>('/api/logs/get', { limit: Math.min(limit, 100) }),
   blogger: (uid: number | string, limit = 100) =>
-    get<{ logs: any[] }>('/api/logs/blogger', { uid: String(uid), limit: Math.min(limit, 100) }),
+    get<{ logs: RawLogEntry[] }>('/api/logs/blogger', { uid: String(uid), limit: Math.min(limit, 100) }),
   bvid: (bvid: string, limit = 100) =>
-    get<{ logs: any[] }>('/api/logs/bvid', { bvid, limit: Math.min(limit, 100) }),
+    get<{ logs: RawLogEntry[] }>('/api/logs/bvid', { bvid, limit: Math.min(limit, 100) }),
 };
 
 /** ---------- refresh ----------
@@ -279,7 +284,7 @@ export const update = {
 export const setup = {
   status: () => get<SetupStatus>('/api/setup/status'),
   apply: (config: { mode: 'local' | 'lan' | 'proxy'; access_default?: 'allow' | 'deny'; proxy_domain?: string; mark_completed?: boolean }) =>
-    post<any>('/api/setup/apply', config),
+    post<SetupApplyResult>('/api/setup/apply', config),
   aiSkill: (enabled: boolean) => post<{ ai_skill_enabled: boolean }>('/api/setup/ai-skill', { enabled }),
   detect: () => get<DetectResult>('/api/setup/detect'),
   ports: () => get<{ main_port: number; setup_port: number; main_url: string; setup_url: string; accessible_urls: string[] }>('/api/setup/ports'),

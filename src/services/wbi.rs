@@ -4,7 +4,6 @@
 //! 避免签名逻辑重复实现。
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -55,25 +54,31 @@ pub fn enc_wbi(params: &mut HashMap<String, String>, img_key: &str, sub_key: &st
             (k.clone(), cleaned)
         })
         .collect();
-    let mut keys: Vec<&String> = cleaned.keys().collect();
-    keys.sort();
-    let query: Vec<String> = keys
-        .iter()
-        .map(|k| {
-            format!(
-                "{}={}",
-                encode_uri_component(k),
-                encode_uri_component(&cleaned[*k])
-            )
-        })
-        .collect();
-    let query = query.join("&");
-    let sign = format!("{:x}", md5::compute(query.clone() + &mixin));
+    // 签名串与最终发送的 URL 查询串共用同一编码函数（build_query），
+    // 保证「签名串 == 发送串」，避免 reqwest query() 的 `+` 编码导致校验失败。
+    let query = build_query(&cleaned);
+    let sign = format!("{:x}", md5::compute(query + &mixin));
     for (k, v) in &cleaned {
         params.insert(k.clone(), v.clone());
     }
     params.insert("w_rid".to_string(), sign);
     Ok(())
+}
+
+/// 把参数编码为查询串：按键排序，值与键均使用百分号编码（空格→`%20`）。
+///
+/// WBI 签名计算与请求 URL 构造**必须共用此函数**：
+/// reqwest 的 `query()` 走 form-urlencoded 编码（空格→`+`），
+/// 与签名的 `encodeURIComponent` 编码不一致，含空格关键词会签名校验失败。
+pub fn build_query(params: &HashMap<String, String>) -> String {
+    let mut pairs: Vec<(&String, &String)> = params.iter().collect();
+    // 与官方实现一致：按原始 key 排序（非编码后的 key）。
+    pairs.sort_by(|left, right| left.0.cmp(right.0));
+    pairs
+        .into_iter()
+        .map(|(k, v)| format!("{}={}", encode_uri_component(k), encode_uri_component(v)))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// 与官方 WBI（encodeURIComponent）一致：空格编码为 `%20`，
@@ -109,16 +114,16 @@ impl WbiKeysCache {
 
     /// 获取 img_key/sub_key，带 TTL 缓存。
     ///
-    /// `cookies` 应为已富化（含设备指纹）的 Cookie 字符串：B 站在新风控策略下的
-    /// 匿名/冷设备请求 `/x/web-interface/nav` 会直接返回 -101「账号未登录」，
-    /// 必须携带登录态 Cookie 才能拿到 wbi_img keys。
-    pub async fn get(
-        &self,
-        client: &Client,
-        user_agent: &str,
-        referer: &str,
-        cookies: &str,
-    ) -> Result<(String, String)> {
+    /// `send_request` 由调用方提供，应复用统一的请求管线
+    /// （限流、网络重试、超时、请求头与 Cookie 注入），
+    /// 避免 nav 刷新绕过重试管线：nav 抖动时直接失败会导致 WBI 签名连锁失败。
+    /// B 站在新风控策略下，匿名/冷设备请求 `/x/web-interface/nav` 会直接
+    /// 返回 -101「账号未登录」，闭包内必须携带登录态 Cookie。
+    pub async fn get<F, Fut>(&self, send_request: F) -> Result<(String, String)>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<reqwest::Response>>,
+    {
         {
             let cache = self.inner.read().await;
             if let Some((img, sub, fetched_at)) = cache.as_ref() {
@@ -136,18 +141,9 @@ impl WbiKeysCache {
                 }
             }
         }
-        let url = "https://api.bilibili.com/x/web-interface/nav";
-        debug!(url, "WBI keys 请求: nav");
-        let mut req = client
-            .get(url)
-            .header("User-Agent", user_agent)
-            .header("Referer", referer)
-            .header("Origin", "https://www.bilibili.com")
-            .header("Accept", "application/json, text/plain, */*");
-        if !cookies.is_empty() {
-            req = req.header("Cookie", cookies);
-        }
-        let resp = req.send().await?;
+        debug!("WBI keys 请求: nav");
+        // 发送走调用方提供的统一管线（含限流与网络重试），不再直连。
+        let resp = send_request().await?;
         let status = resp.status();
         if !status.is_success() {
             warn!(status = %status, "WBI keys 请求返回非2xx");
@@ -250,5 +246,53 @@ mod tests {
         enc_wbi(&mut params, &img, &sub).unwrap();
         assert!(params.contains_key("wts"));
         assert!(params.contains_key("w_rid"));
+    }
+
+    #[test]
+    fn test_build_query_percent_encodes_space_and_cjk() {
+        // B1 回归：查询串必须是百分号编码（与 encodeURIComponent 一致），
+        // 空格→%20，绝不能出现 form-urlencoded 的 `+`。
+        let mut params = HashMap::new();
+        params.insert("keyword".to_string(), "三体 群星 (beta)".to_string());
+        params.insert("foo".to_string(), "bar baz".to_string());
+        let query = build_query(&params);
+        assert!(!query.contains('+'), "查询串不得包含 `+`: {query}");
+        assert!(query.contains("foo=bar%20baz"));
+        // 中文按 UTF-8 百分号编码（"三" = E4 B8 89）
+        assert!(query.contains("%E4%B8%89"));
+        // 括号属于保留字符，必须编码
+        assert!(query.contains("%28beta%29"));
+    }
+
+    #[test]
+    fn test_enc_wbi_signs_exactly_the_sent_query() {
+        // B1 回归：签名计算所用查询串必须与最终发送 URL 的查询串完全一致。
+        // 发送侧（client.rs build_get_request）用同一 build_query 构造 URL，
+        // 此处用 build_query 重建签名源串并复算 md5，验证 w_rid 与之吻合。
+        let (img, sub) = (
+            "7cd3e0c46f4154c7895abce07cd3e0c4".to_string(),
+            "4932cab9b6eb0f2aa4e9c4ee4932cab9".to_string(),
+        );
+        let mut params = HashMap::new();
+        // 覆盖含空格 + 中文 + 中英混排的搜索关键词
+        params.insert("keyword".to_string(), "原神 启动 test".to_string());
+        params.insert("search_type".to_string(), "video".to_string());
+        enc_wbi(&mut params, &img, &sub).unwrap();
+
+        // 模拟发送侧：用 build_query 构造的查询串不含 `+`
+        let sent_query = build_query(&params);
+        assert!(
+            !sent_query.contains('+'),
+            "发送串不得包含 `+`: {sent_query}"
+        );
+        assert!(sent_query.contains("%20"));
+
+        // 复算签名：去掉 w_rid 后的参数按 build_query 编码 + mixin_key 的 md5
+        let w_rid = params.get("w_rid").unwrap().clone();
+        params.remove("w_rid");
+        let sign_source = build_query(&params);
+        let mixin = mixin_key(&(img.clone() + &sub)).unwrap();
+        let expected = format!("{:x}", md5::compute(format!("{sign_source}{mixin}")));
+        assert_eq!(w_rid, expected, "w_rid 必须基于与发送串一致的编码计算");
     }
 }

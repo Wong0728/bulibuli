@@ -21,7 +21,7 @@ export interface BloggerConfigFormModel {
 const props = withDefaults(defineProps<{
   modelValue: BloggerConfigFormModel;
   uidReadonly?: boolean;
-}>(), { uidReadonly: false });
+}>(), { uidReadonly: true });
 const emit = defineEmits<{ 'update:modelValue': [BloggerConfigFormModel] }>();
 
 const form = computed(() => props.modelValue);
@@ -70,7 +70,7 @@ function windowPart(value: string, part: 'start' | 'end') {
       <label for="blogger-config-uid"><i class="fa-solid fa-id-card"></i> 博主 UID</label>
       <input id="blogger-config-uid" class="form-control" inputmode="numeric" autocomplete="off"
              :value="form.uid" :readonly="uidReadonly"
-             placeholder="请输入数字 UID"
+             :placeholder="uidReadonly ? '由所选博主决定' : '请输入数字 UID'"
              @input="update('uid', ($event.target as HTMLInputElement).value.replace(/[^0-9]/g, ''))" />
     </div>
     <div class="form-group">

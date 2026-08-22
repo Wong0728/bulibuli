@@ -56,7 +56,7 @@ impl ConflictGuard {
         if self.committed {
             return Ok(());
         }
-        let table = table_for(self.target);
+        let table = table_for(self.target)?;
         let sql = format!("UPDATE {table} SET version = version - 1 WHERE id = ? AND version = ?");
         let result = self
             .db
@@ -67,6 +67,20 @@ impl ConflictGuard {
             ))
             .await?;
         if result.rows_affected() != 1 {
+            // 行已不存在（如 remove 失败路径中任务行已被删除）：无需回滚，视为成功，
+            // 避免必然失败的回滚报 Conflict 掩盖真实失败原因。
+            let exists = self
+                .db
+                .query_one_raw(Statement::from_sql_and_values(
+                    self.db.get_database_backend(),
+                    format!("SELECT 1 FROM {table} WHERE id = ?"),
+                    [self.target_id.clone().into()],
+                ))
+                .await?;
+            if exists.is_none() {
+                self.committed = true;
+                return Ok(());
+            }
             return Err(AppError::Conflict(format!(
                 "{:?} id={} 回滚时版本已被其他写入改变",
                 self.target, self.target_id
@@ -111,7 +125,7 @@ impl ConflictGuardService {
         target_id: &str,
         expected_version: Option<i32>,
     ) -> AppResult<ConflictGuard> {
-        let table = table_for(target);
+        let table = table_for(target)?;
         // 一次 UPDATE 完成"校验 + bump"，原子性由 SQLite 行锁保证
         // WHERE version = ? AND id = ? 命中则 version += 1；不命中说明 version 不匹配或记录不存在
         let sql = if expected_version.is_some() {
@@ -191,7 +205,7 @@ async fn fetch_current_version<C: ConnectionTrait>(
     target: OperationTarget,
     target_id: &str,
 ) -> AppResult<Option<i32>> {
-    let table = table_for(target);
+    let table = table_for(target)?;
     let sql = format!("SELECT version FROM {table} WHERE id = ?");
     let row = db
         .query_one_raw(Statement::from_sql_and_values(
@@ -212,14 +226,20 @@ async fn fetch_current_version<C: ConnectionTrait>(
 }
 
 /// 把 OperationTarget 映射到表名。新增 target 类型时需同步更新。
-fn table_for(target: OperationTarget) -> &'static str {
+///
+/// Settings（KV 表，无 version 列且主键是 key）/ Cookie、Session（auth_sessions
+/// 无 version 列）不支持乐观锁：显式报错而不是拼出 `no such column` 的运行时地雷。
+fn table_for(target: OperationTarget) -> AppResult<&'static str> {
     match target {
-        OperationTarget::Task => "download_tasks",
-        OperationTarget::Blogger => "bloggers",
-        OperationTarget::History => "history",
-        OperationTarget::LiveSource => "live_sources",
-        OperationTarget::Settings => "settings", // settings 是 KV 表，不参与乐观锁，这里仅为完整性
-        OperationTarget::Cookie | OperationTarget::Session => "auth_sessions",
+        OperationTarget::Task => Ok("download_tasks"),
+        OperationTarget::Blogger => Ok("bloggers"),
+        OperationTarget::History => Ok("history"),
+        OperationTarget::LiveSource => Ok("live_sources"),
+        OperationTarget::Settings | OperationTarget::Cookie | OperationTarget::Session => {
+            Err(AppError::BadRequest(format!(
+                "{target:?} 不支持乐观锁校验（对应表没有 version 列），请省略 expected_version"
+            )))
+        }
     }
 }
 
@@ -300,6 +320,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(v, Some(0));
+    }
+
+    #[tokio::test]
+    async fn unsupported_targets_return_explicit_error() {
+        let db = setup_db_with_task().await;
+        let service = ConflictGuardService::new(db);
+        // Settings / Cookie / Session 的表没有 version 列，必须显式拒绝而不是拼 SQL 炸 no such column。
+        for target in [
+            OperationTarget::Settings,
+            OperationTarget::Cookie,
+            OperationTarget::Session,
+        ] {
+            let err = match service.check_and_bump(target, "1", Some(0)).await {
+                Err(err) => err,
+                Ok(_) => panic!("{target:?} 应显式拒绝乐观锁校验"),
+            };
+            assert!(
+                matches!(err, AppError::BadRequest(ref m) if m.contains("不支持乐观锁")),
+                "unexpected error for {target:?}: {err:?}"
+            );
+        }
     }
 
     #[tokio::test]

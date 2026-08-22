@@ -10,13 +10,15 @@
 const seen = new Map<string, number>();
 const MAX_SIZE = 2000;
 
-export function webSocketMessageKey(namespace: string, message: any): string | null {
+export function webSocketMessageKey(namespace: string, message: unknown): string | null {
   if (!namespace) return null;
-  if (!message || typeof message.id !== 'string' || message.id.length === 0) return null;
-  return `${namespace}:${message.id}`;
+  if (!message || typeof message !== 'object') return null;
+  const id = (message as Record<string, unknown>).id;
+  if (typeof id !== 'string' || id.length === 0) return null;
+  return `${namespace}:${id}`;
 }
 
-export function acceptWebSocketMessage(namespace: string, message: any): boolean {
+export function acceptWebSocketMessage(namespace: string, message: unknown): boolean {
   const key = webSocketMessageKey(namespace, message);
   if (!key) {
     // 无 id 的消息不参与去重，直接放行（保留原 state.js 的 "无 id 视为重复"

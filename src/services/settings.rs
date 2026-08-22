@@ -474,21 +474,30 @@ impl SettingsService {
         };
         settings.validate()?;
         settings.revision = before.revision.saturating_add(1);
-        let previous_secret = before.aria2_rpc.secret.clone();
-        self.secret_store
-            .set("aria2_rpc_secret", &settings.aria2_rpc.secret)
-            .await?;
-        if let Err(error) = persist_runtime_settings(&self.db, &settings).await {
-            if let Err(rollback) = self
-                .secret_store
-                .set("aria2_rpc_secret", &previous_secret)
-                .await
-            {
-                return Err(AppError::Internal(format!(
-                    "settings save failed and secret rollback failed: {rollback}"
-                )));
-            }
+        // protected_secrets 与 settings 两表写入放进同一事务：任一失败整体回滚，
+        // 不再依赖“先写 secret 再补偿回滚”的跨表补偿路径。
+        let transaction = self.db.begin().await?;
+        if let Err(error) = self
+            .secret_store
+            .set_with_conn(&transaction, "aria2_rpc_secret", &settings.aria2_rpc.secret)
+            .await
+        {
+            let _ = transaction.rollback().await;
             return Err(error);
+        }
+        if let Err(error) = persist_runtime_settings(&transaction, &settings).await {
+            let _ = transaction.rollback().await;
+            return Err(error);
+        }
+        transaction.commit().await?;
+        // 未提交数据对其他池化连接不可见，回读校验必须放在 commit 之后。
+        if !settings.aria2_rpc.secret.is_empty() {
+            let verified = self.secret_store.get("aria2_rpc_secret").await?;
+            if verified.as_deref() != Some(settings.aria2_rpc.secret.as_str()) {
+                return Err(AppError::Internal(
+                    "受保护凭据写入后的回读校验失败".to_string(),
+                ));
+            }
         }
         let settings = Arc::new(settings);
         self.current.store(settings.clone());
@@ -526,11 +535,24 @@ async fn load_runtime_settings(db: &DatabaseConnection) -> AppResult<RuntimeSett
         .await?
     {
         if let Some(value) = row.value {
-            let mut raw: Value = serde_json::from_str(&value)?;
-            migrate_legacy_path_display_mode(&mut raw);
-            let mut settings: RuntimeSettings = serde_json::from_value(raw)?;
-            settings.config_version = CONFIG_VERSION;
-            return Ok(settings);
+            let parsed = serde_json::from_str::<Value>(&value).and_then(|mut raw| {
+                migrate_legacy_path_display_mode(&mut raw);
+                serde_json::from_value::<RuntimeSettings>(raw)
+            });
+            match parsed {
+                Ok(mut settings) => {
+                    settings.config_version = CONFIG_VERSION;
+                    return Ok(settings);
+                }
+                Err(error) => {
+                    // runtime_config 损坏不再阻断启动：记醒目日志后回退默认配置，
+                    // 由下方合并路径用默认值重建并持久化，自愈损坏行。
+                    tracing::error!(
+                        "runtime_config 解析失败，已回退默认配置: {error}; 原始内容前 256 字节: {}",
+                        value.chars().take(256).collect::<String>()
+                    );
+                }
+            }
         }
     }
     let mut merged = serde_json::to_value(RuntimeSettings::default())?;
@@ -580,13 +602,33 @@ fn migrate_legacy_path_display_mode(value: &mut Value) {
 }
 
 async fn persist_runtime_settings(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     settings: &RuntimeSettings,
 ) -> AppResult<()> {
     let mut protected = settings.clone();
     protected.aria2_rpc.secret.clear();
     let value = serde_json::to_value(protected)?;
-    save_setting_value(db, "runtime_config", value).await
+    // 直接在给定连接上 upsert：保存路径传入的是已开启的事务（与 protected_secrets
+    // 同事务提交/回滚）；启动迁移路径传入普通连接，单条 upsert 本身原子。
+    let serialized = serde_json::to_string(&value)?;
+    if let Some(existing) = setting::Entity::find_by_id("runtime_config")
+        .one(db)
+        .await?
+    {
+        let mut model: setting::ActiveModel = existing.into();
+        model.value = Set(Some(serialized));
+        model.updated_at = Set(Some(Local::now()));
+        model.update(db).await?;
+    } else {
+        setting::ActiveModel {
+            key: Set("runtime_config".to_string()),
+            value: Set(Some(serialized)),
+            updated_at: Set(Some(Local::now())),
+        }
+        .insert(db)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn migrate_legacy_cookie(
@@ -614,30 +656,6 @@ async fn migrate_legacy_cookie(
         migrated = true;
     }
     Ok(migrated)
-}
-
-async fn save_setting_value(db: &DatabaseConnection, key: &str, value: Value) -> AppResult<()> {
-    let transaction = db.begin().await?;
-    let serialized = match value {
-        Value::String(value) if key == "cookies" => value,
-        other => serde_json::to_string(&other)?,
-    };
-    if let Some(existing) = setting::Entity::find_by_id(key).one(&transaction).await? {
-        let mut model: setting::ActiveModel = existing.into();
-        model.value = Set(Some(serialized));
-        model.updated_at = Set(Some(Local::now()));
-        model.update(&transaction).await?;
-    } else {
-        setting::ActiveModel {
-            key: Set(key.to_string()),
-            value: Set(Some(serialized)),
-            updated_at: Set(Some(Local::now())),
-        }
-        .insert(&transaction)
-        .await?;
-    }
-    transaction.commit().await?;
-    Ok(())
 }
 
 #[cfg(test)]

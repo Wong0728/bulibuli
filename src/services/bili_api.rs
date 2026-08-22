@@ -19,6 +19,7 @@ mod user_space;
 mod video_stream;
 
 pub(crate) use video_stream::choose_video_stream;
+pub use video_stream::StreamUnavailableError;
 
 use crate::config::AppConfig;
 use crate::services::cdn_registry::BadCdnRegistry;
@@ -72,6 +73,9 @@ pub struct BiliApi {
     cookie_manager: Arc<CookieManager>,
     wbi_keys: WbiKeysCache,
     rate_limiter: Arc<governor::DefaultDirectRateLimiter>,
+    /// 后台扫描专用限流器（录制/直播状态轮询等），与交互路径分离，
+    /// 避免后台轮询挤占手动操作的请求配额。
+    background_rate_limiter: Arc<governor::DefaultDirectRateLimiter>,
     ws: Arc<WebSocketManager>,
     bad_cdns: Arc<BadCdnRegistry>,
     /// 视频列表内存缓存：key = (UID, page, page_size)，value = (响应, 写入时刻)。
@@ -122,6 +126,12 @@ impl BiliApi {
                 .allow_burst(
                     NonZeroU32::new(10).expect("SAFETY: B站 API 突发限额常量固定为非零值"),
                 ),
+            )),
+            background_rate_limiter: Arc::new(governor::RateLimiter::direct(
+                governor::Quota::per_second(
+                    NonZeroU32::new(2).expect("SAFETY: B站后台限速常量固定为非零值"),
+                )
+                .allow_burst(NonZeroU32::new(4).expect("SAFETY: B站后台突发限额常量固定为非零值")),
             )),
             video_list_cache: Arc::new(RwLock::new(HashMap::new())),
             video_info_cache: Arc::new(RwLock::new(HashMap::new())),

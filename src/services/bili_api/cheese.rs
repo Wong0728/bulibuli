@@ -152,9 +152,12 @@ impl BiliApi {
         }
 
         if data.durl.is_some() {
-            return Err(anyhow!(
-                "该课程分集仅提供 FLV 分段流（durl），暂不支持下载。请等待 DASH 流恢复或联系开发者"
-            ));
+            // 类型化错误让真实文案直达前端，不再被归为 500 内部错误（与普通视频一致）
+            return Err(
+                anyhow!(super::video_stream::StreamUnavailableError::unsupported(
+                "该课程分集仅提供 FLV 分段流（durl），暂不支持下载。请等待 DASH 流恢复或联系开发者",
+            )),
+            );
         }
 
         Ok(VideoStreams {

@@ -3,7 +3,7 @@
  *
  * 注：博主搜索/手动查询的中间结果放在各自 Tab 的本地状态，跨 Tab 才用 store。
  *
- * 对齐老框架（static/js/blogger.js）：
+ * 对齐迁移前博主列表行为：
  * - 写操作（删除/更新/启停）一律不传 expected_version（老框架 apiPost 只传业务字段）。
  * - 状态轮询走 GET /api/task/next-check 的 bloggers map
  *   （monitor_enabled / runtime_state / pause_reason / next_action_at，含四态）。
@@ -210,11 +210,24 @@ export const useBloggerStore = defineStore('blogger', () => {
     return `${total} 位博主 · ${running} 个监控运行中`;
   });
 
+  /** 设备会话 401 失效时清空本会话的博主数据（app store 调用）。 */
+  function reset() {
+    bloggers.value = [];
+    savedBloggers.value = [];
+    selectedBloggerId.value = null;
+    taskStatuses.value = {};
+    listError.value = null;
+    savedError.value = null;
+    seriesError.value = null;
+    serverUtcOffset.value = '';
+  }
+
   return {
     bloggers, selectedBloggerId, savedBloggers, taskStatuses, boardSummary, serverUtcOffset,
     listError, savedError, seriesError,
     selected,
     refreshList, refreshSaved, search, validateUid, addBlogger, updateBlogger, deleteBlogger,
     cleanupNow, fetchSeries, startTask, stopTask, refreshStatus, refreshAllStatus, selectBlogger, saveKnownBlogger,
+    reset,
   };
 });

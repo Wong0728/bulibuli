@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, computed, watch, onActivated, onDeactivated, onUnmounted, nextTick } from 'vue';
 import { useSettingsStore } from '@/stores/settings';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/stores/toast';
@@ -50,23 +50,42 @@ function startGlobalLogsPolling() {
   }, 15000);
 }
 
-onMounted(async () => {
-  // 老框架 loadSettingsFragment → startGlobalLogsPolling：日志轮询不依赖 owner。
-  startGlobalLogsPolling();
-  // 老框架 bootstrap.js：仅 owner 才 loadSettingsFromServer（含 ffmpeg 检测、
-  // foundation 摘要、update 状态）；/api/settings 是 owner-only，非 owner 不调。
-  if (!isOwner.value) return;
-  await settings.load();
-  if (!settings.loadError) applyTheme(settings.settings.theme || 'system');
-  updateStatusLoaded.value = await settings.loadUpdateStatus();
-  await loadFoundationSummary();
-  void settings.refreshFfmpegPath();
-  void download.refreshHealth();
+// aria2 健康四态点：页面停留期间每 10s 跟随共享 health 缓存刷新，避免陈旧状态。
+let healthTimer: number | null = null;
+function startHealthPolling() {
+  if (healthTimer) return;
+  healthTimer = window.setInterval(() => {
+    if (document.hidden) return;
+    if (app.currentTab !== 'settings') return;
+    void download.refreshHealth();
+  }, 10000);
+}
+
+// 本页挂在 App.vue 的 KeepAlive 下：onUnmounted 在切 Tab 时不会触发，
+// 必须用 onActivated/onDeactivated 管轮询启停（onActivated 首次挂载时同样会触发）。
+onActivated(() => {
+  void (async () => {
+    // 老框架 loadSettingsFragment → startGlobalLogsPolling：日志轮询不依赖 owner。
+    startGlobalLogsPolling();
+    // 老框架 bootstrap.js：仅 owner 才 loadSettingsFromServer（含 ffmpeg 检测、
+    // foundation 摘要、update 状态）；/api/settings 是 owner-only，非 owner 不调。
+    if (!isOwner.value) return;
+    await settings.load();
+    if (!settings.loadError) applyTheme(settings.settings.theme || 'system');
+    updateStatusLoaded.value = await settings.loadUpdateStatus();
+    await loadFoundationSummary();
+    void settings.refreshFfmpegPath();
+    void download.refreshHealth();
+    startHealthPolling();
+  })();
 });
 
-onUnmounted(() => {
+function stopPolling() {
   if (logsTimer) { clearInterval(logsTimer); logsTimer = null; }
-});
+  if (healthTimer) { clearInterval(healthTimer); healthTimer = null; }
+}
+onDeactivated(stopPolling);
+onUnmounted(stopPolling);
 
 // 老框架 loadSettingsFromServer 的 catch：加载失败只 toast，表单保留当前内容。
 watch(() => settings.loadError, (err) => {
@@ -761,7 +780,7 @@ const downloadModeNote = computed(() => '自动启动内置 aria2c 并通过 RPC
               </div>
               <div class="form-group form-full">
                 <div class="aria2-settings-status">
-                  <span><span class="aria2-dot" :class="download.health.aria2_connected ? 'connected' : 'disconnected'" data-aria2-status :title="download.health.aria2_connected ? 'aria2 已连接' : 'aria2 未连接'"></span> 保存连接设置后会立即应用，无需重启应用。</span>
+                  <span><span class="aria2-dot" :class="download.aria2DotClass" data-aria2-status :title="download.aria2Title"></span> 保存连接设置后会立即应用，无需重启应用。</span>
                   <button type="button" class="btn btn-sm" data-action="restart-aria2" :disabled="restartingAria2" @click="restartAria2">
                     <i class="fa-solid fa-rotate"></i> {{ restartingAria2 ? '正在重连' : '重新连接 Aria2' }}
                   </button>
@@ -1378,6 +1397,10 @@ const downloadModeNote = computed(() => '自动启动内置 aria2c 并通过 RPC
           <button class="btn btn-danger" data-action="reset-settings" :disabled="!isOwner" @click="resetSettings"><i class="fa-solid fa-undo"></i> 恢复默认</button>
           <button class="btn" data-action="load-settings" :disabled="!isOwner" @click="settings.load"><i class="fa-solid fa-redo"></i> 刷新</button>
         </div>
+        <!-- DB-IP GeoIP 数据归因（CC BY 4.0 许可要求）。 -->
+        <p class="form-note settings-attribution">
+          GeoIP data by <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">DB-IP.com</a> (CC BY 4.0)
+        </p>
       </div>
     </div>
   </section>

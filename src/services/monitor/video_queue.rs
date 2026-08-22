@@ -102,11 +102,41 @@ impl MonitorService {
         }
 
         let settings = self.settings_cached().await?;
-        let video_quality = settings
+        let mut video_quality = settings
             .get("query")
             .and_then(|q| q.get("video_quality"))
             .and_then(|v| v.as_i64())
             .unwrap_or(80) as i32;
+        // 与手动路径（/api/download/start）同一 qn 白名单：只接受 B 站真实存在的
+        // 画质 code，126/127（杜比/8K）下载暂不支持；非法配置回退默认 80，
+        // 不透传给 playurl。
+        if !matches!(
+            video_quality,
+            16 | 32 | 64 | 74 | 80 | 112 | 116 | 120 | 125
+        ) {
+            warn!("自动下载配置 video_quality={video_quality} 不在支持的白名单内（126/127 暂不支持），回退 80");
+            video_quality = 80;
+        }
+        let min_video_quality = settings
+            .get("query")
+            .and_then(|q| q.get("min_video_quality"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(64) as i32;
+        let allow_quality_fallback = settings
+            .get("query")
+            .and_then(|q| q.get("allow_quality_fallback"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let prefer_codecs: Vec<String> = settings
+            .get("query")
+            .and_then(|q| q.get("prefer_codecs"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_else(|| vec!["av1".to_string(), "hevc".to_string(), "avc".to_string()]);
         let skip_charge = settings
             .get("query")
             .and_then(|q| q.get("skip_charge_videos"))
@@ -131,8 +161,23 @@ impl MonitorService {
         .await;
         let gate = self.gate_download(bvid, title, cookies, skip_charge).await;
         if let Err(reason) = gate {
+            let Some((state, pay_note)) = pay_reason_to_state(&reason) else {
+                // 瞬时错误（网络失败/风控/获取视频信息失败）：不落库、不改写状态，
+                // 下个监控周期会重新视为新视频自然重试；落库成 removed 会被
+                // 前端展示成"已下架"，造成视频仍在却标记下架的误判。
+                self.add_log(
+                    Some(uid),
+                    Some(bvid),
+                    &format!(
+                        "视频 {} 权限校验暂时失败，将在下个周期重试: {}",
+                        title, reason
+                    ),
+                    "warning",
+                )
+                .await;
+                return Ok(());
+            };
             // 命中拦截：落 history 记录，不入队
-            let (state, pay_note) = pay_reason_to_state(&reason);
             self.upsert_pay_blocked_history(
                 bvid,
                 title,
@@ -251,12 +296,16 @@ impl MonitorService {
                 }
             };
 
-            let selected = urls
-                .qualities
-                .iter()
-                .find(|q| q.quality <= video_quality)
-                .or_else(|| urls.qualities.first())
-                .cloned();
+            // 与手动下载路径走同一 qn 白名单校验（choose_video_stream）：
+            // 只允许向下回退（<= 目标画质）且不低于最低画质、遵循编码偏好，
+            // 不再用 or_else 兜底取最高画质绕过用户配置的上限。
+            let selected = crate::services::bili_api::choose_video_stream(
+                &urls.qualities,
+                video_quality,
+                min_video_quality,
+                &prefer_codecs,
+                allow_quality_fallback,
+            );
 
             if let Some(sel) = selected {
                 let url = sel.url.as_str();

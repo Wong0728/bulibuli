@@ -17,16 +17,25 @@ pub async fn init_database(paths: &AppPaths, config: &AppConfig) -> Result<Datab
     let database_existed = database_path.exists();
     let url = paths.database_url();
     let mut opt = ConnectOptions::new(url);
-    opt.max_connections(5)
+    opt.max_connections(10)
         .min_connections(1)
         .connect_timeout(Duration::from_secs(30))
         .idle_timeout(Duration::from_secs(300))
         .max_lifetime(Duration::from_secs(1800))
-        .sqlx_logging(config.debug);
+        .sqlx_logging(config.debug)
+        // PRAGMA 必须挂到 SqliteConnectOptions 上：sqlx 对每个新建立的池化连接
+        // 都会执行这些配置。若只在建池后对单个连接执行 PRAGMA，其余连接的
+        // foreign_keys / busy_timeout / synchronous 均不生效（外键约束形同虚设）。
+        .map_sqlx_sqlite_opts(|opts| {
+            opts.journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+                .busy_timeout(Duration::from_millis(5000))
+                .foreign_keys(true)
+                .pragma("cache_size", "-64000")
+        });
 
     let db = Database::connect(opt).await.context("连接数据库失败")?;
 
-    enable_wal(&db).await?;
     let backup = if database_existed && migrations_pending(&db).await? {
         db.execute_raw(Statement::from_string(
             db.get_database_backend(),
@@ -40,7 +49,10 @@ pub async fn init_database(paths: &AppPaths, config: &AppConfig) -> Result<Datab
     };
     if let Err(error) = run_migrations(&db).await {
         db.close().await.context("关闭迁移失败后的数据库连接")?;
-        restore_database_files(&database_path, backup.as_deref())?;
+        if let Err(restore_error) = restore_database_files(&database_path, backup.as_deref()) {
+            // 恢复失败详情仅记录日志，主错误仍以原始迁移错误为准。
+            tracing::error!(%restore_error, %error, "迁移失败后的数据库备份恢复失败");
+        }
         return Err(error);
     }
     if backup.is_some() {
@@ -62,34 +74,21 @@ async fn migrations_pending(db: &DatabaseConnection) -> Result<bool> {
     if !table_exists {
         return Ok(true);
     }
-    let row = db
-        .query_one_raw(Statement::from_string(
+    let rows = db
+        .query_all_raw(Statement::from_string(
             db.get_database_backend(),
-            "SELECT COUNT(*) AS count FROM seaql_migrations".to_string(),
+            "SELECT name FROM seaql_migrations".to_string(),
         ))
         .await?;
-    let applied = row
-        .and_then(|row| row.try_get::<i64>("", "count").ok())
-        .unwrap_or(0);
-    Ok(applied < crate::migration::Migrator::migrations().len() as i64)
-}
-
-async fn enable_wal(db: &DatabaseConnection) -> Result<()> {
-    for pragma in [
-        "PRAGMA journal_mode=WAL;",
-        "PRAGMA synchronous=NORMAL;",
-        "PRAGMA cache_size=-64000;",
-        "PRAGMA busy_timeout=5000;",
-        "PRAGMA foreign_keys=ON;",
-    ] {
-        db.execute_raw(Statement::from_string(
-            db.get_database_backend(),
-            pragma.to_string(),
-        ))
-        .await
-        .with_context(|| format!("应用 SQLite 配置失败: {pragma}"))?;
-    }
-    Ok(())
+    let applied: std::collections::HashSet<String> = rows
+        .iter()
+        .filter_map(|row| row.try_get::<String>("", "name").ok())
+        .collect();
+    // 按迁移名比对而非 COUNT(*)：未来迁移列表被 squash 后行数恰好相等时，
+    // 计数比较会误判“无待执行迁移”而跳过备份。
+    Ok(crate::migration::Migrator::migrations()
+        .iter()
+        .any(|migration| !applied.contains(migration.name())))
 }
 
 fn backup_database_files(database_path: &Path) -> Result<Option<PathBuf>> {
@@ -115,6 +114,18 @@ fn restore_database_files(database_path: &Path, backup_dir: Option<&Path>) -> Re
     let Some(backup_dir) = backup_dir else {
         return Ok(());
     };
+    // 先删除目标侧的 -wal/-shm：旧 WAL/SHM 与恢复出的主库不匹配会导致数据损坏。
+    for suffix in ["-wal", "-shm"] {
+        let stale = PathBuf::from(format!("{}{}", database_path.display(), suffix));
+        match std::fs::remove_file(&stale) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("删除过期数据库文件失败: {}", stale.display()));
+            }
+        }
+    }
     for suffix in ["", "-wal", "-shm"] {
         let target = PathBuf::from(format!("{}{}", database_path.display(), suffix));
         let Some(name) = target.file_name() else {

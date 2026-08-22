@@ -2,7 +2,7 @@
 /**
  * 视频详情侧拉抽屉（单列布局，对齐老框架 renderDrawerContent / renderDrawerContentForManualQuery）。
  *
- * 数据与交互严格对齐老框架（static/js/drawer*.js + media-actions.js + media-links.js）：
+ * 数据与交互遵循迁移前已验证的抽屉行为：
  * - 已下载抽屉打开只调 GET /api/history/list?bvid=（纯本地库）+ 日志，从不取流；
  *   /api/video/info 仅在"实时数据 → 刷新"时按需加载，/api/video/get-video-urls 仅手动抽屉打开时拉取
  *   （对齐老框架：已下载抽屉无清晰度 pills / 分P区，重试只传 {bvid, qn}）。
@@ -63,6 +63,10 @@ const liveStatsLoaded = ref(false);
 const urls = ref<VideoUrlsResult | null>(null);
 const selectedQn = ref(80);
 const selectedPages = ref<Set<number>>(new Set());
+// 取流被充电/付费权限拦截（HTTP 402）时的抽屉内提示：
+// 打开抽屉不弹 toast，点“开始下载”时 gate 预检会给一次明确的提示，
+// 避免“开抽屉一个报错、点下载又一个报错”的双重打扰。
+const streamBlockedMessage = ref('');
 // 日志（打开抽屉自动拉一次，可手动刷新）
 type LogLine = { time: string; level: string; msg: string; cls: 'log-error' | 'log-info' };
 const logLines = ref<LogLine[]>([]);
@@ -211,6 +215,7 @@ watch(() => drawerState.video, async (v) => {
   detail.value = null;
   videoInfo.value = null; liveStatsLoaded.value = false;
   urls.value = null; selectedPages.value = new Set();
+  streamBlockedMessage.value = '';
   logLines.value = []; sidecarViewer.value = null; sidecarError.value = '';
   selectMode.value = false; selectedFilePaths.value = new Set();
   burningTask.value = null;
@@ -267,6 +272,13 @@ async function loadUrls(silent = false) {
     // 分P列表：对齐老框架 loadManualPages，手动抽屉打开时异步拉取 info 填充分P多选列表。
     if (pages.value.length === 0) void loadVideoInfo(silent);
   } catch (e: any) {
+    if (generation !== drawerGeneration || drawerState.video?.bvid !== target.bvid) return;
+    // 充电专属/付费无权限（后端 402）：抽屉内静默提示，不弹 toast——
+    // 用户点“开始下载”时 gate 预检会给一次明确的提示，避免双重报错。
+    if (e?.status === 402) {
+      streamBlockedMessage.value = e?.message || '该视频需要充电或付费权限';
+      return;
+    }
     if (!silent) toast.error(e?.message || '加载视频链接失败');
   }
 }
@@ -405,7 +417,8 @@ async function downloadCoverNow() {
 }
 function openBilibili() {
   if (!drawerState.video) return;
-  window.open(`https://www.bilibili.com/video/${drawerState.video.bvid}`, '_blank');
+  // noopener/noreferrer：切断新页面对本页的 window.opener 引用，防反向钓鱼篡改。
+  window.open(`https://www.bilibili.com/video/${drawerState.video.bvid}`, '_blank', 'noopener,noreferrer');
 }
 
 /* ---------------- 手动抽屉：保存到本机（对齐老框架 saveManualToLocal） ---------------- */
@@ -794,6 +807,10 @@ onUnmounted(stopBurnPolling);
               {{ q.label }}
               <span v-if="q.tag" class="quality-pill-tag">{{ q.tag }}</span>
             </button>
+          </div>
+          <div v-if="streamBlockedMessage" class="drawer-pay-note">
+            <i class="fa-solid fa-coins"></i>
+            {{ streamBlockedMessage }}
           </div>
           <div v-if="pages.length > 1" class="drawer-pages" id="drawer-pages-section">
             <div class="drawer-pages-header">

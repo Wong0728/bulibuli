@@ -51,6 +51,15 @@ impl VideoProcessor {
             tokio::fs::create_dir_all(parent).await.ok();
         }
 
+        // 合并并发闸门：等待槽位期间任务尚未登记，调用方只会感知为启动变慢。
+        let permit = tokio::time::timeout(
+            Duration::from_secs(5 * 60),
+            Arc::clone(&self.merge_gate).acquire_owned(),
+        )
+        .await
+        .map_err(|_| anyhow!("等待合并槽位超时（已有多个合并任务在执行）"))?
+        .map_err(|_| anyhow!("合并服务已关闭"))?;
+
         let task_id = format!(
             "merge_{}",
             uuid::Uuid::new_v4()
@@ -127,6 +136,8 @@ impl VideoProcessor {
         let tid = task_id.clone();
 
         tokio::spawn(async move {
+            // 持有合并闸门许可直至 ffmpeg 进程结束（含 panic 路径，随任务 drop 释放）
+            let _merge_gate_permit = permit;
             // 包裹 monitor_merge_task：若子任务 panic，确保释放 tasks 映射并记录 error
             use futures::FutureExt;
             use std::panic::AssertUnwindSafe;
@@ -165,7 +176,50 @@ impl VideoProcessor {
         })
     }
 
+    /// 时长探测：优先使用 ffmpeg 同目录的 ffprobe（Windows portable 已捆绑，
+    /// stdout 输出精度更高）；缺失或失败时回退解析 `ffmpeg -i` 的 stderr。
     async fn probe_duration(ffmpeg: &Path, video_path: &Path) -> Option<f64> {
+        let ffprobe = ffmpeg.with_file_name(if cfg!(windows) {
+            "ffprobe.exe"
+        } else {
+            "ffprobe"
+        });
+        if ffprobe.is_file() {
+            if let Some(duration) = Self::probe_duration_ffprobe(&ffprobe, video_path).await {
+                return Some(duration);
+            }
+        }
+        Self::probe_duration_ffmpeg(ffmpeg, video_path).await
+    }
+
+    async fn probe_duration_ffprobe(ffprobe: &Path, video_path: &Path) -> Option<f64> {
+        let mut command = Command::new(ffprobe);
+        command
+            .arg("-v")
+            .arg("error")
+            .arg("-show_entries")
+            .arg("format=duration")
+            .arg("-of")
+            .arg("default=noprint_wrappers=1:nokey=1")
+            .arg(video_path)
+            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .kill_on_drop(true);
+        let child = command.spawn().ok()?;
+        let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+            .await
+            .ok()?
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<f64>()
+            .ok()
+    }
+
+    async fn probe_duration_ffmpeg(ffmpeg: &Path, video_path: &Path) -> Option<f64> {
         let mut command = Command::new(ffmpeg);
         command
             .arg("-i")

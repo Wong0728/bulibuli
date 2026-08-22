@@ -1,4 +1,5 @@
 pub(crate) mod auth;
+mod backup;
 mod bili_resource;
 mod blogger;
 mod cookies;
@@ -41,6 +42,7 @@ pub(crate) fn validate_fnval(value: i32) -> Result<(), AppError> {
 pub fn router() -> Router<SharedState> {
     Router::new()
         .merge(auth::router())
+        .merge(backup::router())
         .merge(health::router())
         .merge(video::router())
         .merge(blogger::router())
@@ -64,15 +66,4 @@ pub fn router() -> Router<SharedState> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validates_positive_ids_and_fnval() {
-        assert!(validate_bili_id("UID", 1).is_ok());
-        assert!(validate_bili_id("UID", 0).is_err());
-        assert!(validate_bili_id("UID", MAX_BILI_ID + 1).is_err());
-        assert!(validate_fnval(4048).is_ok());
-        assert!(validate_fnval(-1).is_err());
-    }
-}
+mod tests;

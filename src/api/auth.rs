@@ -16,6 +16,8 @@ use serde_json::json;
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/api/auth/state", get(auth_state))
+        // csrf token 不经公开的 /api/auth/state 暴露；持有效会话 Cookie 时经此认证端点获取。
+        .route("/api/auth/csrf", get(auth_csrf))
         .route("/api/auth/pair", post(pair))
         .route("/api/auth/logout", post(logout))
         .route(
@@ -38,11 +40,16 @@ async fn auth_state(
     let pairing = state.bili.auth.pairing_state().await;
     let token = session_cookie(&headers).unwrap_or_default();
     let session = state.bili.auth.authenticate(&token, client.ip).await?;
+    if session.is_none() {
+        // 未认证访问：限流探测，抑制远程枚举配对窗口（已配对设备不受影响）。
+        state.bili.auth.check_state_probe_allowed(client.ip).await?;
+    }
     let mut response = Json(ApiResponse::success(json!({
         "authenticated": session.is_some(),
         "pairing_open": pairing.open,
         "pairing_expires_at": pairing.expires_at,
-        "csrf_token": session.as_ref().map(|value| value.csrf_token.as_str()),
+        // 服务器时间（Unix 秒）：前端据此校准倒计时，消除客户端时钟偏差。
+        "server_time": chrono::Utc::now().timestamp(),
         "role": session.as_ref().map(|value| value.role),
     })))
     .into_response();
@@ -50,6 +57,18 @@ async fn auth_state(
         set_session_cookie(&state.bili, &mut response, &token)?;
     }
     Ok(response)
+}
+
+/// 认证端点（不在 is_public_path 中，中间件强制有效会话）：
+/// 返回当前会话的 CSRF token，供前端发起写请求时携带。
+async fn auth_csrf(
+    Extension(session): Extension<Option<SessionAuth>>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let session = session
+        .ok_or_else(|| AppError::Unauthorized("需要有效会话才能获取 CSRF Token".to_string()))?;
+    Ok(Json(ApiResponse::success(json!({
+        "csrf_token": session.csrf_token,
+    }))))
 }
 
 async fn create_operator_invitation(

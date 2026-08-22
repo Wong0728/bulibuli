@@ -265,8 +265,15 @@ pub(super) async fn get_video_urls(
     crate::api::validate_fnval(fnval)?;
     let cookies = state.infra.settings_service.cookie_header().await?;
     let preferred_quality = req.qn.unwrap_or(settings.query.video_quality);
-    if !(16..=127).contains(&preferred_quality) {
-        return Err(AppError::BadRequest("视频画质代码无效".to_string()));
+    // 与 /api/download/start（queue_ops.rs）保持同一画质白名单口径：
+    // 拒绝任意值直进 playurl 参数（126/127 暂不支持）。
+    if !matches!(
+        preferred_quality,
+        16 | 32 | 64 | 74 | 80 | 112 | 116 | 120 | 125
+    ) {
+        return Err(AppError::BadRequest(format!(
+            "不支持的视频画质代码: {preferred_quality}"
+        )));
     }
     let minimum_quality = settings.query.min_video_quality;
     let codecs = settings.query.prefer_codecs.clone();
@@ -425,7 +432,9 @@ pub(super) async fn gate_download(
             "message": "可以下载",
         })))),
         Err(reason) => {
-            let (pay_state, pay_note) = crate::services::monitor::pay_reason_to_state(&reason);
+            // 未知原因视为瞬时错误：不能用 removed 兜底（前端会显示"已下架"）
+            let (pay_state, pay_note) = crate::services::monitor::pay_reason_to_state(&reason)
+                .unwrap_or(("error", "gate_failed"));
             let allow = matches!(pay_note, "ugc_pay_paid" | "pay_paid" | "upower_paid");
             info!(
                 "[API] /api/video/gate-download 拦截: bvid={}, reason={}",

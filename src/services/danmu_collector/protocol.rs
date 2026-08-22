@@ -160,6 +160,17 @@ pub fn parse_frames(raw: &[u8]) -> Result<Vec<ParsedFrame>> {
     Ok(frames)
 }
 
+/// 认证被服务器拒绝（`code != 0`）。
+///
+/// 结构化错误：携带 B 站业务错误码，供重连策略优先按错误码精确分类，
+/// 中文错误文案匹配仅作兜底（文案变更不应影响分类行为）。
+#[derive(Debug, thiserror::Error)]
+#[error("弹幕认证失败: code={code}")]
+pub struct AuthRejected {
+    /// B 站业务错误码（-101 登录失效 / -352 风控 / -412 请求被拒 等）。
+    pub code: i64,
+}
+
 /// 严格验证认证首包，只有 `op=8` 和 `code=0` 才可视为连接成功。
 pub fn validate_auth_reply(raw: &[u8]) -> Result<()> {
     let frames = parse_frames(raw)?;
@@ -177,7 +188,7 @@ pub fn validate_auth_reply(raw: &[u8]) -> Result<()> {
     };
     match value.get("code").and_then(Value::as_i64) {
         Some(0) => Ok(()),
-        Some(code) => Err(anyhow!("弹幕认证失败: code={code}")),
+        Some(code) => Err(anyhow::Error::new(AuthRejected { code })),
         None => Err(anyhow!("认证回复缺少 code")),
     }
 }

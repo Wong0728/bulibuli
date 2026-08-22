@@ -1,5 +1,5 @@
-use serde::Serialize;
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// 终态烧录任务在内存表中的保留时长（秒）。

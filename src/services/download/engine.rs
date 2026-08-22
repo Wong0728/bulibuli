@@ -190,7 +190,7 @@ impl DownloadManager {
         );
         let manager = self.clone();
         let uid = uid.map(str::to_string);
-        tokio::spawn(async move {
+        crate::services::spawn_util::spawn_logged("native_transfer", async move {
             manager
                 .run_native_transfer(task, request, cancel, uid, permit)
                 .await;

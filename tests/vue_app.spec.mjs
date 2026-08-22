@@ -1,4 +1,4 @@
-import { test, expect } from '../static/js/node_modules/@playwright/test/index.mjs';
+import { test, expect } from '../web/node_modules/@playwright/test/index.mjs';
 
 function envelope(data = {}, message = 'ok') {
   return { code: 0, message, data };
@@ -17,8 +17,10 @@ async function mockVueApi(page) {
     if (path === '/api/ready') data = { ok: true };
     else if (path === '/api/auth/state') {
       data = state.paired
-        ? { authenticated: true, csrf_token: 'vue-test-csrf', role: 'owner' }
+        ? { authenticated: true, role: 'owner' }
         : { authenticated: false, pairing_open: true, pairing_expires_at: Math.floor(Date.now() / 1000) + 300 };
+    } else if (path === '/api/auth/csrf') {
+      data = { csrf_token: 'vue-test-csrf' };
     } else if (path === '/api/auth/pair') {
       state.paired = true;
       data = { paired: true };

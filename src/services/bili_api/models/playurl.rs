@@ -9,6 +9,8 @@ pub struct PlayurlData {
     pub dash: Option<Dash>,
     pub durl: Option<Vec<DurlItem>>,
     pub accept_quality: Vec<i64>,
+    /// 实际返回的清晰度（durl 分支没有逐流的 id 字段，清晰度只在 data 顶层）。
+    pub quality: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

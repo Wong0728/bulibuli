@@ -161,119 +161,140 @@ async fn spawn_burn(
     let task_id_for_spawn = task_id.clone();
     let download_dir = infra.paths.download_dir.clone();
     let db = infra.db.clone();
-    tokio::spawn(async move {
-        let Ok(_permit) = burn_semaphore.acquire_owned().await else {
-            let mut tasks = burn_tasks.lock().await;
-            if let Some(task) = tasks.get_mut(&task_id_for_spawn) {
-                task.status = "failed".to_string();
-                task.message = "烧录队列已关闭".to_string();
-                task.updated_at = chrono::Utc::now().timestamp();
+    // panic 兜底：烧录任务 panic 时把状态置为 failed，避免永久停留在 processing。
+    let panic_db = db.clone();
+    let panic_tasks = burn_tasks.clone();
+    let panic_task_id = task_id_for_spawn.clone();
+    crate::services::spawn_util::spawn_logged_with_panic(
+        "burn_task",
+        async move {
+            let Ok(_permit) = burn_semaphore.acquire_owned().await else {
+                let mut tasks = burn_tasks.lock().await;
+                if let Some(task) = tasks.get_mut(&task_id_for_spawn) {
+                    task.status = "failed".to_string();
+                    task.message = "烧录队列已关闭".to_string();
+                    task.updated_at = chrono::Utc::now().timestamp();
+                }
+                drop(tasks);
+                persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
+                return;
+            };
+            {
+                let mut tasks = burn_tasks.lock().await;
+                if let Some(t) = tasks.get_mut(&task_id_for_spawn) {
+                    t.status = "processing".to_string();
+                    t.message = "正在烧录，请稍候...".to_string();
+                    t.updated_at = chrono::Utc::now().timestamp();
+                }
             }
-            drop(tasks);
             persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
-            return;
-        };
-        {
-            let mut tasks = burn_tasks.lock().await;
-            if let Some(t) = tasks.get_mut(&task_id_for_spawn) {
-                t.status = "processing".to_string();
-                t.message = "正在烧录，请稍候...".to_string();
+            monitor_service
+                .add_log(
+                    None,
+                    Some(&bvid_string),
+                    &format!("开始烧录（{}）", burn_source_label(&source_for_spawn)),
+                    "info",
+                )
+                .await;
+
+            let result = match source_for_spawn.as_str() {
+                "danmaku" => burner.burn_danmaku(&video_path).await,
+                "subtitle" => burner.burn_subtitle(&video_path).await,
+                _ => burner.burn_mixed(&video_path).await,
+            };
+
+            match result {
+                Ok((success, output_path, message)) => {
+                    let mut tasks = burn_tasks.lock().await;
+                    if let Some(t) = tasks.get_mut(&task_id_for_spawn) {
+                        t.status = if success {
+                            "completed".to_string()
+                        } else {
+                            "failed".to_string()
+                        };
+                        t.message = redact_burn_message(&message);
+                        t.output_path = output_path
+                            .as_ref()
+                            .and_then(|p| safe_relative_path(&download_dir, p));
+                        t.updated_at = chrono::Utc::now().timestamp();
+                    }
+                    drop(tasks);
+                    persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
+
+                    if success {
+                        let result = match history_id_for_spawn {
+                            Some(id) => {
+                                history_service
+                                    .mark_burned_by_id(
+                                        id,
+                                        &source_for_spawn,
+                                        output_path.as_deref(),
+                                    )
+                                    .await
+                            }
+                            None => {
+                                history_service
+                                    .mark_burned(
+                                        &bvid_string,
+                                        &source_for_spawn,
+                                        output_path.as_deref(),
+                                    )
+                                    .await
+                            }
+                        };
+                        if let Err(e) = result {
+                            error!("更新历史记录烧录状态失败 {bvid_string}: {e}");
+                        }
+                        monitor_service
+                            .add_log(
+                                None,
+                                Some(&bvid_string),
+                                &format!("烧录完成（{}）", burn_source_label(&source_for_spawn)),
+                                "success",
+                            )
+                            .await;
+                    } else {
+                        monitor_service
+                            .add_log(
+                                None,
+                                Some(&bvid_string),
+                                &format!("烧录未完成（{}）", burn_source_label(&source_for_spawn)),
+                                "warning",
+                            )
+                            .await;
+                    }
+                }
+                Err(e) => {
+                    let mut tasks = burn_tasks.lock().await;
+                    if let Some(t) = tasks.get_mut(&task_id_for_spawn) {
+                        t.status = "failed".to_string();
+                        t.message = redact_burn_message(&format!("烧录出错: {e}"));
+                        t.updated_at = chrono::Utc::now().timestamp();
+                    }
+                    drop(tasks);
+                    persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
+                    monitor_service
+                        .add_log(
+                            None,
+                            Some(&bvid_string),
+                            &format!("烧录出错（{}）：{e}", burn_source_label(&source_for_spawn)),
+                            "error",
+                        )
+                        .await;
+                }
+            }
+        },
+        move || async move {
+            let mut tasks = panic_tasks.lock().await;
+            if let Some(t) = tasks.get_mut(&panic_task_id) {
+                t.status = "failed".to_string();
+                t.message = "烧录任务异常终止".to_string();
                 t.updated_at = chrono::Utc::now().timestamp();
             }
-        }
-        persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
-        monitor_service
-            .add_log(
-                None,
-                Some(&bvid_string),
-                &format!("开始烧录（{}）", burn_source_label(&source_for_spawn)),
-                "info",
-            )
-            .await;
-
-        let result = match source_for_spawn.as_str() {
-            "danmaku" => burner.burn_danmaku(&video_path).await,
-            "subtitle" => burner.burn_subtitle(&video_path).await,
-            _ => burner.burn_mixed(&video_path).await,
-        };
-
-        match result {
-            Ok((success, output_path, message)) => {
-                let mut tasks = burn_tasks.lock().await;
-                if let Some(t) = tasks.get_mut(&task_id_for_spawn) {
-                    t.status = if success {
-                        "completed".to_string()
-                    } else {
-                        "failed".to_string()
-                    };
-                    t.message = redact_burn_message(&message);
-                    t.output_path = output_path
-                        .as_ref()
-                        .and_then(|p| safe_relative_path(&download_dir, p));
-                    t.updated_at = chrono::Utc::now().timestamp();
-                }
-                drop(tasks);
-                persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
-
-                if success {
-                    let result = match history_id_for_spawn {
-                        Some(id) => {
-                            history_service
-                                .mark_burned_by_id(id, &source_for_spawn, output_path.as_deref())
-                                .await
-                        }
-                        None => {
-                            history_service
-                                .mark_burned(
-                                    &bvid_string,
-                                    &source_for_spawn,
-                                    output_path.as_deref(),
-                                )
-                                .await
-                        }
-                    };
-                    if let Err(e) = result {
-                        error!("更新历史记录烧录状态失败 {bvid_string}: {e}");
-                    }
-                    monitor_service
-                        .add_log(
-                            None,
-                            Some(&bvid_string),
-                            &format!("烧录完成（{}）", burn_source_label(&source_for_spawn)),
-                            "success",
-                        )
-                        .await;
-                } else {
-                    monitor_service
-                        .add_log(
-                            None,
-                            Some(&bvid_string),
-                            &format!("烧录未完成（{}）", burn_source_label(&source_for_spawn)),
-                            "warning",
-                        )
-                        .await;
-                }
-            }
-            Err(e) => {
-                let mut tasks = burn_tasks.lock().await;
-                if let Some(t) = tasks.get_mut(&task_id_for_spawn) {
-                    t.status = "failed".to_string();
-                    t.message = redact_burn_message(&format!("烧录出错: {e}"));
-                    t.updated_at = chrono::Utc::now().timestamp();
-                }
-                drop(tasks);
-                persist_burn_snapshot(&db, &burn_tasks, &task_id_for_spawn).await;
-                monitor_service
-                    .add_log(
-                        None,
-                        Some(&bvid_string),
-                        &format!("烧录出错（{}）：{e}", burn_source_label(&source_for_spawn)),
-                        "error",
-                    )
-                    .await;
-            }
-        }
-    });
+            drop(tasks);
+            persist_burn_snapshot(&panic_db, &panic_tasks, &panic_task_id).await;
+        },
+    );
 
     Ok(Json(ApiResponse::with_message(
         json!({ "task_id": task_id }),
@@ -314,10 +335,20 @@ async fn resolve_burn_video_path(
     }
     if let Some(h) = history {
         if let Some(fp) = h.file_path.as_deref() {
-            if let Ok(canonical) = std::fs::canonicalize(fp) {
-                let root = std::fs::canonicalize(&infra.paths.download_dir)
-                    .unwrap_or_else(|_| infra.paths.download_dir.clone());
-                if canonical.starts_with(root) {
+            // canonicalize 是可能阻塞的 syscall（网络盘/慢速盘），与其他分支一致用 spawn_blocking
+            let fp = fp.to_owned();
+            let dir = infra.paths.download_dir.clone();
+            let probe = tokio::task::spawn_blocking(move || {
+                std::fs::canonicalize(&fp).ok().map(|canonical| {
+                    let root = std::fs::canonicalize(&dir).unwrap_or(dir);
+                    (canonical, root)
+                })
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some((canonical, root)) = probe {
+                if canonical.starts_with(&root) {
                     return Ok(strip_verbatim_prefix(&canonical));
                 }
             }

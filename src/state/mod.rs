@@ -73,7 +73,14 @@ impl AppState {
         let (infra, secret_store) = InfraState::build(config, paths, db, ai_skill_enabled).await?;
 
         // 2. B 站 API
-        let bili = BiliState::build(&infra, secret_store).await?;
+        let (bili, initial_pair_code) = BiliState::build(&infra, secret_store).await?;
+        if let Some(code) = &initial_pair_code {
+            crate::app::tui::console_line(format!(
+                "首次设备配对码：{}-{}（10 分钟内有效，仅可使用一次）",
+                &code[..4],
+                &code[4..]
+            ));
+        }
 
         // 3. 媒体处理
         let media = MediaState::build(&infra, &bili).await?;

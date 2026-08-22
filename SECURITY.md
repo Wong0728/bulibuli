@@ -1,7 +1,33 @@
-# Security policy
+# 安全策略（Security Policy）
 
-Please do not report security vulnerabilities in a public issue. Send a minimal reproduction and affected version privately to the repository maintainer, or use GitHub's private vulnerability reporting when enabled.
+## 受支持版本
 
-When reporting normal bugs, remove cookies, tokens, pairing codes, database files, download metadata and absolute local paths. The service defaults to loopback, uses local-only IPC for `ctl`, and expects TLS verification to remain enabled.
+| 版本 | 是否支持 |
+| --- | --- |
+| v2.0.0-alpha.x（当前主线） | ✅ 支持 |
+| 更早版本 / v1 及以下 | ❌ 不支持 |
 
-Deployment hardening, LAN/proxy warnings and systemd guidance are documented in [`deploy/SECURITY.md`](deploy/SECURITY.md).
+预发布阶段接口与数据结构仍可能变化，请在报告前先升级到最新 alpha 版本确认问题仍然存在。
+
+## 如何报告漏洞
+
+**请不要在公开 issue 中报告安全漏洞。** 请通过以下任一渠道私下联系：
+
+- GitHub 私密漏洞报告（Security → Report a vulnerability，若仓库已启用）；
+- 或向仓库维护者私下发送包含最小复现步骤与受影响版本的说明。
+
+报告时请移除 Cookie、token、配对码、数据库文件、下载元数据和本地绝对路径。服务默认仅监听回环地址，`ctl` 使用本机 IPC，请保持 TLS 校验开启。
+
+## 响应时限承诺
+
+- **72 小时内**：确认收到报告并给出初步回复；
+- **7 天内**：完成影响评估，并告知修复计划或临时缓解措施。
+
+修复发布后会在 CHANGELOG 中致谢报告者（除非要求匿名）。
+
+## 范围说明
+
+- **在范围内**：本仓库代码，以及通过官方 GitHub Releases 发布的安装包与便携归档。
+- **不在范围内**：非官方镜像分发的二进制、用户自行修改的构建、以及依赖已弃用不受支持版本产生的问题。部署配置不当（如公网明文暴露 `lan` 模式）请先参考 [`deploy/SECURITY.md`](deploy/SECURITY.md) 的加固指引。
+
+部署加固、LAN/proxy 风险提示与 systemd 指南见 [`deploy/SECURITY.md`](deploy/SECURITY.md)；数据处理方式见 [`PRIVACY.md`](PRIVACY.md)。

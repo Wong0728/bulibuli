@@ -73,7 +73,8 @@ resolve_latest_version() {
     local tag
     tag="$(download_text "https://github.com/${REPO}/releases/latest/download/latest.json" 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
     if ! [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-        tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+        # 回退只选正式版（ vX.Y.Z，无预发布后缀），避免装到 alpha。
+        tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
     fi
     [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || \
         die "无法读取 Release 发布清单；请用 BULIBULI_VERSION=vX.Y.Z 固定版本重试"
@@ -96,7 +97,7 @@ manifest_path = root / sys.argv[2]
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 if manifest.get("schema_version") != 1 or manifest.get("platform") != "linux":
     raise SystemExit(1)
-if not (root / "bulibuli").is_file() or not (root / "static" / "index.html").is_file():
+if not (root / "bulibuli").is_file() or not (root / "static" / "app" / "index.html").is_file():
     raise SystemExit(1)
 arch = "x86_64" if pathlib.Path("/bin/sh").exists() and __import__("platform").machine().lower() in {"x86_64", "amd64"} else None
 if arch and manifest.get("architecture") != arch:
@@ -327,7 +328,7 @@ verify_runtime_checksums() {
 }
 
 detect_layout() {
-    if [ -x "${SCRIPT_DIR}/${BIN_NAME}" ] && [ -f "${SCRIPT_DIR}/static/index.html" ] && \
+    if [ -x "${SCRIPT_DIR}/${BIN_NAME}" ] && [ -f "${SCRIPT_DIR}/static/app/index.html" ] && \
         [ -f "${SCRIPT_DIR}/${PACKAGE_MANIFEST_NAME}" ]; then
         local package_version=""
         package_version="$(verify_package_manifest "${SCRIPT_DIR}" 2>/dev/null || true)"
@@ -352,7 +353,7 @@ detect_layout() {
 
     local repo_root
     repo_root="$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || true)"
-    if [ -f "${repo_root}/Cargo.toml" ] && [ -f "${repo_root}/static/index.html" ]; then
+    if [ -f "${repo_root}/Cargo.toml" ] && [ -f "${repo_root}/static/app/index.html" ]; then
         APP_DIR="${repo_root}"
         BIN_PATH="${repo_root}/target/release/${BIN_NAME}"
         MODE="source"

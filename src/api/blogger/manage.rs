@@ -1,6 +1,6 @@
 use crate::error::{ApiResponse, AppError};
-use crate::services::blogger::{BloggerUpdate, NewBlogger};
 use crate::models::operation_log::OperationTarget;
+use crate::services::blogger::{BloggerUpdate, NewBlogger};
 use crate::state::SharedState;
 use axum::extract::State;
 use axum::Json;
@@ -169,35 +169,39 @@ pub(super) async fn add_blogger(
     }
 
     // 创建记录前获取当前资料，避免首屏展示空字段。
-    // `get_user_info` 成功即表示资料可用；不存在、风控或网络错误时回退到用户传入信息。
+    // UID 由所选博主决定：拉取不到资料（不存在、风控或网络错误）直接拒绝创建，
+    // 防止乱填 UID 也能添加成功。
     let cookies = state.infra.settings_service.cookie_header().await?;
     let fallback_name = if name.is_empty() {
         None
     } else {
         Some(name.clone())
     };
-    let (final_name, face, sign, level, fans) = match uid.parse::<i64>() {
-        Ok(uid_i64) => match state.bili.bili_api.get_user_info(uid_i64, &cookies).await {
-            Ok(profile) => {
-                // 用户填写的是监控备注名，应优先保留；未填写时使用 API 昵称。
-                let api_name = Some(profile.name).filter(|s| !s.is_empty());
-                let api_face = Some(profile.face).filter(|s| !s.is_empty());
-                let api_sign = Some(profile.sign).filter(|s| !s.is_empty());
-                (
-                    fallback_name.or(api_name),
-                    api_face,
-                    api_sign,
-                    Some(profile.level as i32),
-                    Some(profile.fans),
-                )
-            }
-            Err(error) => {
-                warn!(uid, %error, "添加博主时拉取资料失败，使用兜底信息");
-                (fallback_name, None, None, None, None)
-            }
-        },
-        Err(_) => (fallback_name, None, None, None, None),
-    };
+    let uid_i64 = uid
+        .parse::<i64>()
+        .map_err(|_| AppError::BadRequest("UID 格式无效".to_string()))?;
+    let profile = state
+        .bili
+        .bili_api
+        .get_user_info(uid_i64, &cookies)
+        .await
+        .map_err(|error| {
+            warn!(uid, %error, "添加博主时拉取资料失败，拒绝创建");
+            AppError::BadRequest(format!(
+                "无法获取 UID {uid} 的用户资料（可能不存在或网络失败），请确认后重试"
+            ))
+        })?;
+    let api_name = Some(profile.name).filter(|s| !s.is_empty());
+    let api_face = Some(profile.face).filter(|s| !s.is_empty());
+    let api_sign = Some(profile.sign).filter(|s| !s.is_empty());
+    // 用户填写的是监控备注名，应优先保留；未填写时使用 API 昵称。
+    let (final_name, face, sign, level, fans) = (
+        fallback_name.or(api_name),
+        api_face,
+        api_sign,
+        Some(profile.level as i32),
+        Some(profile.fans),
+    );
 
     let monitor_enabled = req.start_monitoring.unwrap_or(false);
     let blogger = if let Some(existing) = existing {
@@ -205,7 +209,11 @@ pub(super) async fn add_blogger(
         let guard = state
             .infra
             .conflict_guard
-            .check_and_bump(OperationTarget::Blogger, &id.to_string(), req.expected_version)
+            .check_and_bump(
+                OperationTarget::Blogger,
+                &id.to_string(),
+                req.expected_version,
+            )
             .await?;
         if let Err(error) = state
             .business
@@ -377,7 +385,11 @@ pub(super) async fn update_blogger(
     let guard = state
         .infra
         .conflict_guard
-        .check_and_bump(OperationTarget::Blogger, &req.id.to_string(), req.expected_version)
+        .check_and_bump(
+            OperationTarget::Blogger,
+            &req.id.to_string(),
+            req.expected_version,
+        )
         .await?;
     if let Err(error) = state.business.blogger_service.apply_update(b, update).await {
         let _ = guard.rollback().await;
@@ -415,7 +427,11 @@ pub(super) async fn delete_blogger(
     let guard = state
         .infra
         .conflict_guard
-        .check_and_bump(OperationTarget::Blogger, &req.id.to_string(), req.expected_version)
+        .check_and_bump(
+            OperationTarget::Blogger,
+            &req.id.to_string(),
+            req.expected_version,
+        )
         .await?;
     let deleted = match state
         .business
@@ -478,7 +494,11 @@ pub(super) async fn add_saved_blogger(
         let guard = state
             .infra
             .conflict_guard
-            .check_and_bump(OperationTarget::Blogger, &id.to_string(), req.expected_version)
+            .check_and_bump(
+                OperationTarget::Blogger,
+                &id.to_string(),
+                req.expected_version,
+            )
             .await?;
         if let Err(error) = state
             .business
@@ -551,7 +571,11 @@ pub(super) async fn delete_saved_blogger(
     let guard = state
         .infra
         .conflict_guard
-        .check_and_bump(OperationTarget::Blogger, &req.id.to_string(), req.expected_version)
+        .check_and_bump(
+            OperationTarget::Blogger,
+            &req.id.to_string(),
+            req.expected_version,
+        )
         .await?;
     if state
         .business

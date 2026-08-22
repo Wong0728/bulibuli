@@ -2,35 +2,38 @@
  * 认证 + Cookie 状态：
  * - 设备配对状态
  * - B 站登录状态（cookie 是否有效）
- * - 博主监控日志（来自 WS 推送）
+ * - 博主改名/换头像通知
  *
  * 所有 action 内部自带 try/catch，**不向调用者抛 promise reject**。
  */
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { auth as authApi, cookies as cookiesApi } from '@/api';
-import { setCsrfToken, postFull, NETWORK_ERR_MSG } from '../api/client';
+import { setCsrfToken, postFull, get, NETWORK_ERR_MSG } from '../api/client';
 import { useToastStore } from './toast';
 import type { AuthState, CookieStatus } from '@/api/types';
-
-export interface BloggerLogEntry {
-  ts: number;
-  level: string;
-  message: string;
-}
 
 export const useAuthStore = defineStore('auth', () => {
   const toast = useToastStore();
   const state = ref<AuthState>({ authenticated: false });
   const cookieStatus = ref<CookieStatus>({ configured: false, has_cookies: false, valid: false });
   const cookieStatusLoaded = ref(false);
-  const subscribedBloggerUid = ref<number | null>(null);
-  const bloggerLogs = ref<BloggerLogEntry[]>([]);
   const knownBloggerChange = ref<Map<number, { name?: string; face?: string; ts: number }>>(new Map());
 
   function setAuthState(s: AuthState) {
     state.value = s;
-    setCsrfToken(s.authenticated ? s.csrf_token : null);
+    // csrf token 不再经公开的 /api/auth/state 下发；认证后由 refreshCsrfToken 获取。
+    setCsrfToken(null);
+  }
+
+  /** 从认证端点 /api/auth/csrf 获取当前会话的 CSRF token（写请求共用）。 */
+  async function refreshCsrfToken() {
+    try {
+      const r = await get<{ csrf_token?: string }>('/api/auth/csrf');
+      setCsrfToken(r?.csrf_token ?? null);
+    } catch {
+      setCsrfToken(null);
+    }
   }
   function normalizeCookieStatus(raw?: Partial<CookieStatus> | null): CookieStatus {
     const hasCookies = raw?.has_cookies ?? raw?.configured ?? false;
@@ -63,6 +66,7 @@ export const useAuthStore = defineStore('auth', () => {
       const r = await authApi.state();
       if (r) setAuthState(r as AuthState);
       else setAuthState({ authenticated: false });
+      if ((r as AuthState | null)?.authenticated) await refreshCsrfToken();
     } catch {
       setAuthState({ authenticated: false });
     }
@@ -120,13 +124,6 @@ export const useAuthStore = defineStore('auth', () => {
     await refreshCookieStatus();
   }
 
-  function appendBloggerLog(entry: BloggerLogEntry) {
-    bloggerLogs.value.push(entry);
-    if (bloggerLogs.value.length > 1000) bloggerLogs.value.splice(0, bloggerLogs.value.length - 1000);
-  }
-
-  function clearBloggerLogs() { bloggerLogs.value = []; }
-
   function setKnownBloggerChange(uid: number, payload: { name?: string; face?: string }) {
     knownBloggerChange.value.set(uid, { ...payload, ts: Date.now() });
     knownBloggerChange.value = new Map(knownBloggerChange.value);
@@ -152,9 +149,9 @@ export const useAuthStore = defineStore('auth', () => {
   } : null);
 
   return {
-    state, cookieStatus, cookieStatusLoaded, biliUser, subscribedBloggerUid, bloggerLogs, knownBloggerChange,
+    state, cookieStatus, cookieStatusLoaded, biliUser, knownBloggerChange,
     noticeCount, isAuthenticated, isCookieValid,
-    setAuthState, setCookieStatus, refreshAuth, pair, refreshCookieStatus, logoutAccount, logoutDevice, logoutBiliAccount, saveCookies,
-    appendBloggerLog, clearBloggerLogs, setKnownBloggerChange, acknowledgeBloggerChange, acknowledgeAllBloggerChanges,
+    setAuthState, setCookieStatus, refreshAuth, refreshCsrfToken, pair, refreshCookieStatus, logoutAccount, logoutDevice, logoutBiliAccount, saveCookies,
+    setKnownBloggerChange, acknowledgeBloggerChange, acknowledgeAllBloggerChanges,
   };
 });

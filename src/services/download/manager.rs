@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use super::queue::page_info_from_task;
-use super::{DownloadManager, DownloadManagerDependencies};
+use super::{file_stem_for, DownloadManager, DownloadManagerDependencies};
 
 impl DownloadManager {
     pub async fn new(dependencies: DownloadManagerDependencies) -> Result<Self> {
@@ -59,6 +59,8 @@ impl DownloadManager {
             native_tasks: Arc::new(Mutex::new(HashMap::new())),
             aria2_recover_failed_at: Arc::new(Mutex::new(None)),
             queue_notify: Arc::new(tokio::sync::Notify::new()),
+            add_task_locks: Arc::new(Mutex::new(HashMap::new())),
+            recent_completions: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -152,7 +154,9 @@ impl DownloadManager {
     /// 断点续传：程序重启后恢复未完成的下载任务
     async fn resume_pending_tasks(&self) {
         let tasks = match download_task::Entity::find()
-            .filter(download_task::Column::Status.is_in(vec!["pending", "downloading"]))
+            .filter(
+                download_task::Column::Status.is_in(crate::domain::DownloadStatus::RESUME_STATUSES),
+            )
             .all(&self.db)
             .await
         {
@@ -176,6 +180,26 @@ impl DownloadManager {
                         task.bvid, gid
                     );
                     continue;
+                }
+            }
+            // 崩溃窗口收窄：aria2 可能已完成下载但 DB 未及同步（重启后 GID 已失效）。
+            // 成品仍在磁盘上时直接补写完成态并跳过重建，避免整段重下并以
+            // --allow-overwrite 覆盖成品（纯浪费带宽且存在覆盖风险）。
+            let dir = self.task_download_dir(&task).await;
+            let stem = file_stem_for(&task.bvid, task.page);
+            if Self::completed_product_exists(&dir, &stem, &task.task_type).await {
+                match self
+                    .state_service
+                    .complete_once(task.id, task.generation)
+                    .await
+                {
+                    Ok(true) => {
+                        info!("断点续传：{} 成品已存在，跳过重下直接标记完成", task.bvid);
+                        continue;
+                    }
+                    // 闸门未通过（已完成/generation 变化）：按原流程继续重建收敛
+                    Ok(false) => {}
+                    Err(e) => warn!("断点续传：{} 补写完成状态失败: {e}", task.bvid),
                 }
             }
             // GID 不存在，需重建任务。B 站 m4s/m4a 的 CDN URL 带 deadline 签名（约 2h），

@@ -15,7 +15,9 @@ pub(super) async fn cleanup_now(
     State(state): State<SharedState>,
     Json(req): Json<CleanupNowRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = crate::services::file_safety::validate_uid(&req.uid)?.as_str().to_owned();
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?
+        .as_str()
+        .to_owned();
     info!("[API] /api/blogger/cleanup-now 触发博主 {uid} 保留数清理");
     state
         .business
@@ -38,7 +40,9 @@ pub(super) async fn acknowledge_profile_change(
     State(state): State<SharedState>,
     Json(req): Json<AcknowledgeRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = crate::services::file_safety::validate_uid(&req.uid)?.as_str().to_owned();
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?
+        .as_str()
+        .to_owned();
     state
         .business
         .blogger_service

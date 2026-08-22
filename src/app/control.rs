@@ -10,7 +10,7 @@
 //! - `status` / `pair` / `sessions` / `revoke` / `access` / `mode` / `geo` / `trust` / `config` / `quit` / `help`
 //!   —— 旧名 alias 保留，避免破坏存量脚本
 //!
-//! AI 模式门控（P3）：未启用时仅放行 `status` / `help` / `quit` / `ai on`。
+//! AI 模式门控（P3）：未启用时仅放行 `status` / `help` / `quit` / `ai on` / `pair`。
 //! 门控在 `execute()` 入口检查 `ai_skill_enabled` 标志，拒绝时返回 `AI_SKILL_DISABLED`。
 
 #[path = "control_origin.rs"]
@@ -344,6 +344,8 @@ pub async fn run_client(data_dir: &Path, args: &[String]) -> AppResult<String> {
     #[cfg(windows)]
     {
         let mut stream = tokio::net::windows::named_pipe::ClientOptions::new().open(PIPE_NAME)?;
+        // 连接后先校验服务端身份（S2）：任何本机进程都能创建同名管道冒充服务端。
+        verify_pipe_server_identity(&stream)?;
         stream.write_all(&request).await?;
         stream.shutdown().await?;
         let mut response = Vec::new();
@@ -361,6 +363,68 @@ pub async fn run_client(data_dir: &Path, args: &[String]) -> AppResult<String> {
 #[cfg(unix)]
 // 采用 macOS 更严格的 104 字节上限（含结尾 NUL），Linux 也可安全使用。
 const UNIX_SOCKET_MAX_PATH_BYTES: usize = 103;
+
+/// 校验命名管道服务端身份（S2）。
+///
+/// 威胁模型：管道名 `\\.\pipe\bulibuli` 是本机固定名字，任何本机进程都可以
+/// 先创建同名管道冒充服务端，骗取 ctl 客户端发来的命令（配对码、扫码落盘
+/// Cookie 等敏感操作）。管道的 SACL 只约束"谁能连"，不约束"谁在监听"。
+///
+/// 校验方式：连接成功后通过 GetNamedPipeServerProcessId 取服务端 PID，
+/// 再以 PROCESS_QUERY_LIMITED_INFORMATION（同用户进程即可查询，无需高权限）
+/// 打开并 QueryFullProcessImageNameW 取服务端进程的完整镜像路径，要求与
+/// 客户端自身镜像路径一致（大小写不敏感，Windows 路径不区分大小写）——
+/// 即服务端必须是同一份 bulibuli 可执行文件。PID 复用竞态由镜像路径比对
+/// 兜底：复用 PID 指向的其他进程路径必然不同。
+///
+/// 局限（有意接受）：不校验服务端是否被注入/调试——攻击者若能让同一镜像
+/// 路径的进程执行任意代码，等于可执行文件本身已被攻破，超出本机信任边界。
+/// 校验失败时立即断开（drop 连接）并返回错误，不发送任何命令。
+#[cfg(windows)]
+fn verify_pipe_server_identity<Client: std::os::windows::io::AsRawHandle>(
+    client: &Client,
+) -> AppResult<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let fail =
+        |message: String| AppError::Internal(format!("控制通道服务端身份校验失败：{message}"));
+
+    unsafe {
+        let mut server_pid: u32 = 0;
+        if GetNamedPipeServerProcessId(client.as_raw_handle(), &mut server_pid) == 0 {
+            return Err(fail("无法获取服务端进程 ID".to_string()));
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, server_pid);
+        if process.is_null() {
+            return Err(fail(format!(
+                "无法打开服务端进程（PID {server_pid}，可能已在退出中）"
+            )));
+        }
+        let mut buffer = [0u16; 1024];
+        let mut length = buffer.len() as u32;
+        let queried = QueryFullProcessImageNameW(process, 0, buffer.as_mut_ptr(), &mut length);
+        CloseHandle(process);
+        if queried == 0 {
+            return Err(fail("无法查询服务端进程镜像路径".to_string()));
+        }
+        let server_image = String::from_utf16_lossy(&buffer[..length as usize]);
+        let own_image = std::env::current_exe()
+            .map_err(|error| fail(format!("无法获取本进程路径: {error}")))?;
+        if !server_image.eq_ignore_ascii_case(&own_image.to_string_lossy()) {
+            // 拒绝并断开：连接随 client 被 drop 关闭，不发送命令。
+            return Err(fail(format!(
+                "服务端镜像 {} 与本进程 {} 不一致，疑似同名管道冒充，已断开",
+                server_image,
+                own_image.display()
+            )));
+        }
+    }
+    Ok(())
+}
 
 #[cfg(unix)]
 fn unix_control_socket_candidates(data_dir: &Path) -> Vec<PathBuf> {
@@ -437,10 +501,10 @@ pub(crate) async fn execute_from(
     // 未启用时仅放行 status / help / quit / ai（用于重新启用）。
     if matches!(origin, CommandOrigin::AiCtl)
         && !state.infra.ai_skill_enabled.load(Ordering::Relaxed)
-        && !matches!(command, "status" | "help" | "quit" | "ai")
+        && !matches!(command, "status" | "help" | "quit" | "ai" | "pair")
     {
         return Err(AppError::AiSkillDisabled(format!(
-            "AI Skill 模式未启用，ctl 仅放行 status/help/quit/ai；当前命令 `{command}` 被拒绝。使用 `ai on` 启用"
+            "AI Skill 模式未启用，ctl 仅放行 status/help/quit/ai/pair；当前命令 `{command}` 被拒绝。使用 `ai on` 启用"
         )));
     }
     match command {
@@ -477,6 +541,12 @@ pub(crate) async fn execute_from(
 /// 开启配对会生成配对码，这是敏感操作（一次性访问凭证）；审计走 record_silent，不广播事件。
 /// AI 模式开启后 AI 与人工拥有相同权限，配对始终允许（不再需要短时授权层）。
 async fn pair_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
+    // 只接受缺省（开启）或 close：未知参数报错，避免 `pair xxx` 被静默当作开配对。
+    if let Some(unknown) = args.get(1).filter(|value| value.as_str() != "close") {
+        return Err(AppError::BadRequest(format!(
+            "pair 不支持参数 `{unknown}`；用法：pair [close]"
+        )));
+    }
     let is_close = args.get(1).is_some_and(|value| value == "close");
     let ctx = ctl_audit_ctx(
         &args.join(" "),
@@ -565,7 +635,7 @@ async fn ai_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
                 "note": if enabled {
                     "AI Skill 模式已启用，AI 助手可执行与人工相同的全部 ctl 命令（含 mode/access/geo/trust/pair）"
                 } else {
-                    "AI Skill 模式已关闭，ctl 仅放行 status/help/quit/ai"
+                    "AI Skill 模式已关闭，ctl 仅放行 status/help/quit/ai/pair"
                 },
             }))
         },
@@ -700,7 +770,7 @@ async fn dl_add(state: &SharedState, args: &[String]) -> AppResult<Value> {
 ///
 /// 乐观锁：`task_id` 为具体数字且传 `--expected-version` 时启用；`all` 跳过乐观锁（审计 only）。
 async fn dl_pause_resume(state: &SharedState, args: &[String], action: &str) -> AppResult<Value> {
-    let (args, expected_version) = extract_expected_version(args);
+    let (args, expected_version) = extract_expected_version(args)?;
     let target = required(&args, 2, &format!("dl {action} 需要 task_id 或 all"))?;
     let task_id = parse_task_id_or_all(target)?;
     // all 模式为批量操作，不使用乐观锁（影响多行，version 无意义）
@@ -1030,7 +1100,7 @@ async fn blg_list(state: &SharedState, args: &[String]) -> AppResult<Value> {
 ///
 /// 乐观锁：传 `--expected-version` 时校验 blogger.version；不匹配返回 CONFLICT。
 async fn blg_del(state: &SharedState, args: &[String]) -> AppResult<Value> {
-    let (args, expected_version) = extract_expected_version(args);
+    let (args, expected_version) = extract_expected_version(args)?;
     let uid = required(&args, 2, "blg del 需要 uid")?;
     // find_by_uid 拿 id（监控和收藏共用同一张表，uid 唯一）
     let blogger = state
@@ -1083,7 +1153,7 @@ async fn blg_del(state: &SharedState, args: &[String]) -> AppResult<Value> {
 
 /// `blg monitor on|off <uid> [--expected-version N]`
 async fn blg_monitor(state: &SharedState, args: &[String]) -> AppResult<Value> {
-    let (args, expected_version) = extract_expected_version(args);
+    let (args, expected_version) = extract_expected_version(args)?;
     let action = required(&args, 2, "blg monitor 需要 on|off")?;
     let uid = required(&args, 3, "blg monitor 需要 uid")?;
     let running = match action {
@@ -1271,7 +1341,9 @@ async fn sys_ffmpeg_test(state: &SharedState) -> AppResult<Value> {
 fn sys_logs_value(state: &SharedState) -> Value {
     json!({
         "logs_dir": state.infra.paths.data_dir.join("logs"),
-        "hint": "日志按天滚动，文件名形如 app.log.YYYY-MM-DD",
+        // 与 tracing_appender 实际产物一致：filename_prefix("app") + 日期 + suffix("log")
+        // 生成 app.YYYY-MM-DD.log（不是 app.log.YYYY-MM-DD）。
+        "hint": "日志按天滚动，文件名形如 app.YYYY-MM-DD.log",
     })
 }
 
@@ -1840,7 +1912,7 @@ async fn audit_command(state: &SharedState, args: &[String]) -> AppResult<Value>
         "list" => {
             let source = parse_source_flag(args)?;
             let since = parse_since_flag(args)?;
-            let limit = parse_limit_flag(args, 100);
+            let limit = parse_limit_flag(args, 100)?;
             let rows = state
                 .infra
                 .audit_log
@@ -1855,7 +1927,7 @@ async fn audit_command(state: &SharedState, args: &[String]) -> AppResult<Value>
             let target_str = required(args, 2, "audit by-target 需要 target_type")?;
             let target_id = required(args, 3, "audit by-target 需要 target_id")?;
             let target = parse_target_type(target_str)?;
-            let limit = parse_limit_flag(args, 100);
+            let limit = parse_limit_flag(args, 100)?;
             let rows = state
                 .infra
                 .audit_log
@@ -1876,8 +1948,19 @@ async fn audit_command(state: &SharedState, args: &[String]) -> AppResult<Value>
 /// - 无 `--watch`：返回最近 N 条审计事件（非流式，IPC 友好）
 /// - `--watch`：流式订阅（仅 IPC 连接支持，stdin loop 走 println）
 async fn events_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
+    // 只接受 --watch/--limit：未知 flag 报错而非静默忽略，避免拼错参数后
+    // 拿到看似成功的结果。
+    if let Some(unknown) = args
+        .iter()
+        .skip(1)
+        .find(|arg| arg.starts_with("--") && !matches!(arg.as_str(), "--watch" | "--limit"))
+    {
+        return Err(AppError::BadRequest(format!(
+            "events 不支持参数 `{unknown}`；用法：events [--watch] [--limit N]"
+        )));
+    }
     let watch = args.iter().any(|a| a == "--watch");
-    let limit = parse_limit_flag(args, 50);
+    let limit = parse_limit_flag(args, 50)?;
     if watch {
         // 流式模式由 handle_streaming 拦截，execute 不应被调到这里
         return Err(AppError::BadRequest(
@@ -1946,19 +2029,22 @@ where
 
 /// 从参数中提取 `--expected-version N`，返回 (剩余参数, expected_version)。
 /// 调用方据此决定是否启用乐观锁。
-fn extract_expected_version(args: &[String]) -> (Vec<String>, Option<i32>) {
-    if let Some(pos) = args.iter().position(|a| a == "--expected-version") {
-        let mut remaining: Vec<String> = Vec::with_capacity(args.len().saturating_sub(2));
-        remaining.extend_from_slice(&args[..pos]);
-        if let Some(val) = args.get(pos + 1) {
-            if let Ok(v) = val.parse::<i32>() {
-                remaining.extend_from_slice(&args[pos + 2..]);
-                return (remaining, Some(v));
-            }
-        }
-        // --expected-version 没跟值或解析失败：保留原样（后续命令会因参数不足报错）
-    }
-    (args.to_vec(), None)
+/// flag 存在但值缺失/非法时报 BAD_REQUEST 而非静默忽略——否则拼错的乐观锁
+/// 参数会让写操作悄悄退化成"最后写入胜出"，破坏调用方的并发假设。
+fn extract_expected_version(args: &[String]) -> AppResult<(Vec<String>, Option<i32>)> {
+    let Some(pos) = args.iter().position(|a| a == "--expected-version") else {
+        return Ok((args.to_vec(), None));
+    };
+    let mut remaining: Vec<String> = Vec::with_capacity(args.len().saturating_sub(2));
+    remaining.extend_from_slice(&args[..pos]);
+    let value = args.get(pos + 1).ok_or_else(|| {
+        AppError::BadRequest("--expected-version 缺少数值（如 --expected-version 42）".to_string())
+    })?;
+    let parsed = value.parse::<i32>().map_err(|_| {
+        AppError::BadRequest(format!("--expected-version 非法值 `{value}`，需要整数"))
+    })?;
+    remaining.extend_from_slice(&args[pos + 2..]);
+    Ok((remaining, Some(parsed)))
 }
 
 /// 解析 `--source <src>` flag 为 OperationSource。非法值报 BAD_REQUEST 而非静默忽略，
@@ -1987,8 +2073,13 @@ fn validate_since_duration(value: &str) -> AppResult<()> {
     if trimmed.is_empty() {
         return Ok(());
     }
-    let (num, unit) = trimmed.split_at(trimmed.len() - 1);
-    if num.parse::<i64>().is_ok() && matches!(unit, "h" | "d" | "m") {
+    // strip_suffix 按字符边界切分：多字节输入（如 `1小时`）不会像 split_at 那样 panic。
+    let valid = ["h", "d", "m"].iter().any(|unit| {
+        trimmed
+            .strip_suffix(unit)
+            .is_some_and(|num| num.parse::<i64>().is_ok())
+    });
+    if valid {
         Ok(())
     } else {
         Err(AppError::BadRequest(format!(
@@ -2018,11 +2109,19 @@ fn parse_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.get(pos + 1).map(String::as_str)
 }
 
-/// 取 `--limit N`（默认值由调用方给）。
-fn parse_limit_flag(args: &[String], default: u64) -> u64 {
-    parse_flag_value(args, "--limit")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+/// 取 `--limit N`（默认值由调用方给）。值缺失或非正整数时报 BAD_REQUEST，
+/// 不静默回退默认值——拼错 limit 会悄悄拿到全量/空结果，掩盖调用方错误。
+fn parse_limit_flag(args: &[String], default: u64) -> AppResult<u64> {
+    let Some(value) = parse_flag_value(args, "--limit") else {
+        return Ok(default);
+    };
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| AppError::BadRequest(format!("--limit 非法值 `{value}`，需要正整数")))?;
+    if parsed == 0 {
+        return Err(AppError::BadRequest("--limit 必须大于 0".to_string()));
+    }
+    Ok(parsed)
 }
 
 /// 为本机 ctl 调用构造审计上下文（复用 AuditContext::for_ctl，简化调用）。
@@ -2305,7 +2404,7 @@ fn help() -> Value {
     json!({
         "themes": themes,
         "expert_mode_hint": "TUI 输入 `> <command>` 直接执行扁平命令；IPC 客户端 `ctl <command>` 即扁平命令",
-        "ai_mode_note": "未启用 AI Skill 模式时，ctl 仅放行 status/help/quit/ai",
+        "ai_mode_note": "未启用 AI Skill 模式时，ctl 仅放行 status/help/quit/ai/pair",
     })
 }
 
@@ -2339,9 +2438,9 @@ fn generate_skill_markdown() -> String {
 
     // 前置条件
     out.push_str("## 前置条件\n\n");
-    out.push_str("1. **AI Skill 模式已启用**：启动向导步骤 2 选启用，或运行 `ai on`。");
+    out.push_str("1. **AI Skill 模式已启用**：网页 Setup 向导步骤 3 选启用，或运行 `ai on`。");
     out.push_str(
-        "未启用时仅 `status` / `help` / `quit` / `ai` 可用，其他命令返回 `AI_SKILL_DISABLED`。\n",
+        "未启用时仅 `status` / `help` / `quit` / `ai` / `pair` 可用，其他命令返回 `AI_SKILL_DISABLED`。\n",
     );
     out.push_str(
         "启用后 AI 助手拥有与人工相同的全部操作权限（含 `mode` / `access` / `geo` / `trust` / `pair` 等基础配置命令），无需任何临时授权；所有 ctl 命令都要求服务已在运行。\n",
@@ -2458,22 +2557,53 @@ mod skill_doc_tests {
     }
 }
 
+/// IPC 请求读取的空闲超时：客户端连接后长时间不发送（或不关写端）时
+/// 断开连接，防止单个慢速/挂起客户端长期占用服务端任务。
+const IPC_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 async fn handle_stream<S>(mut stream: S, state: SharedState) -> AppResult<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut buffer = Vec::new();
-    (&mut stream)
-        .take((MAX_COMMAND_BYTES + 1) as u64)
-        .read_to_end(&mut buffer)
-        .await?;
+    // 读满上限 +1 字节即可判断超长；整体包在空闲超时里，慢速客户端 30s 后被断开。
+    let mut limited = (&mut stream).take((MAX_COMMAND_BYTES + 1) as u64);
+    let read = limited.read_to_end(&mut buffer);
+    match tokio::time::timeout(IPC_READ_TIMEOUT, read).await {
+        Ok(result) => result?,
+        Err(_) => {
+            // 超时也走统一错误信封，客户端能区分"连上了但被服务端断开"和"连接失败"。
+            let body = json!({
+                "ok": false,
+                "error": format!("控制命令读取超时（{} 秒无完整请求）", IPC_READ_TIMEOUT.as_secs()),
+                "code": "IPC_TIMEOUT",
+            });
+            stream.write_all(format_response(&body).as_bytes()).await?;
+            stream.shutdown().await?;
+            return Ok(());
+        }
+    };
     if buffer.len() > MAX_COMMAND_BYTES {
-        let body = json!({"ok": false, "error": "控制命令过长"});
+        let body = json!({"ok": false, "error": "控制命令过长", "code": "BAD_REQUEST"});
         stream.write_all(format_response(&body).as_bytes()).await?;
         stream.shutdown().await?;
         return Ok(());
     }
-    let args: Vec<String> = serde_json::from_slice(&buffer)?;
+    // 解析失败返回统一错误信封（而非直接断开让客户端看到空响应/UTF-8 错误），
+    // 与 execute 层的错误信封格式保持一致。
+    let args: Vec<String> = match serde_json::from_slice(&buffer) {
+        Ok(args) => args,
+        Err(error) => {
+            let body = json!({
+                "ok": false,
+                "error": format!("控制命令不是合法的 JSON 参数数组: {error}"),
+                "code": "BAD_REQUEST",
+            });
+            stream.write_all(format_response(&body).as_bytes()).await?;
+            stream.shutdown().await?;
+            return Ok(());
+        }
+    };
     // 流式命令（events --watch）：路由到 handle_streaming，保持长连接推 JSON Lines
     // 但先走 AI 模式门控：未启用时拒绝订阅事件流（避免泄露审计信息）
     if is_streaming_command(&args) {
@@ -2500,6 +2630,20 @@ where
     stream.write_all(format_response(&body).as_bytes()).await?;
     stream.shutdown().await?;
     Ok(())
+}
+
+/// 探测 Unix socket 是否有活服务在监听：connect 成功即视为活。
+/// 连接本身不发送任何数据，服务端会因读超时/EOF 自行清理。
+#[cfg(unix)]
+async fn unix_socket_is_alive(path: &Path) -> bool {
+    matches!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::net::UnixStream::connect(path)
+        )
+        .await,
+        Ok(Ok(_))
+    )
 }
 
 #[cfg(unix)]
@@ -2545,6 +2689,17 @@ async fn serve_ipc(state: SharedState) -> AppResult<()> {
         }
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_socket() => {
+                // 已有 socket 文件：先探测是否有活服务在监听（connect 成功即活）。
+                // 活服务在监听时拒绝抢占——remove+bind 会让本实例劫持 ctl 客户端，
+                // 后续 ctl 命令（含 quit/pair 等敏感操作）全部打到错误的服务端。
+                // 只有连接失败（ECONNREFUSED 等，上次异常退出的残留文件）才清理。
+                if unix_socket_is_alive(&path).await {
+                    return Err(AppError::Config(format!(
+                        "本机控制通道 {} 已被另一个运行中的 bulibuli 实例占用（{}），拒绝抢占；如确认无其他实例请手动删除该文件后重启",
+                        label,
+                        path.display()
+                    )));
+                }
                 if let Err(error) = std::fs::remove_file(&path) {
                     bind_errors.push(format!("{label}: {error}"));
                     continue;
@@ -2694,6 +2849,19 @@ mod tests {
         assert_eq!(strip_expert_prefix("  > dl status"), "dl status");
         assert_eq!(strip_expert_prefix("dl status"), "dl status");
         assert_eq!(strip_expert_prefix(""), "");
+    }
+
+    #[test]
+    fn validate_since_duration_multibyte_does_not_panic() {
+        // 尾字符为多字节时 split_at 字节切分会 panic；非法值应返回 BadRequest。
+        assert!(validate_since_duration("1小时").is_err());
+        assert!(validate_since_duration("小时").is_err());
+        assert!(validate_since_duration("24小时").is_err());
+        // 合法值不受影响
+        assert!(validate_since_duration("1h").is_ok());
+        assert!(validate_since_duration("24h").is_ok());
+        assert!(validate_since_duration("7d").is_ok());
+        assert!(validate_since_duration("30m").is_ok());
     }
 
     #[test]

@@ -28,10 +28,9 @@ use crate::config::AppConfig;
 use crate::models::blogger;
 use crate::services::{
     bili_api::BiliApi, blogger::BloggerService, danmaku::DanmakuService, download::DownloadManager,
-    history::HistoryService, settings::SettingsService, subtitle_fetch::SubtitleFetchService,
-    video_processor::VideoProcessor,
+    history::HistoryService, settings::SettingsService, spawn_util::spawn_logged,
+    subtitle_fetch::SubtitleFetchService, video_processor::VideoProcessor,
 };
-use crate::ws::WebSocketManager;
 use anyhow::Result;
 use chrono::Local;
 use futures::{stream, StreamExt};
@@ -61,7 +60,6 @@ pub struct MonitorService {
     danmaku_service: Arc<DanmakuService>,
     subtitle_service: Arc<SubtitleFetchService>,
     blogger_service: Arc<BloggerService>,
-    ws: Arc<WebSocketManager>,
     video_processor: Arc<VideoProcessor>,
     history_service: Arc<HistoryService>,
     settings_service: Arc<SettingsService>,
@@ -84,7 +82,6 @@ pub struct MonitorServiceDependencies {
     pub danmaku_service: Arc<DanmakuService>,
     pub subtitle_service: Arc<SubtitleFetchService>,
     pub blogger_service: Arc<BloggerService>,
-    pub ws: Arc<WebSocketManager>,
     pub video_processor: Arc<VideoProcessor>,
     pub history_service: Arc<HistoryService>,
     pub settings_service: Arc<SettingsService>,
@@ -102,7 +99,6 @@ impl MonitorService {
             danmaku_service: deps.danmaku_service,
             subtitle_service: deps.subtitle_service,
             blogger_service: deps.blogger_service,
-            ws: deps.ws,
             video_processor: deps.video_processor,
             history_service: deps.history_service,
             settings_service: deps.settings_service,
@@ -130,7 +126,7 @@ impl MonitorService {
 
         // 后台补齐 fans 为空的博主资料。
         let s = self.clone();
-        tokio::spawn(async move {
+        spawn_logged("monitor_backfill_fans", async move {
             s.backfill_missing_fans().await;
         });
     }

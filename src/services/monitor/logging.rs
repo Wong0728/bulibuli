@@ -84,9 +84,7 @@ impl MonitorService {
             error!("写入日志重试 3 次仍失败: {e}");
             return;
         }
-        if let Err(error) = self.ws.broadcast_log(uid, message, level).await {
-            warn!("推送监控日志失败: {error}");
-        }
+        // 日志不再经 WS 推送（房间链路已移除）：前端统一走 /api/logs/* HTTP 轮询。
         // 每写入 N 条日志才触发一次清理，避免每条日志都执行 count+delete
         let count = self.log_counter.fetch_add(1, Ordering::SeqCst) + 1;
         if count.is_multiple_of(LOG_CLEANUP_INTERVAL) {

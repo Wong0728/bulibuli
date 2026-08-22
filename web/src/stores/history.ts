@@ -10,7 +10,7 @@
  * - history：已完成/失败/已下载到本地的持久记录（跨进程）
  * 看板"下载中"子 Tab 取 download；"已下载/失败"取 history。
  *
- * 对齐老框架（static/js/history.js）：
+ * 对齐迁移前历史记录行为：
  * - sidecar 四字段（video/danmaku/comments/subtitle）后端是 bool，直接真值判断。
  * - 「上次拉取」时间用后端 server_time（秒），格式 MM-DD HH:MM:SS。
  * - 加载更多的 total 用后端按 tab 的 data.total；徽章计数用全局 counts。
@@ -47,7 +47,6 @@ function flattenVideo(v: any, fallbackUid?: string | number): HistoryEntry {
     has_danmaku: sidecar.danmaku === true || sidecar.has_danmaku === true,
     has_comments: sidecar.comments === true || sidecar.has_comments === true,
     has_video: sidecar.video === true || sidecar.has_video === true,
-    has_audio: sidecar.audio === true || sidecar.has_audio === true,
     has_cover: !!v.cover_local_path || sidecar.cover === true || sidecar.has_cover === true,
     local_path: v.file_path,
     relative_path: v.relative_path,
@@ -117,14 +116,14 @@ export const useHistoryStore = defineStore('history', () => {
   const error = ref<string | null>(null);
   const boardRequestIds: Record<HistoryTab, number> = { downloading: 0, completed: 0, failed: 0 };
 
-  async function loadBoard(tab: HistoryTab, append = false) {
+  async function loadBoard(tab: HistoryTab, append = false, fresh = false) {
     // 老框架 loadHistoryBoard：append 进行中时跳过，避免快速点击「加载更多」并发翻页。
     if (append && loading.value[tab]) return;
     const requestId = ++boardRequestIds[tab];
     if (!append) pages[tab] = 1;
     loading.value[tab] = true;
     try {
-      const data = (await historyApi.list(tab, pages[tab], pageSize.value)) as unknown as HistoryBoardResponse | null;
+      const data = (await historyApi.list(tab, pages[tab], pageSize.value, fresh)) as unknown as HistoryBoardResponse | null;
       const items = Array.isArray(data?.items) ? (data!.items as any[]).map(normalizeGroup) : [];
       const mergedGroups = append ? [...(tab === 'completed' ? completedGroups.value : tab === 'failed' ? failedGroups.value : downloadingGroups.value)] : [];
       for (const group of items) {
@@ -220,11 +219,14 @@ export const useHistoryStore = defineStore('history', () => {
     return downloadingGroups.value;
   });
 
+  /** 终态 WS 事件到达时置位：下次进入历史页强制绕过缓存重拉（app.ts 写，TabHistory 消费）。 */
+  const boardDirty = ref(false);
+
   return {
     activeTab, completed, failed, downloading,
     completedGroups, failedGroups, downloadingGroups, activeGroups,
     completedTotal, failedTotal, downloadingTotal, boardTotals, globalCounts, loading, error, pageSize,
-    lastServerTime,
+    lastServerTime, boardDirty,
     loadBoard, loadMore, selectTab, search, openDirectory, reset,
   };
 });

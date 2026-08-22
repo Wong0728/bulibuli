@@ -229,11 +229,15 @@ async fn merge_segments_to_mp4_inner(
         .map(|metadata| metadata.len())
         .sum();
     if total_segment_bytes > 0 {
+        // spawn_blocking：fs2 是同步系统调用，Windows 网络盘可能阻塞 runtime 线程
         let target_dir = first
             .parent()
             .filter(|dir| dir.is_dir())
-            .unwrap_or_else(|| Path::new("."));
-        if let Ok(available) = fs2::available_space(target_dir) {
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        if let Ok(Ok(available)) =
+            tokio::task::spawn_blocking(move || fs2::available_space(&target_dir)).await
+        {
             let required = total_segment_bytes + MERGE_FREE_SPACE_MARGIN_BYTES;
             if available < required {
                 return Err(anyhow!(
@@ -613,16 +617,28 @@ pub(crate) fn redact_diagnostics(value: &str) -> String {
             cursor = start + "<redacted>".len();
         }
     }
-    if output.split_whitespace().any(|part| {
-        part.starts_with('/')
-            || part.starts_with("\\\\")
-            || (part.len() >= 3
-                && part.as_bytes()[1] == b':'
-                && (part.as_bytes()[2] == b'\\' || part.as_bytes()[2] == b'/'))
-    }) {
-        return "diagnostic redacted".to_owned();
+    // 路径 token 逐个替换而不是整体丢弃：FFmpeg stderr 几乎必然包含输入/输出
+    // 绝对路径，整体替换会让真实错误（如 "Unrecognized option"）完全不可见。
+    let mut rebuilt = String::with_capacity(output.len());
+    for (index, part) in output.split_whitespace().enumerate() {
+        if index > 0 {
+            rebuilt.push(' ');
+        }
+        if looks_like_absolute_path(part) {
+            rebuilt.push_str("<path>");
+        } else {
+            rebuilt.push_str(part);
+        }
     }
-    output.trim().to_owned()
+    rebuilt.trim().to_owned()
+}
+
+fn looks_like_absolute_path(part: &str) -> bool {
+    part.starts_with('/')
+        || part.starts_with("\\\\")
+        || (part.len() >= 3
+            && part.as_bytes()[1] == b':'
+            && (part.as_bytes()[2] == b'\\' || part.as_bytes()[2] == b'/'))
 }
 
 fn escape_concat_path(path: &Path) -> String {
@@ -888,5 +904,21 @@ mod tests {
         assert!(!value.contains("secret"));
         assert!(!value.contains("signature"));
         assert!(!value.contains("=rid"));
+    }
+
+    #[test]
+    fn diagnostics_keep_error_text_when_path_present() {
+        let value = redact_diagnostics(
+            "Unrecognized option 'user_agent'.\nError splitting the argument list: Option not found",
+        );
+        assert!(value.contains("Unrecognized option"));
+        assert!(value.contains("Option not found"));
+
+        let value = redact_diagnostics(
+            r"Failed to open D:\data\live\room_1_segment_0.flv: Connection refused",
+        );
+        assert!(value.contains("Connection refused"));
+        assert!(!value.contains(r"D:\data"));
+        assert!(value.contains("<path>"));
     }
 }

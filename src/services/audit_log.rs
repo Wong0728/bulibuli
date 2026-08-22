@@ -2,7 +2,8 @@
 //!
 //! 设计要点：
 //! - **不抛错**：审计日志写入失败只记 tracing::warn，绝不阻塞业务流程（业务已成功就别因审计失败回滚）
-//! - **同步接口**：`record` 是 async 但内部走 fire-and-forget spawn，避免业务等待审计落盘
+//! - **同步接口**：`record` 是 async 且在调用方上下文内同步落盘（不额外 spawn）；
+//!   写入失败仅记 warn，不会让业务拿到错误（见"不抛错"）
 //! - **查询接口**：`list` / `by_target` 供 `ctl audit` 子命令调用，支持过滤
 //!
 //! 与 `conflict_guard.rs` 配合：ConflictGuard 在校验版本前后调用 `record`，
@@ -281,12 +282,17 @@ fn parse_since_to_iso(since: &str) -> Option<String> {
     if since_trimmed.is_empty() {
         return None;
     }
-    let last = since_trimmed.chars().last()?;
-    let num: i64 = since_trimmed[..since_trimmed.len() - 1].parse().ok()?;
-    let duration = match last {
-        'h' => ChronoDuration::hours(num),
-        'd' => ChronoDuration::days(num),
-        'm' => ChronoDuration::minutes(num),
+    // strip_suffix 按字符边界切分：多字节输入（如 `1小时`）不会像字节切片那样 panic。
+    let (num, unit) = ["h", "d", "m"].iter().find_map(|unit| {
+        since_trimmed
+            .strip_suffix(unit)
+            .and_then(|num| num.parse::<i64>().ok())
+            .map(|num| (num, *unit))
+    })?;
+    let duration = match unit {
+        "h" => ChronoDuration::hours(num),
+        "d" => ChronoDuration::days(num),
+        "m" => ChronoDuration::minutes(num),
         _ => return None,
     };
     let now: DateTime<Utc> = Utc::now();
@@ -416,5 +422,13 @@ mod tests {
         assert!(parse_since_to_iso("").is_none());
         assert!(parse_since_to_iso("abc").is_none());
         assert!(parse_since_to_iso("5x").is_none());
+    }
+
+    #[test]
+    fn parse_since_multibyte_input_does_not_panic() {
+        // 尾字符为多字节时按字节切片会 panic；必须按字符边界解析并返回 None。
+        assert!(parse_since_to_iso("1小时").is_none());
+        assert!(parse_since_to_iso("小时").is_none());
+        assert!(parse_since_to_iso("小时h").is_none());
     }
 }

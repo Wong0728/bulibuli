@@ -16,6 +16,16 @@ struct LogQuery {
     limit: Option<u64>,
 }
 
+/// 三个日志端点统一的排序口径：底层 query_logs 固定 `created_at DESC + limit`
+/// 取"最新 N 条"窗口，再统一 reverse 成时间升序（旧→新，最新在末尾）返回。
+/// 前端（设置页全局日志、博主日志面板）均按"最新在最后 + 滚到底部"渲染；
+/// 抽屉 bvid 日志此前未 reverse（新→旧），口径与其余两个不一致，现统一。
+fn sorted_oldest_first(logs: Vec<crate::models::log::Model>) -> Vec<serde_json::Value> {
+    let mut api_logs: Vec<_> = logs.into_iter().map(|l| l.to_api()).collect();
+    api_logs.reverse();
+    api_logs
+}
+
 async fn get_logs(
     State(state): State<SharedState>,
     Query(q): Query<LogQuery>,
@@ -26,9 +36,9 @@ async fn get_logs(
         .monitor_service
         .query_logs(None, None, limit)
         .await?;
-    let mut logs: Vec<_> = logs.into_iter().map(|l| l.to_api()).collect();
-    logs.reverse();
-    Ok(Json(ApiResponse::success(json!({ "logs": logs }))))
+    Ok(Json(ApiResponse::success(json!({
+        "logs": sorted_oldest_first(logs)
+    }))))
 }
 
 #[derive(Deserialize)]
@@ -51,9 +61,9 @@ async fn get_blogger_logs(
         .monitor_service
         .query_logs(Some(uid), None, limit)
         .await?;
-    let mut logs: Vec<_> = logs.into_iter().map(|l| l.to_api()).collect();
-    logs.reverse();
-    Ok(Json(ApiResponse::success(json!({ "logs": logs }))))
+    Ok(Json(ApiResponse::success(json!({
+        "logs": sorted_oldest_first(logs)
+    }))))
 }
 
 #[derive(Deserialize)]
@@ -62,7 +72,7 @@ struct BvidLogQuery {
     limit: Option<u64>,
 }
 
-/// 按 bvid 查询日志（抽屉"日志"区用）。按时间倒序，只读。
+/// 按 bvid 查询日志（抽屉"日志"区用）。只读。
 async fn get_bvid_logs(
     State(state): State<SharedState>,
     Query(q): Query<BvidLogQuery>,
@@ -77,7 +87,8 @@ async fn get_bvid_logs(
         .monitor_service
         .query_logs(None, Some(bvid), limit)
         .await?;
-    // 保持倒序（最新在最上面），与抽屉"滚动列表，按时间倒序"一致
-    let logs: Vec<_> = logs.into_iter().map(|l| l.to_api()).collect();
-    Ok(Json(ApiResponse::success(json!({ "logs": logs }))))
+    // 与其余两个日志端点统一：时间升序返回（最新在最后）。
+    Ok(Json(ApiResponse::success(json!({
+        "logs": sorted_oldest_first(logs)
+    }))))
 }

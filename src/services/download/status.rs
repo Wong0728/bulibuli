@@ -84,13 +84,7 @@ impl DownloadManager {
         let tasks = query
             .filter(
                 Condition::any()
-                    .add(download_task::Column::Status.is_in([
-                        "pending",
-                        "downloading",
-                        "paused",
-                        "retrying",
-                        "merging",
-                    ]))
+                    .add(download_task::Column::Status.is_in(DownloadStatus::ACTIVE_STATUSES))
                     .add(download_task::Column::UpdatedAt.gte(recent_cutoff)),
             )
             .order_by_desc(download_task::Column::UpdatedAt)
@@ -267,6 +261,11 @@ impl DownloadManager {
         let mut payload = json!({
             "task_id": task.id,
             "bvid": bvid,
+            // 标题/优先级随推送下发：前端收到新任务首条进度时可直接建条目，
+            // 不必等下一次全量快照（此前最长 10 秒的空窗会让小文件
+            // “下载完成都没在队列里出现过”）。
+            "title": task.title.as_deref().unwrap_or(bvid),
+            "priority": task.priority,
             "cid": task.cid,
             "page": task.page,
             "generation": task.generation,

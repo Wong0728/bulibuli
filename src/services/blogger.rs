@@ -3,7 +3,7 @@ use crate::models::{blogger, download_task, history};
 use anyhow::Result;
 use chrono::Local;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
 };
 use std::path::PathBuf;
@@ -61,6 +61,12 @@ impl BloggerService {
 
         let to_delete = history::Entity::find()
             .filter(history::Column::Uid.eq(uid))
+            // NULL pub_timestamp 是下载中的 pending 占位记录，必须排在删除序列之外，
+            // 否则超限清理会优先删掉活跃占位（记录 ID/封面路径抖动）。
+            .order_by(
+                sea_orm::sea_query::Expr::cust("(pub_timestamp IS NULL)"),
+                Order::Desc,
+            )
             .order_by_desc(history::Column::PubTimestamp)
             .offset(retain_limit as u64)
             .all(&self.db)
@@ -102,16 +108,43 @@ impl BloggerService {
         transaction.commit().await?;
 
         for h in &to_delete {
-            let sidecar_dir = h
+            // 历史表可能包含旧版本写入的下载根目录外的绝对路径；删除操作必须先过
+            // 边界校验，不能因为“明确记录”而绕过（与 history/records.rs 一致）。
+            // 侧车/封面兜底目录同样要过边界校验；来源路径越界时回退到 UID 目录。
+            let recorded_parent = h
                 .file_path
                 .as_deref()
-                .and_then(|path| std::path::Path::new(path).parent())
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_else(|| download_dir.clone());
+                .map(std::path::Path::new)
+                .and_then(|path| path.parent())
+                .map(|dir| dir.to_path_buf());
+            let sidecar_dir = match recorded_parent {
+                Some(dir)
+                    if crate::services::file_safety::ensure_existing_within_root(
+                        &self.paths.download_dir,
+                        &dir,
+                    )
+                    .await
+                    .is_ok() =>
+                {
+                    dir
+                }
+                _ => download_dir.clone(),
+            };
             // 删除本地视频文件
             if let Some(p) = h.file_path.as_deref() {
                 let path = PathBuf::from(p);
-                if path.exists() {
+                if crate::services::file_safety::ensure_existing_within_root(
+                    &self.paths.download_dir,
+                    &path,
+                )
+                .await
+                .is_err()
+                {
+                    warn!(
+                        "[enforce_retain] 跳过下载根目录外的历史路径 {}",
+                        path.display()
+                    );
+                } else if path.exists() {
                     if let Err(e) = tokio::fs::remove_file(&path).await {
                         warn!(
                             "[enforce_retain] 删除视频文件失败 {} {}: {e}",
@@ -124,7 +157,18 @@ impl BloggerService {
             // 删除本地封面文件
             if let Some(p) = h.cover_local_path.as_deref() {
                 let path = PathBuf::from(p);
-                if path.exists() {
+                if crate::services::file_safety::ensure_existing_within_root(
+                    &self.paths.download_dir,
+                    &path,
+                )
+                .await
+                .is_err()
+                {
+                    warn!(
+                        "[enforce_retain] 跳过下载根目录外的历史路径 {}",
+                        path.display()
+                    );
+                } else if path.exists() {
                     if let Err(e) = tokio::fs::remove_file(&path).await {
                         warn!(
                             "[enforce_retain] 删除封面文件失败 {} {}: {e}",

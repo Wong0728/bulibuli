@@ -124,9 +124,16 @@ impl DanmakuService {
                                 failed_segments.retain(|failed| *failed != index);
                                 continue;
                             }
-                            list.extend(dm_proto::parse_danmaku_bytes(&bytes));
-                            successful_segments += 1;
-                            failed_segments.retain(|failed| *failed != index);
+                            match dm_proto::try_parse_danmaku_bytes(&bytes) {
+                                Some(danmaku) => {
+                                    list.extend(danmaku);
+                                    successful_segments += 1;
+                                    failed_segments.retain(|failed| *failed != index);
+                                }
+                                // 解码失败≠空段：计入失败分段，避免协议变更被
+                                // 误报为「暂无弹幕」并跳过重试。
+                                None => warn!("弹幕分段 {index} protobuf 解码失败，计入失败分段"),
+                            }
                         }
                         Err(e) => warn!("弹幕分段 {index} 读取字节失败: {e}"),
                     }
@@ -155,12 +162,16 @@ impl DanmakuService {
                 .bili_api
                 .get_video_info(bvid, &cookie_header(&cookies))
                 .await?;
-            let pages = info
-                .pages
-                .iter()
-                .filter(|item| item.cid > 0)
-                .take(100)
-                .collect::<Vec<_>>();
+            let valid_pages: Vec<_> = info.pages.iter().filter(|item| item.cid > 0).collect();
+            // 超过 100P 的视频显式告警并打标，避免静默截断被当成完整结果。
+            let pages_truncated = valid_pages.len() > 100;
+            if pages_truncated {
+                warn!(
+                    "[弹幕] {bvid} 共 {} 个有效分P，仅处理前 100 个",
+                    valid_pages.len()
+                );
+            }
+            let pages = valid_pages.iter().take(100).copied().collect::<Vec<_>>();
             if pages.len() > 1 {
                 let mut results = Vec::with_capacity(pages.len());
                 for item in pages {
@@ -186,9 +197,16 @@ impl DanmakuService {
                         .unwrap_or(false)
                 });
                 return Ok(json!({
-                    "success": success,
-                    "partial": !success,
-                    "message": if success { "所有分P弹幕下载完成" } else { "部分分P弹幕下载失败" },
+                    "success": success && !pages_truncated,
+                    "partial": !success || pages_truncated,
+                    "pages_truncated": pages_truncated,
+                    "message": if pages_truncated {
+                        format!("分P超过 100 个，仅下载前 100 P（共 {} P）", valid_pages.len())
+                    } else if success {
+                        "所有分P弹幕下载完成".to_string()
+                    } else {
+                        "部分分P弹幕下载失败".to_string()
+                    },
                     "pages": results,
                 }));
             }

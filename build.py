@@ -13,16 +13,25 @@
 """
 
 import argparse
+import gzip
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
-import tomllib
 import platform as host_platform
 from pathlib import Path
+
+# tomllib 为标准库仅 3.11+ 提供，提前给出清晰提示而非 ImportError
+if sys.version_info < (3, 11):
+    raise SystemExit(f"build.py 需要 Python 3.11+（依赖标准库 tomllib），当前为 "
+                     f"{sys.version_info.major}.{sys.version_info.minor}")
+
+import tomllib
 
 ROOT = Path(__file__).resolve().parent
 
@@ -176,7 +185,7 @@ def build_vue_bundle(skip: bool = False):
     """Build the Vue 3 + Vite frontend bundle (web/) into static/app/.
 
     Vite is configured with outDir='../static/app' and emptyOutDir=True,
-    so `npm run build:nocheck` is idempotent. `npm ci` is skipped to avoid
+    so `npm run build` (含 vue-tsc 类型检查) is idempotent. `npm ci` is skipped to avoid
     re-downloading node_modules on every build; run `npm ci` manually if
     package.json/lock changed.
     """
@@ -195,7 +204,8 @@ def build_vue_bundle(skip: bool = False):
     # We rely on Vite's dependency pre-bundling cache to keep re-builds fast.
     if not (frontend_dir / "node_modules").is_dir():
         run([npm, "ci", "--ignore-scripts"], cwd=str(frontend_dir))
-    run([npm, "run", "build:nocheck"], cwd=str(frontend_dir))
+    # 与 CI 保持一致：走带 vue-tsc 类型检查的 build，本地产物不绕过类型门禁。
+    run([npm, "run", "build"], cwd=str(frontend_dir))
     vue_index = ROOT / "static" / "app" / "index.html"
     if not vue_index.is_file():
         print(f"  [FAIL] Vue bundle was not created: {vue_index}")
@@ -203,37 +213,51 @@ def build_vue_bundle(skip: bool = False):
     return vue_index
 
 
-def build_frontend_bundle(skip_vue: bool = False, skip_legacy: bool = False):
-    """Build both the Vue 3 bundle (web/ → static/app/) and the legacy
-    vanilla-JS bundle (static/js → static/dist/app.bundle.js).
+def build_frontend_bundle(skip: bool = False):
+    """Build the sole Vue 3 frontend (web/ → static/app/)."""
+    return build_vue_bundle(skip=skip)
 
-    The Vue bundle is the primary frontend served at `/`. The legacy bundle
-    stays for the optional /legacy/ route (used as a compatibility fallback
-    while the Vue rewrite is incomplete).
+
+def stage_test_frontend(exe_path):
+    """Place the Vue bundle beside the release binary used by test mode."""
+    source = ROOT / "static" / "app"
+    destination = exe_path.parent / "static" / "app"
+    shutil.copytree(source, destination, dirs_exist_ok=True)
+    return destination / "index.html"
+
+
+def stage_test_runtime(exe_path):
+    """Place bundled runtime tools (aria2c/FFmpeg/geo) beside the test binary.
+
+    The binary resolves them relative to its own directory (app_root/resources),
+    so without this staging test mode silently loses Aria2, FFmpeg and GeoIP.
     """
-    bundle = build_vue_bundle(skip=skip_vue)
-    if skip_legacy:
-        legacy_bundle = ROOT / "static" / "dist" / "app.bundle.js"
-        if not legacy_bundle.is_file():
-            print(f"  [FAIL] --skip-frontend-legacy requires {legacy_bundle}")
-            raise SystemExit(1)
-        return bundle
-    frontend_dir = ROOT / "static" / "js"
-    npm = "npm.cmd" if sys.platform == "win32" else "npm"
-    if shutil.which(npm) is None:
-        print("  [FAIL] npm is required for the legacy frontend bundle")
-        raise SystemExit(1)
-    if not (frontend_dir / "node_modules").is_dir():
-        run([npm, "ci", "--ignore-scripts"], cwd=str(frontend_dir))
-    run([npm, "run", "build"], cwd=str(frontend_dir))
-    legacy_bundle = ROOT / "static" / "dist" / "app.bundle.js"
-    if not legacy_bundle.is_file():
-        print(f"  [FAIL] legacy frontend bundle was not created: {legacy_bundle}")
-        raise SystemExit(1)
-    # The legacy bundle is what check_portable_bundle_contract scans for
-    # portable-directory contract strings; we still return the Vue index so
-    # the caller can keep referencing it.
-    return bundle
+    resources_src = ROOT / "resources"
+    if not resources_src.is_dir():
+        return
+    resources_dst = exe_path.parent / "resources"
+    resources_dst.mkdir(exist_ok=True)
+    runtime_names = (
+        ("aria2c.exe", "ffmpeg.exe")
+        if sys.platform == "win32"
+        else ("aria2c", "ffmpeg")
+    )
+    copied = []
+    for name in runtime_names:
+        source = resources_src / name
+        if not source.is_file():
+            continue
+        destination = resources_dst / name
+        if not destination.is_file() or source.stat().st_mtime != destination.stat().st_mtime:
+            shutil.copy2(source, destination)
+        copied.append(name)
+    for name in PORTABLE_RESOURCE_DIRS:
+        source = resources_src / name
+        if source.is_dir():
+            shutil.copytree(source, resources_dst / name, dirs_exist_ok=True)
+            copied.append(f"{name}/")
+    if copied:
+        print(f"  已复制测试运行时: resources/ ({', '.join(copied)})")
 
 
 def build_release(platform_name, target=None):
@@ -443,16 +467,26 @@ def validate_package_tree(package_dir, platform_name, variant):
     required = [
         binary,
         package_dir / "README.md",
-        package_dir / "static" / "index.html",
+        package_dir / "static" / "app" / "index.html",
         package_dir / PACKAGE_MANIFEST_NAME,
     ]
     if platform_name in {"linux", "termux"}:
         required.append(package_dir / "install.sh")
     elif platform_name == "windows" and (package_dir / "install.ps1").exists():
         raise RuntimeError("Windows Release 不应嵌入 install.ps1；安装器由仓库单独提供")
-    runtime_names = ("aria2c.exe", "ffmpeg.exe") if platform_name == "windows" else ("aria2c", "ffmpeg")
+    runtime_names = (
+        ("aria2c.exe", "ffmpeg.exe", "ffprobe.exe")
+        if platform_name == "windows"
+        else ("aria2c", "ffmpeg", "ffprobe")
+    )
     if variant == "portable" and platform_name != "termux":
-        for name in runtime_names:
+        # Windows 侧 ffprobe 随包强制携带（仓库已内置）；unix 侧 ffprobe 仍为可选
+        contract_names = (
+            ("aria2c.exe", "ffmpeg.exe", "ffprobe.exe")
+            if platform_name == "windows"
+            else ("aria2c", "ffmpeg")
+        )
+        for name in contract_names:
             runtime = package_dir / "resources" / name
             required.extend((runtime, runtime.with_name(f"{runtime.name}.sha256")))
     else:
@@ -464,6 +498,27 @@ def validate_package_tree(package_dir, platform_name, variant):
     missing = [str(path.relative_to(package_dir)) for path in required if not path.is_file()]
     if missing:
         raise RuntimeError(f"包契约不完整（{platform_name}）：{', '.join(missing)}")
+
+
+def make_reproducible_gztar(archive_path, root_dir, base_dir, source_date_epoch):
+    """按 SOURCE_DATE_EPOCH 归一化元数据生成可复现 tar.gz。
+
+    归一化 mtime/属主/权限并固定 gzip 头时间戳，使同源两次构建 SHA-256 一致。
+    """
+    def normalize(member):
+        member.uid = member.gid = 0
+        member.uname = member.gname = ""
+        member.mtime = source_date_epoch
+        member.mode = 0o755 if member.isdir() or member.mode & 0o111 else 0o644
+        return member
+
+    # tarfile 内建 w:gz 无法控制 gzip 头的 mtime，需手动接管 GzipFile
+    with archive_path.open("wb") as raw:
+        with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=9, mtime=source_date_epoch) as gz:
+            with tarfile.open(fileobj=gz, mode="w") as tar:
+                for path in sorted((root_dir / base_dir).rglob("*")):
+                    arcname = path.relative_to(root_dir).as_posix()
+                    tar.add(path, arcname=arcname, recursive=False, filter=normalize)
 
 
 def assemble_package(exe_path, platform_name, target=None, variant="portable"):
@@ -507,7 +562,7 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
 
         if variant == "portable" and platform_name != "termux":
             runtime_names = (
-                ("aria2c.exe", "ffmpeg.exe")
+                ("aria2c.exe", "ffmpeg.exe", "ffprobe.exe")
                 if platform_name == "windows"
                 else ("aria2c", "ffmpeg", "ffprobe")
             )
@@ -550,17 +605,13 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
             package_dir / "static",
             ignore=shutil.ignore_patterns(
                 "node_modules",
+                "js",
+                "dist",
                 "test-results",
                 "playwright-report",
                 "*.trace.zip",
             ),
         )
-        portable_index = package_dir / "static" / "index.html"
-        if (package_dir / "static" / "dist" / "app.bundle.js").is_file() and portable_index.is_file():
-            index_text = portable_index.read_text(encoding="utf-8")
-            portable_index.write_text(
-                index_text.replace("js/app.js", "dist/app.bundle.js"), encoding="utf-8"
-            )
         print("  已复制: static/")
     else:
         print("  [警告] static/ 目录不存在，前端资源将缺失")
@@ -586,14 +637,19 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     validate_package_tree(package_dir, platform_name, variant)
 
     archive_format = "zip" if platform_name == "windows" else "gztar"
-    archive_path = Path(
-        shutil.make_archive(
-            str(dist_dir / stem),
-            archive_format,
-            root_dir=str(dist_dir),
-            base_dir=package_dir.name,
+    source_date_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if archive_format == "gztar" and source_date_epoch:
+        archive_path = dist_dir / f"{stem}.tar.gz"
+        make_reproducible_gztar(archive_path, dist_dir, package_dir.name, int(source_date_epoch))
+    else:
+        archive_path = Path(
+            shutil.make_archive(
+                str(dist_dir / stem),
+                archive_format,
+                root_dir=str(dist_dir),
+                base_dir=package_dir.name,
+            )
         )
-    )
     checksum_path = write_checksum(archive_path)
     print(f"\n  {variant} 包目录: {package_dir}")
     print(f"  发布归档: {archive_path}")
@@ -601,14 +657,19 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     return package_dir, archive_path, checksum_path
 
 
-def run_test(platform_name, skip_vue=False, skip_legacy=False):
+def run_test(platform_name, skip_vue=False):
     """编译前端与 Rust，并直接启动程序（测试模式）。"""
     check_cargo()
     print("[2/5] 构建前端...")
-    build_frontend_bundle(skip_vue=skip_vue, skip_legacy=skip_legacy)
+    build_frontend_bundle(skip=skip_vue)
     print("[3/5] 清理残留的旧实例，避免端口被占用...")
     stop_existing_instances(platform_name)
     exe_path = build_release(platform_name)
+    staged_index = stage_test_frontend(exe_path)
+    stage_test_runtime(exe_path)
+    if not staged_index.is_file():
+        print(f"  [错误] 测试模式前端资源不存在: {staged_index}")
+        sys.exit(1)
     print("\n[测试模式] 启动程序...")
     print(f"  运行: {exe_path}")
     print("  启动后请查看控制台输出的 \"服务器监听于 http://...\" 行，")
@@ -675,21 +736,6 @@ def check_resource_hashes():
     return ok
 
 
-def check_portable_bundle_contract(bundle):
-    """Ensure the bundled frontend keeps the portable-directory capability contract."""
-    bundle_text = bundle.read_text(encoding="utf-8")
-    required_strings = (
-        "can_open_directory",
-        "open-history-directory",
-        "path_display_mode",
-    )
-    ok = True
-    for required in required_strings:
-        if required not in bundle_text:
-            ok = _quality_error(f"frontend bundle is missing contract field: {required}") and ok
-    return ok
-
-
 def check_vue_bundle_contract(vue_index):
     """Ensure the Vue 3 bundle keeps the same portable-directory capability contract.
 
@@ -703,7 +749,13 @@ def check_vue_bundle_contract(vue_index):
     js_path = vue_index.parent / "assets" / js_match.group(1)
     if not js_path.is_file():
         return _quality_error(f"Vue bundle asset missing: {js_path}")
-    js_text = js_path.read_text(encoding="utf-8")
+    # 契约字段可能位于懒加载 chunk（如 TabSettings）而非入口 chunk，
+    # 因此对全部产物合并检查；入口文件本身只要求存在。
+    assets_dir = js_path.parent
+    js_text = "\n".join(
+        asset.read_text(encoding="utf-8", errors="ignore")
+        for asset in sorted(assets_dir.glob("*.js"))
+    )
     required_strings = (
         "can_browser_download",
         "openDirectory",
@@ -726,50 +778,43 @@ def check_windows_installer_encoding():
     return True
 
 
-def run_quality_checks():
+def run_quality_checks(skip_rust_gates=False):
     """Run the mandatory formatting, lint, test and source-policy gates."""
     print("[check] running mandatory quality gates")
     commands = [
         (["cargo", "fmt", "--all", "--", "--check"], ROOT),
-        (["cargo", "check", "--all-targets"], ROOT),
+        (["cargo", "check", "--all-targets", "--locked"], ROOT),
         (
             [
                 "cargo",
                 "clippy",
                 "--all-targets",
                 "--all-features",
+                "--locked",
                 "--",
                 "-D",
                 "warnings",
             ],
             ROOT,
         ),
-        (["cargo", "test", "--all-targets"], ROOT),
+        (["cargo", "test", "--all-targets", "--locked"], ROOT),
     ]
     # Node 原生测试与 Playwright 测试使用显式入口；不能由扩展名反推 runner。
-    frontend_tests = sorted(
-        path
-        for path in (ROOT / "tests").glob("frontend_*.mjs")
-        if not path.name.endswith(".spec.mjs")
-    )
-    if frontend_tests:
-        commands.append(
-            (
-                ["node", "--test", *(str(path.relative_to(ROOT)) for path in frontend_tests)],
-                ROOT,
-            )
-        )
     if sys.platform == "win32":
         npm_command = "npm.cmd"
-        playwright_bin = ROOT / "static" / "js" / "node_modules" / ".bin" / "playwright.cmd"
+        playwright_bin = ROOT / "web" / "node_modules" / ".bin" / "playwright.cmd"
     else:
         npm_command = "npm"
-        playwright_bin = ROOT / "static" / "js" / "node_modules" / ".bin" / "playwright"
+        playwright_bin = ROOT / "web" / "node_modules" / ".bin" / "playwright"
     if playwright_bin.is_file():
-        commands.append(([npm_command, "run", "test:smoke"], ROOT / "static" / "js"))
+        commands.append(([npm_command, "run", "test:smoke"], ROOT / "web"))
     else:
         print("  [警告] 未找到 Playwright 可执行文件，跳过前端冒烟测试"
-              "（先在 static/js 下执行 npm ci 后重跑可获得完整检查）")
+              "（先在 web 下执行 npm ci 后重跑可获得完整检查）")
+    if skip_rust_gates:
+        # Windows build smoke 等 CI job 已独立跑过完整 Rust 门禁，这里只做打包侧检查
+        print("  [跳过] cargo fmt/check/clippy/test（--skip-rust-gates：由 CI 独立 Rust job 覆盖）")
+        commands = []
     for command, cwd in commands:
         run(command, cwd=str(cwd))
 
@@ -786,55 +831,24 @@ def run_quality_checks():
         if line_count > 500:
             advisory(f"{path.relative_to(ROOT)} has {line_count} lines (limit 500)")
 
-    app_path = ROOT / "static" / "js" / "app.js"
-    if app_path.exists() and len(app_path.read_text(encoding="utf-8").splitlines()) > 800:
-        advisory("static/js/app.js exceeds 800 lines")
-
-    first_party_js = [
-        path
-        for path in sorted((ROOT / "static" / "js").glob("*.js"))
-        if not path.name.endswith(".min.js")
+    frontend_sources = [
+        path for path in sorted((ROOT / "web" / "src").rglob("*"))
+        if path.suffix in {".ts", ".vue"}
     ]
-    for path in first_party_js:
+    for path in frontend_sources:
         line_count = len(path.read_text(encoding="utf-8").splitlines())
         if line_count > 800:
             advisory(f"{path.relative_to(ROOT)} has {line_count} lines (limit 800)")
-    import shutil
-    if shutil.which("node") is None:
-        print("  [错误] 未找到 node 可执行文件，无法执行 JavaScript 语法检查")
-        raise SystemExit(1)
-    for path in sorted((ROOT / "static" / "js").glob("*.js")):
-        result = subprocess.run(
-            ["node", "--input-type=module", "--check"],
-            cwd=str(ROOT),
-            input=path.read_text(encoding="utf-8"),
-            text=True,
-            encoding="utf-8",
-        )
-        if result.returncode != 0:
-            print(f"  [错误] JavaScript 语法检查失败: {path.relative_to(ROOT)}")
-            raise SystemExit(1)
 
-    bundle = build_frontend_bundle()
-    vue_bundle = bundle  # Vue index.html path; contract check scans assets/*.js instead
-    legacy_bundle = ROOT / "static" / "dist" / "app.bundle.js"
+    vue_bundle = build_frontend_bundle()
     ok = check_resource_hashes() and ok
-    if legacy_bundle.is_file():
-        ok = check_portable_bundle_contract(legacy_bundle) and ok
     ok = check_vue_bundle_contract(vue_bundle) and ok
     ok = check_windows_installer_encoding() and ok
 
     rust_source = "\n".join(path.read_text(encoding="utf-8") for path in rust_files)
-    js_source = "\n".join(path.read_text(encoding="utf-8") for path in first_party_js)
-    html_source = "\n".join(
-        (ROOT / "static" / name).read_text(encoding="utf-8")
-        for name in ("index.html", "setup.html", "settings.html")
-    )
-    css_files = [ROOT / "static" / "css" / "style.css"] + sorted(
-        (ROOT / "static" / "css").glob("*.css")
-    )
-    # Vendor CSS is third-party input and is checked by its own asset hash gate.
-    css_files = [path for path in css_files if "static/css/lib" not in path.as_posix()]
+    js_source = "\n".join(path.read_text(encoding="utf-8") for path in frontend_sources)
+    html_source = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    css_files = sorted((ROOT / "web" / "src" / "styles").glob("*.css"))
     css_lines = [
         line
         for path in dict.fromkeys(css_files)
@@ -854,19 +868,29 @@ def run_quality_checks():
         and not re.match(r"\s*(?:--[a-z0-9-]+\s*:|@media\b)", line)
         for line in css_lines
     )
-    policy_checks = [
-        ("#[allow(dead_code)]", "#[allow(dead_code)]" not in rust_source),
-        ("let _ = error swallowing", re.search(r"\blet\s+_\s*=", rust_source) is None),
+    # 源码规范门禁分两级：
+    # - 硬失败（blocking）：当前代码库已满足的项，回归即构建失败；
+    # - advisory：当前仍存在历史违规、且清理需要改动 web/src 与 src/（不在本脚本
+    #   职责内）的项。违规明细与数量会在结尾汇总输出，待逐项清零后上移为硬失败。
+    hard_policy_checks = [
         ("production console.log", "console.log" not in js_source),
-        ("JavaScript inline styles", re.search(r"\.style\.|\sstyle\s*=", js_source) is None),
-        ("HTML inline event handlers", re.search(r"\son[a-z]+\s*=", html_source, re.I) is None),
         ("HTML inline styles", re.search(r"\sstyle\s*=", html_source, re.I) is None),
         ("silent catch blocks", re.search(r"catch\s*(?:\([^)]*\))?\s*\{\s*\}", js_source) is None),
+        ("API layer database access", ".database()" not in api_source),
         (
-            "legacy frontend success contract",
+            "CSP unsafe-inline",
+            "unsafe-inline" not in rust_source,
+        ),
+    ]
+    advisory_checks = [
+        ("#[allow(dead_code)]", "#[allow(dead_code)]" not in rust_source),
+        ("let _ = error swallowing", re.search(r"\blet\s+_\s*=", rust_source) is None),
+        ("JavaScript inline styles", re.search(r"\.style\.|\sstyle\s*=", js_source) is None),
+        ("HTML inline event handlers", re.search(r"\son[a-z]+\s*=", html_source, re.I) is None),
+        (
+            "frontend success contract",
             re.search(r"\.success\b|[\"']success[\"']\s*:", js_source) is None,
         ),
-        ("API layer database access", ".database()" not in api_source),
         ("CSS hardcoded colors outside tokens", not css_has_hardcoded_color),
         ("CSS hardcoded pixel values outside tokens", not css_has_hardcoded_px),
         (
@@ -877,18 +901,15 @@ def run_quality_checks():
             "numeric CSS color tokens",
             re.search(r"--color-token-[0-9]+\s*:", "\n".join(css_lines)) is None,
         ),
-        (
-            "CSP unsafe-inline",
-            "unsafe-inline" not in rust_source,
-        ),
     ]
     blocking_checks = [
         (
             "CSS empty var()",
             re.search(r"var\(\s*\)", "\n".join(css_lines)) is None,
         ),
+        *hard_policy_checks,
     ]
-    for label, passed in policy_checks:
+    for label, passed in advisory_checks:
         if not passed:
             advisory(label)
     for label, passed in blocking_checks:
@@ -898,11 +919,16 @@ def run_quality_checks():
     for route in re.findall(r'\.route\(\s*"([^"]+)"', rust_source):
         static_route = re.sub(r"\{[^}]+\}", "param", route)
         if "_" in static_route:
-            advisory(f"API route is not kebab-case: {route}")
+            ok = _quality_error(f"API route is not kebab-case: {route}") and ok
     for dom_id in re.findall(r'\bid="([^"]+)"', html_source):
         if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", dom_id):
-            advisory(f"DOM id is not kebab-case: {dom_id}")
+            ok = _quality_error(f"DOM id is not kebab-case: {dom_id}") and ok
 
+    if advisory_warnings:
+        # 显著汇总：advisory 不阻断，但违规数量与明细必须一眼可见
+        print(f"\n  [WARN][advisory] source policy 共 {len(advisory_warnings)} 项未达标（不阻断构建）：")
+        for message in advisory_warnings:
+            print(f"    - {message}")
     if not ok:
         raise SystemExit(1)
     print("[check] all mandatory gates passed")
@@ -911,6 +937,11 @@ def run_quality_checks():
 def main():
     parser = argparse.ArgumentParser(description="补哩补哩 bulibuli 构建脚本")
     parser.add_argument("--check", action="store_true", help="运行全部规范门禁")
+    parser.add_argument(
+        "--skip-rust-gates",
+        action="store_true",
+        help="--check 模式下跳过 cargo fmt/check/clippy/test（CI 已有独立 Rust job 全量覆盖）",
+    )
     parser.add_argument("--portable", action="store_true", help="构建当前平台完整便携版")
     parser.add_argument("--core", action="store_true", help="构建不含媒体运行时的轻量包")
     parser.add_argument(
@@ -919,17 +950,9 @@ def main():
         help="复用已有的 Vue 3 产物（static/app/，由 web/ 的 vite build 产出）",
     )
     parser.add_argument(
-        "--skip-frontend-legacy",
-        action="store_true",
-        help="复用已有的旧版 vanilla-JS 产物（static/dist/app.bundle.js）",
-    )
-    parser.add_argument(
         "--skip-frontend",
         action="store_true",
-        help=(
-            "同时跳过 Vue 3 与 legacy 前端构建（向后兼容，等价于 "
-            "--skip-frontend-vue --skip-frontend-legacy）"
-        ),
+        help="复用已有的 Vue 3 产物（等价于 --skip-frontend-vue）",
     )
     parser.add_argument("--skip-rust-build", action="store_true", help="复用已有 release 二进制")
     parser.add_argument(
@@ -942,7 +965,7 @@ def main():
     args = parser.parse_args()
 
     if args.check:
-        run_quality_checks()
+        run_quality_checks(skip_rust_gates=args.skip_rust_gates)
         return
 
     try:
@@ -950,23 +973,32 @@ def main():
     except ValueError as error:
         parser.error(str(error))
 
+    # 跨平台守卫：本机无法为其它平台完成运行时打包（unix 依赖收集依赖 ldd/otool），
+    # 此前只会在编译后报"产物不存在"，误导性强。
+    if args.platform != "auto":
+        host = normalize_platform("auto")
+        compatible = args.platform == host or (args.platform == "termux" and host == "linux")
+        if not compatible and not args.skip_rust_build:
+            parser.error(
+                f"--platform {args.platform} 与当前主机平台 {host} 不一致：本机无法完成该平台的"
+                "运行时打包与产物校验。请在目标平台上构建，或使用发布流程的 CI 构建矩阵。"
+            )
+
     print(f"=== {APP_DISPLAY_NAME} {APP_SLUG} v{APP_VERSION} 构建脚本 ===\n")
 
     if args.portable and args.core:
         parser.error("--portable 与 --core 不能同时使用")
 
     skip_vue = args.skip_frontend_vue or args.skip_frontend
-    skip_legacy = args.skip_frontend_legacy or args.skip_frontend
-
     if not args.portable and not args.core:
-        run_test(platform_name, skip_vue=skip_vue, skip_legacy=skip_legacy)
+        run_test(platform_name, skip_vue=skip_vue)
         return
 
     dist_dir = ROOT / "dist"
     dist_dir.mkdir(exist_ok=True)
 
     check_cargo()
-    build_frontend_bundle(skip_vue=skip_vue, skip_legacy=skip_legacy)
+    build_frontend_bundle(skip=skip_vue)
     if args.skip_rust_build:
         exe_path = release_binary_path(platform_name, args.target)
         if not exe_path.is_file():

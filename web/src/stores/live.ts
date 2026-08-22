@@ -1,5 +1,5 @@
 /**
- * 直播 store：行为对齐老框架 static/js/live.js（唯一基准）。
+ * 直播 store：保留迁移前已验证的行为语义。
  * - 写操作一律不带 expected_version（老框架 apiPost 全部不传，不引入 409 冲突路径）。
  * - 写操作走本地 postFull 封装，透出后端 message 供 toast 优先消费（P3-13）。
  * - refreshDashboard 成功后顺带拉 /api/live/history?limit=30（老框架同款调用时机），
@@ -154,13 +154,14 @@ export function validateScheduleStrict(schedule: Record<string, string[]>): stri
   const intervals: Array<{ begin: number; finish: number }> = [];
   const toMinutes = (value: string): number => {
     if (!/^\d{2}:\d{2}$/.test(value)) return NaN;
-    const [hour, minute] = value.split(':').map(Number);
+    // 解构缺位时给 NaN：NaN 比较恒为 false，等价"格式非法"。
+    const [hour = NaN, minute = NaN] = value.split(':').map(Number);
     return hour < 24 && minute < 60 ? hour * 60 + minute : NaN;
   };
   for (const [day, windows] of Object.entries(schedule)) {
     const dayIndex = LIVE_WEEKDAYS.findIndex(([key]) => key === day);
     for (const value of windows) {
-      const [start, end] = value.split('-');
+      const [start = '', end = ''] = value.split('-');
       const beginValue = toMinutes(start);
       const endValue = toMinutes(end);
       if (dayIndex < 0 || !Number.isFinite(beginValue) || !Number.isFinite(endValue) || beginValue === endValue) {
@@ -174,7 +175,9 @@ export function validateScheduleStrict(schedule: Record<string, string[]>): stri
   }
   intervals.sort((left, right) => left.begin - right.begin);
   for (let index = 1; index < intervals.length; index += 1) {
-    if (intervals[index - 1].finish > intervals[index].begin) return '排期窗口存在重叠，请调整后再保存';
+    const previous = intervals[index - 1];
+    const current = intervals[index];
+    if (previous && current && previous.finish > current.begin) return '排期窗口存在重叠，请调整后再保存';
   }
   return '';
 }
@@ -512,6 +515,32 @@ export const useLiveStore = defineStore('live', () => {
   function selectSource(id: number | null) { selectedSourceId.value = id; }
   function selectRecording(id: string | null) { selectedRecordingId.value = id; }
 
+  /** 设备会话 401 失效时清空本会话的直播数据（app store 调用）。 */
+  function reset() {
+    sources.value = [];
+    recordings.value = [];
+    history.value = [];
+    mergeJobs.value = [];
+    recovery.value = [];
+    selectedSourceId.value = null;
+    selectedRecordingId.value = null;
+    monitorRunning.value = null;
+    diskFree.value = '';
+    lastHeartbeatAt.value = null;
+    lastSuccessAt.value = null;
+    monitorError.value = null;
+    dashboardError.value = null;
+    dashboardFailedAt.value = 0;
+    dashboardLoaded.value = false;
+    riskNotice.value = null;
+    canOpenDirectory.value = false;
+    historyError.value = null;
+    roomInfoError.value = null;
+    roomInfoCache.value = new Map();
+    roomInfoCachedAt.value = new Map();
+    roomInfoLoading.value = new Set();
+  }
+
   return {
     sources, recordings, history, mergeJobs, recovery, selectedSourceId, selectedRecordingId,
     monitorRunning, diskFree, lastHeartbeatAt, lastSuccessAt, monitorError,
@@ -522,6 +551,6 @@ export const useLiveStore = defineStore('live', () => {
     refreshDashboard, refreshHistory,
     roomInfo, addSource, updateSource, deleteSource,
     startRecording, stopRecording, startMerge, cancelMerge, burnDanmaku,
-    openRecording, selectSource, selectRecording,
+    openRecording, selectSource, selectRecording, reset,
   };
 });

@@ -32,6 +32,18 @@ struct CoverQuery {
     history_id: Option<i32>,
 }
 
+/// bvid 格式校验：与 `services/download.rs` 的私有 `is_valid_bvid` 同规则
+/// （该函数未导出且所属模块正被并行修改，这里镜像一份保持单一语义）：
+/// BV + 10 位 base58 字符（去 0/O/I/l）。在进入 DB 查询、目录扫描和
+/// 封面落盘前先行拦截，防止恶意 bvid 构造文件名注入或路径穿越。
+fn is_valid_bvid(bvid: &str) -> bool {
+    bvid.len() == 12
+        && bvid.starts_with("BV")
+        && bvid[2..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l'))
+}
+
 async fn get_cover(
     State(state): State<SharedState>,
     Path(bvid): Path<String>,
@@ -40,6 +52,10 @@ async fn get_cover(
     let bvid = bvid.trim();
     if bvid.is_empty() {
         return Ok(missing_response("bvid 为空"));
+    }
+    // 落盘/扫描前的入口校验：非法 bvid 直接 404，不进入后续查询与下载链路。
+    if !is_valid_bvid(bvid) {
+        return Ok(missing_response("bvid 格式无效"));
     }
 
     // 1. 查 history.cover_local_path
@@ -80,11 +96,31 @@ async fn get_cover(
         None => None,
     };
 
-    // 2 & 3. 本地扫描 + 下载兜底，统一走 ensure_cover_local
+    // 2 & 3. 本地扫描 + 下载兜底，统一走 ensure_cover_local。
+    // 记录尚无封面（多为手动下载进行中）时优先用下载任务的实际目录：
+    // 手动任务的目录是 manual/{标题}，按 uid/日期推导会下错位置，
+    // 完成路径再下一份造成同一封面两存。
+    let task_dir = state
+        .business
+        .history_service
+        .download_tasks_for_bvids(&[bvid.to_string()])
+        .await?
+        .iter()
+        .filter_map(|t| t.download_dir.as_deref())
+        .find_map(|dir| {
+            let path = PathBuf::from(dir);
+            path.starts_with(&state.infra.paths.download_dir)
+                .then_some(path)
+        });
+    let cover_dir = match (&task_dir, &uid_opt) {
+        (Some(dir), _) => Some(dir.clone()),
+        (None, Some(uid)) => Some(state.infra.paths.download_dir.join(uid)),
+        (None, None) => None,
+    };
     match state
         .media
         .download_manager
-        .ensure_cover_local(bvid, uid_opt.as_deref())
+        .ensure_cover_local_in(bvid, uid_opt.as_deref(), cover_dir.as_deref())
         .await
     {
         Ok(Some(path)) => Ok(serve_image(&path).await),
@@ -163,5 +199,22 @@ fn guess_content_type(path: &std::path::Path) -> &'static str {
         Some("webp") => "image/webp",
         Some("jpg") | Some("jpeg") => "image/jpeg",
         _ => "image/jpeg",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bvid_validation_rejects_path_like_and_ambiguous_values() {
+        // 与 services/download.rs 的 is_valid_bvid 单测同口径。
+        assert!(is_valid_bvid("BV1xx411c7mD"));
+        assert!(!is_valid_bvid("../etc/passwd"));
+        assert!(!is_valid_bvid("BV1xx411c7m0D"));
+        assert!(!is_valid_bvid("bv1xx411c7mD"));
+        assert!(!is_valid_bvid("BV1xx411c7mD\"); rm -rf /"));
+        assert!(!is_valid_bvid("BV1xx411c7mD\r\nSet-Cookie: x=1"));
+        assert!(!is_valid_bvid(""));
     }
 }

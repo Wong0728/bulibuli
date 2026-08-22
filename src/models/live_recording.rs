@@ -36,6 +36,9 @@ pub struct Model {
     pub ended_at: Option<String>,
     /// 错误信息
     pub error_msg: Option<String>,
+    /// 触发方式（manual / live_start / recovery）。列名 record_trigger：
+    /// `trigger` 是 SQLite 关键字，m017 已把物理列改名，Rust 字段名保持不变。
+    #[sea_orm(column_name = "record_trigger")]
     pub trigger: String,
     pub event_path: Option<String>,
     pub xml_path: Option<String>,

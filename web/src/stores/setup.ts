@@ -76,7 +76,12 @@ export const useSetupStore = defineStore('setup', () => {
     try {
       const r: any = await setupApi.aiSkill(enabled);
       if (r && status.value) status.value.ai_skill_enabled = !!r.ai_skill_enabled;
-    } catch { /* 静默 */ }
+      return true;
+    } catch (e: any) {
+      // 保存失败必须让用户知道，不能静默吞掉（否则用户以为 AI Skill 已启用）。
+      error.value = e?.message || 'AI Skill 设置保存失败';
+      return false;
+    }
   }
 
   return {

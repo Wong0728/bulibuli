@@ -114,6 +114,10 @@ impl Aria2Manager {
             match self.call_once(method, params.clone()).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
+                    // GID 失效属永久性错误（下载器重启/记录被清理），重试只会重复报错
+                    if matches!(e, Aria2Error::GidNotFound(_)) {
+                        return Err(anyhow!(e));
+                    }
                     warn!(
                         "Aria2 RPC 调用失败 (attempt {}/{}): {e}",
                         attempt + 1,
@@ -198,6 +202,10 @@ impl Aria2Manager {
                 .and_then(|v| v.as_str())
                 .unwrap_or("未知 RPC 错误")
                 .to_string();
+            // aria2 对失效 GID 返回 code=1 "GID xxx is not found"
+            if message.contains("is not found") {
+                return Err(Aria2Error::GidNotFound(message));
+            }
             return Err(Aria2Error::Rpc { code, message });
         }
         data.get("result")
@@ -229,9 +237,21 @@ impl Aria2Manager {
             .or_insert_with(|| json!("1K"));
 
         if !cookies.is_empty() {
-            obj.insert("header".to_string(), json!([format!("Cookie: {cookies}")]));
+            obj.insert(
+                "header".to_string(),
+                json!([format!("Cookie: {}", sanitize_header_value(cookies)?)]),
+            );
         }
-        let header_list: Vec<String> = headers.iter().map(|(k, v)| format!("{k}: {v}")).collect();
+        let header_list: Vec<String> = headers
+            .iter()
+            .map(|(k, v)| {
+                Ok(format!(
+                    "{}: {}",
+                    sanitize_header_value(k)?,
+                    sanitize_header_value(v)?
+                ))
+            })
+            .collect::<Result<_>>()?;
         if !header_list.is_empty() {
             let existing = obj.entry("header").or_insert_with(|| json!([]));
             let arr = existing
@@ -283,16 +303,17 @@ impl Aria2Manager {
         Ok(())
     }
 
-    /// 预留磁盘空间耗尽时暂停所有活动中的 aria2 传输。
-    pub async fn pause_all(&self) -> Result<()> {
-        self.call("aria2.pauseAll", vec![]).await?;
-        Ok(())
-    }
-
     /// 暂停单个 aria2 任务（优雅暂停：等当前连接排空后再切换为 paused）。
     /// 用于下载队列的「单任务暂停」操作。
     pub async fn pause(&self, gid: &str) -> Result<()> {
         self.call("aria2.pause", vec![json!(gid)]).await?;
+        Ok(())
+    }
+
+    /// 强制暂停单个 aria2 任务（丢弃当前连接，立即生效）。
+    /// 优雅 `pause` 对部分 active 状态会报 "cannot be paused now"，此时以此为兜底。
+    pub async fn force_pause(&self, gid: &str) -> Result<()> {
+        self.call("aria2.forcePause", vec![json!(gid)]).await?;
         Ok(())
     }
 
@@ -301,10 +322,29 @@ impl Aria2Manager {
         self.call("aria2.unpause", vec![json!(gid)]).await?;
         Ok(())
     }
+}
 
-    /// 恢复所有被暂停的 aria2 任务（与 `pause_all` 对应）。
-    pub async fn unpause_all(&self) -> Result<()> {
-        self.call("aria2.unpauseAll", vec![]).await?;
-        Ok(())
+/// header 注入防线（与原生路径 build_header_map 的 HeaderValue 校验对齐）：
+/// 含 CR/LF 的名/值能在 aria2 的 header 选项里伪造额外 header 行，
+/// 必须整体拒绝而非静默截断。
+fn sanitize_header_value(value: &str) -> Result<&str> {
+    if value.contains('\r') || value.contains('\n') {
+        anyhow::bail!("header 名/值包含 CR/LF 控制字符，拒绝注入: {value:?}")
+    }
+    Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_header_value;
+
+    #[test]
+    fn sanitize_rejects_crlf_injection() {
+        assert!(sanitize_header_value("SESSDATA=abc").is_ok());
+        assert!(sanitize_header_value("User-Agent").is_ok());
+        assert!(sanitize_header_value("evil\r\nX-Injected: 1").is_err());
+        assert!(sanitize_header_value("evil\nX-Injected: 1").is_err());
+        assert!(sanitize_header_value("evil\rX-Injected: 1").is_err());
+        assert!(sanitize_header_value("multi\r\rline").is_err());
     }
 }

@@ -354,6 +354,29 @@ impl SubtitleBurner {
                 .await;
         }
 
+        // 磁盘预检：临时目录（系统盘 %TEMP%）需容纳源视频副本 + 编码输出
+        // （约 2 倍源体积），目标盘需容纳最终输出；不足时提前报可读错误，
+        // 避免整卷复制/编码数小时后才因磁盘写满失败。
+        // ensure_disk_space 内部走 spawn_blocking，不在 async 线程同步调用 fs2。
+        let source_bytes = tokio::fs::metadata(video_path)
+            .await
+            .with_context(|| format!("读取视频文件大小失败: {}", video_path.display()))?
+            .len();
+        crate::services::file_safety::ensure_disk_space(
+            &std::env::temp_dir(),
+            Some(source_bytes.saturating_mul(2)),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "烧录临时目录（{}）磁盘空间不足",
+                std::env::temp_dir().display()
+            )
+        })?;
+        crate::services::file_safety::ensure_disk_space(parent, Some(source_bytes))
+            .await
+            .with_context(|| format!("输出目录（{}）磁盘空间不足", parent.display()))?;
+
         // 生成临时目录并复制视频/ASS
         let temp_guard = tempfile::Builder::new()
             .prefix("subtitle_burn_")

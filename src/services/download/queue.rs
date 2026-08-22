@@ -1,17 +1,66 @@
 use crate::domain::{DownloadStage, DownloadStatus};
-use crate::models::{blogger, download_task};
+use crate::models::{blogger, download_task, history};
 use crate::services::file_safety::sanitize_filename;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use std::path::{Path, PathBuf};
-use tracing::{error, info, warn};
+use std::time::{Duration, Instant};
+use tracing::{debug, error, info, warn};
 
 use super::engine::TransferEngine;
+use super::history_sync::HistoryPlaceholder;
 use super::{
     backoff_key, file_stem_for, is_valid_bvid, task_cache_key, DownloadManager, PageInfo,
     TaskOutcome,
 };
+
+/// 任务完成后多久以内的重复入队请求视为重复（前端超时重试、连点），
+/// 直接幂等返回"产物已存在"，而不是整段重下再 SHA-256 比对。
+const RECENT_COMPLETION_WINDOW: Duration = Duration::from_secs(60);
+/// recent_completions 缓存最长保留时间（顺带清理过期项，防止无限增长）。
+const RECENT_COMPLETION_RETENTION: Duration = Duration::from_secs(10 * 60);
+
+/// durl 直链（音视频已封装的 flv/mp4）识别：URL 路径带对应扩展名。
+/// 命中时视频任务无需音频伴生任务即可成片（DASH m4s 分离流返回 None）。
+fn muxed_direct_link_ext(url: &str) -> Option<&'static str> {
+    let path = url.split('?').next().unwrap_or_default();
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".flv") {
+        Some("flv")
+    } else if lower.ends_with(".mp4") {
+        Some("mp4")
+    } else {
+        None
+    }
+}
+
+/// aria2 幂等性错误判定：`pause` 对"已是 paused"报 cannot be paused now，
+/// 属于重复暂停而非真故障，应视为成功照常落库。
+fn is_idempotent_pause_err(e: &anyhow::Error) -> bool {
+    e.to_string().contains("cannot be paused now")
+}
+
+/// 产物文件名严格匹配：仅接受 `{stem}.{ext}` 精确命中或 `{title}_{stem}.{ext}`
+/// 标题前缀命中（大小写归一）。要求 stem 与扩展名之间是硬边界，排除前缀/包含误匹配：
+/// 裸 `starts_with(stem)` 曾让单P stem 命中多P产物 `{bvid}_p2.mp4`、
+/// `{bvid}_p2` 命中 `_p20`，导致缺文件的分P被判已存在而不重下。
+fn product_file_matches(name: &str, stem: &str, extensions: &[&str]) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let lower_stem = stem.to_ascii_lowercase();
+    extensions.iter().any(|ext| {
+        let suffix = format!(".{ext}");
+        lower.ends_with(&suffix)
+            && (lower.starts_with(&format!("{lower_stem}."))
+                || lower.ends_with(&format!("_{lower_stem}{suffix}")))
+    })
+}
+
+/// 同上：`unpause` 对"已非 paused"（active/waiting/complete）报
+/// cannot be unpaused now，属于重复恢复而非真故障。
+fn is_idempotent_unpause_err(e: &anyhow::Error) -> bool {
+    e.to_string().contains("cannot be unpaused now")
+}
 
 /// 从任务行还原分P信息：单P（cid/page 为 NULL）返回 None，保持存量语义；
 /// 多P时重建 PageInfo，供重试等入口沿用原分P的 cid/文件名。
@@ -61,6 +110,47 @@ impl DownloadManager {
         page: Option<&PageInfo>,
         audio_ext: Option<&str>,
     ) -> Result<TaskOutcome> {
+        // 同键请求串行化：并发的重复 add（如前端超时重试连发三次）在锁上排队，
+        // 后到者重新查库即可看到先行者写入的 downloading/completed 状态，
+        // 避免同时穿过"无存量任务"检查创建出两行任务或对同一产物双重派发。
+        let key = backoff_key(bvid, page.map(|p| p.cid), task_type);
+        let entry = {
+            let mut guards = self.add_task_locks.lock().await;
+            guards
+                .entry(key.clone())
+                .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _serial = entry.lock().await;
+        let outcome = self
+            .add_task_serialized(
+                bvid, title, url, cookies, quality, task_type, uid, source, page, audio_ext,
+            )
+            .await;
+        {
+            let mut guards = self.add_task_locks.lock().await;
+            // 仅当没有其它等待者复用这把锁时才移除，防止映射随 bvid 数量无限增长
+            if std::sync::Arc::strong_count(&entry) == 2 {
+                guards.remove(&key);
+            }
+        }
+        outcome
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn add_task_serialized(
+        &self,
+        bvid: &str,
+        title: &str,
+        url: &str,
+        cookies: &str,
+        quality: i32,
+        task_type: &str,
+        uid: Option<&str>,
+        source: &str,
+        page: Option<&PageInfo>,
+        audio_ext: Option<&str>,
+    ) -> Result<TaskOutcome> {
         crate::services::bili_url_policy::validate(url)
             .await
             .map_err(anyhow::Error::from)?;
@@ -79,9 +169,15 @@ impl DownloadManager {
             _ => self.get_blogger_uid_from_history(bvid).await,
         };
         let uid = uid_resolved.as_deref();
+        // history 元数据用的 UID 与下载目录解耦：手动目录仍走 manual 区，
+        // 但看板分组/封面定位依赖 UID，否则下载期间分组显示 "unknown"、
+        // 封面被 /api/cover 落到日期兜底目录。
+        let metadata_uid: Option<String> = uid_resolved
+            .clone()
+            .or_else(|| uid.filter(|u| !u.is_empty()).map(str::to_string));
 
         // 快照博主头像：创建任务时从 bloggers 表复制，供前端展示。
-        let face_url: Option<String> = if let Some(uid_val) = uid {
+        let face_url: Option<String> = if let Some(uid_val) = metadata_uid.as_deref() {
             blogger::Entity::find()
                 .filter(blogger::Column::Uid.eq(uid_val))
                 .one(&self.db)
@@ -103,10 +199,14 @@ impl DownloadManager {
         // aria2 优先；只有重试和实例重建均失败时才降级。
         let engine = self.select_engine().await;
 
-        // 视频流用 .m4s，音频流默认 .m4a；杜比/Hi-Res 命中时由调用方传入 ec3/flac 覆盖
+        // 视频流用 .m4s，音频流默认 .m4a；杜比/Hi-Res 命中时由调用方传入 ec3/flac 覆盖。
+        // durl 直链（.flv/.mp4）音视频已封装，直接用容器扩展名。
+        let muxed_ext = (task_type == "video")
+            .then(|| muxed_direct_link_ext(url))
+            .flatten();
         let default_ext = match task_type {
             "audio" => audio_ext.unwrap_or("m4a"),
-            _ => "m4s",
+            _ => muxed_ext.unwrap_or("m4s"),
         };
         let desired_dir = self
             .templated_download_dir(uid, title, bvid, quality, task_type, page)
@@ -149,6 +249,17 @@ impl DownloadManager {
                 let filename =
                     sanitize_filename(existing.filename.as_deref().unwrap_or(&default_filename));
                 if dir.join(&filename).exists() {
+                    // 完成窗口内的重复请求（前端超时重试、连点）直接幂等返回，
+                    // 不再整段重下只为 SHA-256 比对；窗口外的显式重下仍走比对路径。
+                    if same_source
+                        && self
+                            .recently_completed(&existing.bvid, existing.cid, task_type)
+                            .await
+                    {
+                        return Ok(TaskOutcome::done(format!(
+                            "该{task_type}产物刚下载完成，已保留现有文件"
+                        )));
+                    }
                     // 下载到 .downloading 临时文件，完成后由 monitor_loop
                     // 调用 dedupe_and_finalize_file 进行 SHA-256 比对，避免覆盖原文件。
                     let temp_filename = format!("{stem}.{default_ext}.downloading");
@@ -206,7 +317,10 @@ impl DownloadManager {
             }
         }
 
-        let prepared_audio = if task_type == "video" {
+        // 自动添加音频任务。音频 URL 已在视频落库前解析；失败时撤销视频任务。
+        // durl 直链（flv/mp4 封装流）自带音轨，跳过音频解析与伴生任务，
+        // 否则 get_audio_url 因无 DASH 返回 None 会让整个视频任务误报失败。
+        let prepared_audio = if task_type == "video" && muxed_ext.is_none() {
             let preference = self
                 .settings_service
                 .current()
@@ -238,7 +352,7 @@ impl DownloadManager {
             task_type: Set(task_type.to_string()),
             cid: Set(cid),
             page: Set(page_num),
-            part_title: Set(part_title),
+            part_title: Set(part_title.clone()),
             status: Set("pending".to_string()),
             filename: Set(Some(filename.clone())),
             original_url: Set(Some(url.to_string())),
@@ -264,6 +378,22 @@ impl DownloadManager {
             ..Default::default()
         };
         let task = new_task.insert(&self.db).await?;
+        // 手动下载入队即写 history 占位记录：看板「下载中」由 history 表驱动，
+        // 无记录则下载期间看板无卡片，直到首个子任务完成才出现。
+        // 仅 video/audio：danmaku/comments 单独下载本就不建独立记录（与完成路径一致）。
+        // 占位记录携带 UID/封面目录：下载期间分组即归属博主，封面直接落到任务目录。
+        if source == "manual" && matches!(task_type, "video" | "audio") {
+            self.ensure_history_placeholder(HistoryPlaceholder {
+                bvid,
+                title,
+                uid: metadata_uid.as_deref(),
+                cid,
+                page: page_num,
+                part_title: part_title.as_deref(),
+                cover_dir: Some(dir.as_path()),
+            })
+            .await;
+        }
         self.queue_notify.notify_one(); // 唤醒 monitor_loop 空闲退避，新任务立即被监控
         let (gid, permit) = self
             .dispatch_transfer(engine, task.id, url, bvid, cookies, &dir, &filename)
@@ -278,9 +408,14 @@ impl DownloadManager {
                     error!("回滚 Aria2 任务失败 gid={gid}: {remove_error}");
                 }
             }
-            let _ = download_task::Entity::delete_by_id(task.id)
+            if let Err(e) = download_task::Entity::delete_by_id(task.id)
                 .exec(&self.db)
-                .await;
+                .await
+            {
+                warn!("补偿删除任务行失败 task_id={}: {e}", task.id);
+            }
+            // 手动任务入队时可能已写 history 占位记录，回滚时一并清理
+            self.cleanup_history_placeholder(bvid, cid).await;
             return Err(anyhow!(
                 "下载任务状态持久化失败，已取消外部传输: task_id={}, error={}",
                 task.id,
@@ -317,9 +452,15 @@ impl DownloadManager {
                 if let Some(gid) = runtime_gid.as_deref() {
                     let _ = self.aria2.remove(gid).await;
                 }
-                let _ = download_task::Entity::delete_by_id(task.id)
+                if let Err(e) = download_task::Entity::delete_by_id(task.id)
                     .exec(&self.db)
-                    .await;
+                    .await
+                {
+                    warn!("补偿删除任务行失败 task_id={}: {e}", task.id);
+                }
+                // 音频任务添加失败回滚：清理视频入队时写的 history 占位记录，
+                // 避免看板留下永远 pending 的卡片
+                self.cleanup_history_placeholder(bvid, cid).await;
                 return match audio_result {
                     Ok(result) => Err(anyhow!("自动添加音频任务失败: {}", result.message)),
                     Err(error) => Err(error),
@@ -393,6 +534,11 @@ impl DownloadManager {
         model.generation = Set(next_generation);
         model.completion_triggered = Set(false);
         model.stage = Set("transferring".to_string());
+        // 重试额度按"每次运行"计算：重新派发时清零累计 attempts，
+        // 否则 video_retry/audio_retry 读到历史累计值会提前耗尽自动重试
+        model.attempts = Set(0);
+        model.next_retry_at = Set(None);
+        model.error_kind = Set(None);
         if let Err(e) = model.update(&self.db).await {
             if let Some(gid) = gid.as_deref() {
                 if let Err(remove_error) = self.aria2.remove(gid).await {
@@ -414,35 +560,80 @@ impl DownloadManager {
     }
 
     /// 判断指定词根的最终产物是否已存在。`stem` 单P为 bvid，多P为 `{bvid}_p{page}`。
-    /// 合并产物命名为 `{title}_{stem}.mp4`，故视频按 `starts_with(stem)` 或含 `_{stem}` 匹配。
-    async fn completed_product_exists(dir: &Path, stem: &str, task_type: &str) -> bool {
+    /// 合并产物命名为 `{title}_{stem}.mp4`，匹配规则见 [`product_file_matches`]：
+    /// 仅接受精确命中与标题前缀命中，边界判定与 storage.rs 的去重扫描对齐。
+    pub(super) async fn completed_product_exists(dir: &Path, stem: &str, task_type: &str) -> bool {
+        let extensions: &[&str] = if task_type == "video" {
+            &["mp4", "mkv", "flv", "mov"]
+        } else if task_type == "audio" {
+            &["m4a", "mp3", "aac", "wav", "flac"]
+        } else {
+            return false;
+        };
         let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
             return false;
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            let Some(name) = entry.file_name().into_string().ok() else {
                 continue;
             };
-            let extension = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            if task_type == "video"
-                && matches!(extension.as_str(), "mp4" | "mkv" | "flv" | "mov")
-                && (name.starts_with(stem) || name.contains(&format!("_{stem}")))
-            {
-                return true;
-            }
-            if task_type == "audio"
-                && matches!(extension.as_str(), "m4a" | "mp3" | "aac" | "wav" | "flac")
-                && name.starts_with(stem)
-            {
+            if product_file_matches(&name, stem, extensions) {
                 return true;
             }
         }
         false
+    }
+
+    /// 回滚手动任务时同步清理入队时写入的 history 占位记录：
+    /// 占位行 state=pending 且无完成时间，残留会让看板「下载中」
+    /// 永远挂着一张不会推进的卡片。
+    async fn cleanup_history_placeholder(&self, bvid: &str, cid: Option<i64>) {
+        let mut query = history::Entity::find()
+            .filter(history::Column::Bvid.eq(bvid))
+            .filter(history::Column::State.eq("pending"))
+            .filter(history::Column::DownloadTime.is_null());
+        query = match cid {
+            Some(cid) => query.filter(history::Column::Cid.eq(cid)),
+            None => query.filter(history::Column::Cid.is_null()),
+        };
+        let rows = match query.all(&self.db).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!("查询 history 占位记录失败 {bvid}: {e}");
+                return;
+            }
+        };
+        if rows.is_empty() {
+            return;
+        }
+        if let Err(e) = history::Entity::delete_many()
+            .filter(history::Column::Id.is_in(rows.iter().map(|h| h.id)))
+            .exec(&self.db)
+            .await
+        {
+            warn!("清理 history 占位记录失败 {bvid}: {e}");
+        }
+    }
+
+    /// 记录任务完成时刻，供 `add_task` 在短窗口内幂等吸收重复入队请求。
+    /// 同时顺带清理过期项，缓存规模以最近 10 分钟内的完成为上限。
+    pub(super) async fn record_recent_completion(
+        &self,
+        bvid: &str,
+        cid: Option<i64>,
+        task_type: &str,
+    ) {
+        let mut recent = self.recent_completions.lock().await;
+        recent.retain(|_, at| at.elapsed() < RECENT_COMPLETION_RETENTION);
+        recent.insert(backoff_key(bvid, cid, task_type), Instant::now());
+    }
+
+    /// 任务是否在完成窗口内刚完成（用于吸收前端超时重试造成的重复请求）。
+    async fn recently_completed(&self, bvid: &str, cid: Option<i64>, task_type: &str) -> bool {
+        let recent = self.recent_completions.lock().await;
+        recent
+            .get(&backoff_key(bvid, cid, task_type))
+            .is_some_and(|at| at.elapsed() < RECENT_COMPLETION_WINDOW)
     }
 
     pub async fn retry_task(&self, bvid: &str, task_type: &str) -> Result<TaskOutcome> {
@@ -658,7 +849,7 @@ impl DownloadManager {
     }
 
     /// 暂停下载任务。
-    /// - `task_id = None`：全局暂停（aria2.pauseAll + 持久化所有 downloading/pending 为 paused）。
+    /// - `task_id = None`：全局暂停（逐任务暂停并持久化所有 downloading/pending 为 paused）。
     /// - `task_id = Some(id)`：仅暂停指定任务。仅 downloading/pending 可暂停，其他状态返回可读拒绝信息。
     ///
     /// 暂停后：速度归零、generation+=1（防陈旧回调覆盖）；释放并发额度
@@ -672,7 +863,7 @@ impl DownloadManager {
     }
 
     /// 恢复下载任务。
-    /// - `task_id = None`：全局恢复（aria2.unpauseAll + 重新调度所有 paused 任务）。
+    /// - `task_id = None`：全局恢复（逐任务重新调度所有 paused 任务）。
     /// - `task_id = Some(id)`：仅恢复指定任务。仅 paused 可恢复。
     ///
     /// 恢复时重新解析 URL（B 站 CDN URL 带 deadline 签名，过期会 403），
@@ -683,6 +874,17 @@ impl DownloadManager {
             Some(id) => self.resume_single_task(id).await,
             None => self.resume_all_tasks().await,
         }
+    }
+
+    /// aria2 任务暂停：先优雅 `pause`，失败时降级 `forcePause`。
+    /// 两者都失败说明 gid 已失效或 aria2 异常，调用方不得将任务落库为 paused
+    ///（否则 monitor_loop 不再轮询该 gid，形成"实际仍在下载但状态为暂停"的孤儿任务）。
+    pub(super) async fn pause_gid_with_fallback(&self, gid: &str) -> Result<()> {
+        if let Err(e) = self.aria2.pause(gid).await {
+            warn!("暂停 aria2 任务 gid={gid} 失败，尝试 forcePause: {e}");
+            self.aria2.force_pause(gid).await?;
+        }
+        Ok(())
     }
 
     async fn pause_single_task(&self, task_id: i32) -> Result<TaskOutcome> {
@@ -702,13 +904,24 @@ impl DownloadManager {
             )));
         }
 
-        // Native：取消传输（保留 .part 文件不删；spawn 感知取消后自行退出，不再写终态）
+        // Native：取消传输（spawn 感知取消后自行退出并删除 .downloading 临时文件，
+        // 不再写终态）
         if let Some(token) = self.native_tasks.lock().await.remove(&task.id) {
             token.cancel();
         } else if let Some(gid) = &task.gid {
-            // aria2 任务：调 aria2.pause(gid)；若 gid 已失效（任务已结束/被移除），仅记录警告
-            if let Err(e) = self.aria2.pause(gid).await {
-                warn!("暂停 aria2 任务 gid={gid} 失败: {e}");
+            // aria2 任务：pause 失败降级 forcePause；"cannot be paused now"
+            // 表示任务已被暂停（幂等场景），视为成功照常落库 paused；
+            // 其余失败则不落库，避免 monitor_loop 停止轮询后形成孤儿任务
+            if let Err(e) = self.pause_gid_with_fallback(gid).await {
+                if is_idempotent_pause_err(&e) {
+                    debug!("aria2 任务 gid={gid} 已处于暂停状态");
+                } else {
+                    warn!("暂停 aria2 任务 gid={gid} 失败: {e}");
+                    return Ok(TaskOutcome::rejected(format!(
+                        "暂停任务 {} 失败: {e}",
+                        task.bvid
+                    )));
+                }
             }
         }
 
@@ -751,24 +964,29 @@ impl DownloadManager {
     }
 
     async fn pause_all_tasks(&self) -> Result<TaskOutcome> {
-        // 调 aria2.pauseAll（即使部分任务 gid 已失效也无害）
-        if let Err(e) = self.aria2.pause_all().await {
-            warn!("全局暂停 aria2 任务失败: {e}");
-        }
-
         let tasks = download_task::Entity::find()
             .filter(download_task::Column::Status.is_in(vec!["downloading", "pending"]))
             .all(&self.db)
             .await?;
 
         let mut count = 0usize;
+        let mut failed = 0usize;
         for task in &tasks {
             // Native：取消传输；aria2 单任务 gid 也显式 pause（pauseAll 已涵盖，这里只做兜底）
             if let Some(token) = self.native_tasks.lock().await.remove(&task.id) {
                 token.cancel();
             } else if let Some(gid) = &task.gid {
-                if let Err(e) = self.aria2.pause(gid).await {
-                    warn!("暂停 aria2 任务 gid={gid} 失败: {e}");
+                // pause 失败降级 forcePause；"cannot be paused now" 表示任务已被
+                // 暂停（幂等场景），视为成功照常落库；其余失败跳过该任务，不落库
+                // paused（否则 monitor_loop 停止轮询后形成"实际仍在下载"的孤儿任务）
+                if let Err(e) = self.pause_gid_with_fallback(gid).await {
+                    if is_idempotent_pause_err(&e) {
+                        debug!("全局暂停时 aria2 任务 gid={gid} 已处于暂停状态");
+                    } else {
+                        warn!("全局暂停时暂停 aria2 任务 gid={gid} 失败: {e}");
+                        failed += 1;
+                        continue;
+                    }
                 }
             }
 
@@ -809,8 +1027,13 @@ impl DownloadManager {
             count += 1;
         }
 
-        info!("[DownloadManager] 全局暂停完成，共暂停 {count} 个任务");
-        Ok(TaskOutcome::done(format!("已暂停 {count} 个下载任务")))
+        info!("[DownloadManager] 全局暂停完成，共暂停 {count} 个任务，{failed} 个暂停失败");
+        let msg = if failed > 0 {
+            format!("已暂停 {count} 个下载任务，{failed} 个暂停失败")
+        } else {
+            format!("已暂停 {count} 个下载任务")
+        };
+        Ok(TaskOutcome::done(msg))
     }
 
     async fn resume_single_task(&self, task_id: i32) -> Result<TaskOutcome> {
@@ -836,11 +1059,8 @@ impl DownloadManager {
     }
 
     async fn resume_all_tasks(&self) -> Result<TaskOutcome> {
-        // 调 aria2.unpauseAll（让所有 aria2 内 paused 任务重新进入调度）
-        if let Err(e) = self.aria2.unpause_all().await {
-            warn!("全局恢复 aria2 任务失败: {e}");
-        }
-
+        // 不调全局 unpauseAll：与逐任务 resume 并发会产生
+        // "cannot be unpaused now" 误判，统一走逐任务路径（DB 为事实源）
         let tasks = download_task::Entity::find()
             .filter(download_task::Column::Status.eq("paused"))
             .all(&self.db)
@@ -866,8 +1086,10 @@ impl DownloadManager {
     }
 
     /// 恢复单个 paused 任务的内部实现。
-    /// - aria2 路径：优先 `aria2.unpause(gid)`（保留断点续传控制文件 .aria2）；
-    ///   若 gid 已失效（aria2 重启后 session 丢失），降级为重新解析 URL + 重新 dispatch。
+    /// - aria2 路径：先 tellStatus 校验 gid 当前状态，再决定动作：
+    ///   paused → unpause（保留断点续传控制文件 .aria2）；active/waiting/complete →
+    ///   无需 unpause，直接落库 downloading（complete 由 monitor 轮询补走完成流程）；
+    ///   gid 已失效（aria2 重启后 session 丢失）→ 降级为重新解析 URL + 重新 dispatch。
     /// - native 路径：始终重新解析 URL + 重新 dispatch（native 不支持 .part 续传）。
     ///
     /// 返回 `true` 表示已成功投递至引擎；`false` 表示 URL 解析或投递失败。
@@ -880,49 +1102,103 @@ impl DownloadManager {
 
         // 路径一：原 aria2 任务，gid 仍可能在 aria2 session 中
         if let Some(gid) = &task.gid {
-            // gid 仍在 aria2 中：直接 unpause 即可，保留断点续传控制文件
-            if self.aria2.get_download_status(gid).await.is_ok() {
-                let updated = self
-                    .state_service
-                    .transition(
-                        task.id,
-                        task.generation,
-                        DownloadStatus::Downloading,
-                        DownloadStage::Transferring,
-                    )
-                    .await
-                    .map_err(|e| anyhow!(e.to_string()))?;
-                if let Err(e) = self.aria2.unpause(gid).await {
-                    warn!("恢复 aria2 任务 gid={gid} 失败: {e}");
-                    let _ = self
-                        .state_service
-                        .transition(
-                            task.id,
-                            updated.generation,
-                            DownloadStatus::Paused,
-                            DownloadStage::Transferring,
-                        )
-                        .await;
-                    return Ok(false);
+            match self.aria2.get_download_status(gid).await {
+                Ok(status) => match status.status.as_str() {
+                    // 已在传输或已完成：无需 unpause，直接落库 downloading；
+                    // waiting 由 monitor 归一为 pending，complete 由 monitor 走完成流程
+                    "active" | "waiting" | "complete" => {
+                        let updated = self
+                            .state_service
+                            .transition(
+                                task.id,
+                                task.generation,
+                                DownloadStatus::Downloading,
+                                DownloadStage::Transferring,
+                            )
+                            .await
+                            .map_err(|e| anyhow!(e.to_string()))?;
+                        let mut model: download_task::ActiveModel = updated.into();
+                        model.speed = Set(0);
+                        model.error = Set(None);
+                        model.next_retry_at = Set(None);
+                        if let Err(e) = model.update(&self.db).await {
+                            error!("恢复任务 {} 时持久化状态失败: {e}", task.bvid);
+                            return Ok(false);
+                        }
+                        self.queue_notify.notify_one();
+                        info!(
+                            "[DownloadManager] aria2 任务 {} ({}) 已处于 {} 状态，直接落库恢复",
+                            task.bvid, task.task_type, status.status
+                        );
+                        return Ok(true);
+                    }
+                    // 仍是 paused：unpause 恢复传输
+                    "paused" => {
+                        let updated = self
+                            .state_service
+                            .transition(
+                                task.id,
+                                task.generation,
+                                DownloadStatus::Downloading,
+                                DownloadStage::Transferring,
+                            )
+                            .await
+                            .map_err(|e| anyhow!(e.to_string()))?;
+                        if let Err(e) = self.aria2.unpause(gid).await {
+                            // "cannot be unpaused now"：状态已变（幂等场景），复核后按实际状态处理
+                            if !is_idempotent_unpause_err(&e) {
+                                // 复核：若实际已在传输/完成仍算恢复成功，避免 DB 回滚与 aria2 分叉
+                                match self.aria2.get_download_status(gid).await {
+                                    Ok(recheck)
+                                        if matches!(
+                                            recheck.status.as_str(),
+                                            "active" | "waiting" | "complete"
+                                        ) => {}
+                                    _ => {
+                                        warn!("恢复 aria2 任务 gid={gid} 失败: {e}");
+                                        let _ = self
+                                            .state_service
+                                            .transition(
+                                                task.id,
+                                                updated.generation,
+                                                DownloadStatus::Paused,
+                                                DownloadStage::Transferring,
+                                            )
+                                            .await;
+                                        return Ok(false);
+                                    }
+                                }
+                            }
+                        }
+                        let mut model: download_task::ActiveModel = updated.into();
+                        model.speed = Set(0);
+                        model.error = Set(None);
+                        model.next_retry_at = Set(None);
+                        if let Err(e) = model.update(&self.db).await {
+                            error!("恢复任务 {} 时持久化状态失败: {e}", task.bvid);
+                            let _ = self.aria2.pause(gid).await;
+                            return Ok(false);
+                        }
+                        self.queue_notify.notify_one();
+                        info!(
+                            "[DownloadManager] 已恢复 aria2 任务: {} ({})",
+                            task.bvid, task.task_type
+                        );
+                        return Ok(true);
+                    }
+                    // error 等异常态：走下面的重建路径
+                    _ => {
+                        warn!(
+                            "aria2 gid={} 状态异常（{}），将重新解析 URL 并重建任务",
+                            gid, status.status
+                        );
+                    }
+                },
+                // gid 已失效：走下面的重建路径
+                Err(_) => {
+                    warn!("aria2 gid={} 已失效，将重新解析 URL 并重建任务", gid);
                 }
-                let mut model: download_task::ActiveModel = updated.into();
-                model.speed = Set(0);
-                model.error = Set(None);
-                model.next_retry_at = Set(None);
-                if let Err(e) = model.update(&self.db).await {
-                    error!("恢复任务 {} 时持久化状态失败: {e}", task.bvid);
-                    let _ = self.aria2.pause(gid).await;
-                    return Ok(false);
-                }
-                self.queue_notify.notify_one();
-                info!(
-                    "[DownloadManager] 已恢复 aria2 任务: {} ({})",
-                    task.bvid, task.task_type
-                );
-                return Ok(true);
             }
-            // gid 已失效：走下面的重建路径
-            warn!("aria2 gid={} 已失效，将重新解析 URL 并重建任务", gid);
         }
 
         // 路径二：重建（native 必走；aria2 gid 失效时降级走）
@@ -1034,5 +1310,61 @@ impl DownloadManager {
             task.bvid, task.task_type
         );
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::product_file_matches;
+
+    const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "flv", "mov"];
+
+    #[test]
+    fn product_match_accepts_exact_and_title_prefixed_hits() {
+        // 精确命中：{stem}.{ext}
+        assert!(product_file_matches(
+            "BV1xx411c7mD.mp4",
+            "BV1xx411c7mD",
+            VIDEO_EXTS
+        ));
+        // 标题前缀命中：{title}_{stem}.{ext}
+        assert!(product_file_matches(
+            "标题_BV1xx411c7mD_p2.mp4",
+            "BV1xx411c7mD_p2",
+            VIDEO_EXTS
+        ));
+        // 大小写归一（扩展名大小写不敏感）
+        assert!(product_file_matches(
+            "BV1xx411c7mD.MP4",
+            "BV1xx411c7mD",
+            VIDEO_EXTS
+        ));
+    }
+
+    #[test]
+    fn product_match_rejects_prefix_and_page_boundary_collisions() {
+        // 单P stem 不得命中其他分P产物
+        assert!(!product_file_matches(
+            "BV1xx411c7mD_p2.mp4",
+            "BV1xx411c7mD",
+            VIDEO_EXTS
+        ));
+        // 分P词根不得命中更大页码（_p20）
+        assert!(!product_file_matches(
+            "标题_BV1xx411c7mD_p20.mp4",
+            "BV1xx411c7mD_p2",
+            VIDEO_EXTS
+        ));
+        assert!(!product_file_matches(
+            "BV1xx411c7mD_p20.m4a",
+            "BV1xx411c7mD_p2",
+            &["m4a"]
+        ));
+        // 扩展名不匹配
+        assert!(!product_file_matches(
+            "BV1xx411c7mD.m4s",
+            "BV1xx411c7mD",
+            VIDEO_EXTS
+        ));
     }
 }

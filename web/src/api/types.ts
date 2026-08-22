@@ -8,7 +8,8 @@ export interface ApiError {
   offline?: boolean;
 }
 
-export interface Envelope<T> {
+/** 后端统一响应信封 `{ code, message, data }`（client.ts 已校验其结构）。 */
+export interface ApiResp<T> {
   code: number;
   message: string;
   data: T;
@@ -18,7 +19,8 @@ export interface AuthState {
   authenticated: boolean;
   pairing_open?: boolean;
   pairing_expires_at?: number | null;
-  csrf_token?: string | null;
+  /** 服务器时间（Unix 秒）：用于校准倒计时，消除客户端时钟偏差。 */
+  server_time?: number;
   role?: 'owner' | 'operator' | 'viewer' | null;
   user?: { mid?: number; name?: string; face?: string } | null;
 }
@@ -69,6 +71,11 @@ export interface FoundationStatus {
   restart_required?: boolean;
 }
 
+/**
+ * /api/blogger/list 与 /api/blogger/update 的博主条目（src/models/blogger.rs::to_api
+ * + manage.rs::blogger_api_value 叠加的调度快照字段）。老框架遗留的
+ * running/filter_windows/burn_after_merge/pending_changes 等字段后端从不返回，已清除。
+ */
 export interface Blogger {
   id: number;
   uid: number;
@@ -78,29 +85,31 @@ export interface Blogger {
   sign?: string;
   level?: number;
   fans?: number;
-  videos_count?: number;
   // 监控配置
-  enabled?: boolean;
   monitor_enabled?: boolean;
   min_interval?: number;
   max_interval?: number;
-  filter_window_enabled?: boolean;
-  filter_windows?: Array<{ start: string; end: string }>;
   active_windows?: string[];
   // 增量选项
   download_video?: boolean;
   download_danmaku?: boolean;
   download_comments?: boolean;
   download_cover?: boolean;
-  burn_after_merge?: boolean;
   burn_danmaku?: boolean;
   burn_subtitle?: boolean;
   series_filter_regex?: string;
-  // 其它
-  next_check_at?: number;
-  last_check_at?: number;
-  running?: boolean;
-  pending_changes?: { name?: string; face?: string };
+  // 运行状态（to_api + 调度快照）
+  is_running?: boolean;
+  next_check?: number;
+  runtime_state?: string;
+  pause_reason?: string | null;
+  within_active_window?: boolean;
+  next_action_at?: number | null;
+  next_action_kind?: string | null;
+  is_saved?: boolean;
+  has_auto_task?: boolean;
+  created_at?: string;
+  updated_at?: string;
   // 改名/换头像通知：后端 src/models/blogger.rs::to_api 给出。
   notice_visible?: boolean;
   last_seen_name?: string;
@@ -270,7 +279,80 @@ export interface DownloadTask {
 export interface DownloadHealth {
   aria2_connected: boolean;
   aria2_status?: string;
-  aria2_diagnostics?: Record<string, any>;
+  aria2_diagnostics?: Record<string, unknown>;
+}
+
+/** GET /api/download/status 的活动快照：按任务键组织的条目表（下载 store 归一化）。 */
+export interface DownloadStatusSnapshot {
+  statuses: Record<string, Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+/** WS `download:progress` 事件载荷（src/services/download/status.rs::broadcast_progress）。
+ *  id 是 socketioxide 注入的消息去重 id（非任务 id）。 */
+export interface DownloadProgressEvent {
+  id?: string;
+  task_id?: number | string;
+  bvid?: string;
+  cid?: number;
+  page?: number;
+  part_title?: string;
+  type?: string;
+  status?: string;
+  progress_percent?: number;
+  downloaded_size?: number;
+  total_size?: number;
+  speed?: number;
+  step?: number;
+  total_steps?: number;
+  step_label?: string;
+  error?: string;
+  message?: string;
+  title?: string;
+  priority?: number;
+}
+
+/** GET /api/task/status 的全局聚合（enabled_tasks / active_tasks / waiting_window_tasks）。 */
+export interface TaskStatusSummary {
+  enabled_tasks?: number;
+  active_tasks?: number;
+  waiting_window_tasks?: number;
+  [key: string]: unknown;
+}
+
+/** GET /api/task/next-check 的 bloggers map 单条调度快照（博主 store 映射 BloggerTaskStatus）。 */
+export interface TaskSchedule {
+  monitor_enabled?: boolean;
+  is_running?: boolean;
+  runtime_state?: string;
+  pause_reason?: string | null;
+  within_active_window?: boolean;
+  next_action_at?: number;
+  next_check?: number;
+  [key: string]: unknown;
+}
+
+/** POST /api/setup/apply 的响应。 */
+export interface SetupApplyResult {
+  mode?: string;
+  restart_required?: boolean;
+  main_port?: number;
+  setup_port?: number;
+  main_url?: string;
+  setup_url?: string;
+  [key: string]: unknown;
+}
+
+/** GET /api/logs/* 的原始日志条目（store 归一化成 LogEntry 前的后端形态）。 */
+export interface RawLogEntry {
+  id?: number | string;
+  level?: string;
+  msg?: string;
+  message?: string;
+  uid?: number | string;
+  bvid?: string;
+  time?: string;
+  timestamp?: number;
 }
 
 export interface HistoryEntry {
@@ -286,7 +368,6 @@ export interface HistoryEntry {
   has_danmaku?: boolean;
   has_comments?: boolean;
   has_video?: boolean;
-  has_audio?: boolean;
   has_cover?: boolean;
   local_path?: string;
   relative_path?: string;
@@ -308,7 +389,7 @@ export interface HistoryEntry {
   sha256?: string;
   sha256_last_checked_at?: string;
   can_open_directory?: boolean;
-  sidecar?: Record<string, any>;
+  sidecar?: Record<string, unknown>;
   task?: { status?: string; progress_percent?: number; speed?: number; total_size?: number; downloaded_size?: number; task_id?: number; version?: number; priority?: number; type?: string; error?: string; error_kind?: string; fallback_reason?: string; step?: number; total_steps?: number; step_label?: string };
   burned?: { danmaku?: boolean; subtitle?: boolean };
 }
@@ -404,7 +485,13 @@ export interface LiveSource {
     live_time?: number;
     last_seen_at?: string;
     online?: number;
-    [k: string]: any;
+    /** 后端 runtime 节点的检查状态字段（TabLive 告警条/详情面板直接消费）。 */
+    last_checked_at?: string;
+    next_retry_at?: string;
+    error?: string;
+    risk_limited?: boolean;
+    stale?: boolean;
+    [k: string]: unknown;
   };
 }
 
@@ -477,7 +564,7 @@ export interface LiveDashboard {
     last_success_at?: string;
     last_error?: string;
     risk_backoff_until?: string;
-    [k: string]: any;
+    [k: string]: unknown;
   };
   risk_notice?: string;
   merge_jobs?: LiveMergeJob[];
@@ -562,8 +649,8 @@ export interface Settings {
   // 下载目录整理
   auto_organize?: boolean;
   conflict_strategy?: 'suffix' | 'skip' | 'overwrite' | string;
-  // MD5 完整性校验
-  verify_mode?: 'off' | 'manual' | 'periodic' | string;
+  // MD5 完整性校验（后端合法值：off / on_completion / periodic，见 src/services/settings.rs）
+  verify_mode?: 'off' | 'on_completion' | 'periodic' | string;
   verify_periodic_days?: number;
   verify_periodic_batch?: number;
   verify_concurrency?: number;
@@ -593,16 +680,13 @@ export interface Settings {
   bind_localhost?: boolean;
   // 其它
   revision?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface UpdateStatus {
   current_version?: string;
   latest_version?: string;
   has_update?: boolean;
-  update_available?: boolean;
-  release_url?: string;
-  release_notes?: string;
   last_checked_at?: number;
   policy?: string;
   updatable?: boolean;
@@ -640,9 +724,9 @@ export interface DetectResult {
 
 /** GET /api/settings 的套壳响应。 */
 export interface SettingsPayload {
-  current: Record<string, any>;
-  defaults?: Record<string, any>;
-  constraints?: Record<string, any>;
+  current: Record<string, unknown>;
+  defaults?: Record<string, unknown>;
+  constraints?: Record<string, unknown>;
   secret_configured?: boolean;
 }
 

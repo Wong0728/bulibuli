@@ -81,7 +81,8 @@ resolve_latest_version() {
     local tag=""
     tag="$(download_text "https://github.com/${REPO}/releases/latest/download/latest.json" 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
     if ! [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-        tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+        # 回退只选正式版（vX.Y.Z，无预发布后缀），避免装到 alpha。
+        tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
     fi
     [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || die "无法解析最新 Release 版本"
     printf '%s\n' "${tag}"
@@ -122,7 +123,7 @@ if manifest.get("platform") != "termux" or manifest.get("architecture") != "arm6
     raise SystemExit("package is not a Termux arm64 build")
 if expected and manifest.get("app_version") != expected:
     raise SystemExit("package version mismatch")
-for required in (root / "bulibuli", root / "install.sh", root / "static" / "index.html"):
+for required in (root / "bulibuli", root / "install.sh", root / "static" / "app" / "index.html"):
     if not required.is_file():
         raise SystemExit(f"missing package file: {required.relative_to(root)}")
 for entry in manifest.get("files", []):
@@ -139,7 +140,7 @@ PY
 }
 
 detect_layout() {
-    if [ -x "${SCRIPT_DIR}/${BIN_NAME}" ] && [ -f "${SCRIPT_DIR}/static/index.html" ]; then
+    if [ -x "${SCRIPT_DIR}/${BIN_NAME}" ] && [ -f "${SCRIPT_DIR}/static/app/index.html" ]; then
         APP_DIR="${SCRIPT_DIR}"
         BIN_PATH="${SCRIPT_DIR}/${BIN_NAME}"
         MODE="release-package"
@@ -152,7 +153,7 @@ detect_layout() {
     local repo_root
     repo_root="$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || true)"
     if [ "${BULIBULI_SOURCE_BUILD:-0}" = "1" ] &&
-        [ -f "${repo_root}/Cargo.toml" ] && [ -f "${repo_root}/static/index.html" ]; then
+        [ -f "${repo_root}/Cargo.toml" ] && [ -f "${repo_root}/static/app/index.html" ]; then
         APP_DIR="${repo_root}"
         BIN_PATH="${repo_root}/target/release/${BIN_NAME}"
         MODE="source"
@@ -221,7 +222,6 @@ ensure_remote_package() {
 
 ensure_source() {
     [ "${MODE}" = "source" ] || [ "${MODE}" = "remote-source" ] || return
-    [ "${MODE}" = "remote-source" ] || return
     if [ -f "${APP_DIR}/Cargo.toml" ]; then
         if [ "${APP_VERSION}" != "latest" ]; then
             git -C "${APP_DIR}" fetch --depth 1 origin "${APP_VERSION}" || die "无法获取指定版本 ${APP_VERSION}"

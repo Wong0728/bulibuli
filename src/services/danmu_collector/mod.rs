@@ -6,7 +6,8 @@
 //! 3. 5 秒内发送认证包（op=7，使用登录账号 UID）
 //! 4. 收到认证回复后启动心跳定时器（30 秒间隔）
 //! 5. 循环接收消息 → 解压 → 解析命令 → 通过 channel 发送
-//! 6. 仅对可恢复网络错误重连（最多 3 次，指数退避）
+//! 6. 仅对可恢复网络错误重连（指数退避 + 抖动；连接稳定运行后重连预算归零，
+//!    避免全会话累计导致偶发闪断被永久熔断）
 
 pub mod commands;
 pub mod protocol;
@@ -37,6 +38,13 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const RECV_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RECONNECT_ATTEMPTS: u32 = 3;
 const MAX_SEEN_EVENT_KEYS: usize = 20_000;
+/// 连接稳定运行达到该时长（一个完整接收超时周期）后断开，视为健康连接的
+/// 偶发闪断：重连预算归零重新计数。否则预算全会话累计，第 4 次闪断即永久熔断。
+#[cfg(not(test))]
+const STABLE_CONNECTION_RESET: Duration = RECV_TIMEOUT;
+/// 测试构建下用更短的窗口，让「稳定连接后预算归零」可被快速验证。
+#[cfg(test)]
+const STABLE_CONNECTION_RESET: Duration = Duration::from_millis(150);
 
 /// 弹幕采集器：管理 WebSocket 连接生命周期。
 pub struct DanmuCollector;
@@ -134,6 +142,7 @@ impl DanmuCollector {
             }
             debug!(room_id, %ws_url, "弹幕采集器尝试连接");
 
+            let attempt_started = std::time::Instant::now();
             match Self::connect_and_receive(
                 room_id,
                 account_uid,
@@ -153,6 +162,18 @@ impl DanmuCollector {
                     return;
                 }
                 Err(e) => {
+                    // 连接成功后稳定运行超过一个完整接收周期才断开：视为健康连接
+                    // 的偶发闪断，重连预算归零重新计数，避免全会话累计导致
+                    // 第 4 次闪断（超过 MAX_RECONNECT_ATTEMPTS）后永久熔断。
+                    let uptime = attempt_started.elapsed();
+                    if reconnect_attempts > 0 && uptime >= STABLE_CONNECTION_RESET {
+                        reconnect_attempts = 0;
+                        info!(
+                            room_id,
+                            ?uptime,
+                            "弹幕连接稳定运行后断开，重连预算已归零重新计数"
+                        );
+                    }
                     let _ = tx.try_send(connection_status("degraded", Some(e.to_string())));
                     if is_auth_error(&e) {
                         match (bili_api.as_ref(), cookies.as_deref()) {
@@ -186,8 +207,10 @@ impl DanmuCollector {
                                             attempts = reconnect_attempts,
                                             "弹幕鉴权失败后刷新 token 与服务器列表，退避后重连"
                                         );
-                                        tokio::time::sleep(std::time::Duration::from_secs(
-                                            5u64.min(reconnect_attempts as u64 * 5),
+                                        tokio::time::sleep(with_reconnect_jitter(
+                                            std::time::Duration::from_secs(
+                                                5u64.min(reconnect_attempts as u64 * 5),
+                                            ),
                                         ))
                                         .await;
                                         continue;
@@ -372,7 +395,8 @@ impl DanmuCollector {
                 result = tokio::time::timeout(RECV_TIMEOUT, read.next()) => {
                     match result {
                         Ok(Some(Ok(msg))) => {
-                            if let Message::Binary(data) = msg {
+                            match msg {
+                                Message::Binary(data) => {
                                 match parse_commands(&data) {
                                     Ok(commands) => {
                                         for cmd_json in commands {
@@ -404,6 +428,13 @@ impl DanmuCollector {
                                         debug!(room_id, "解析弹幕命令失败: {e}");
                                     }
                                 }
+                                }
+                                // 服务端主动关闭：立即断开重连，而不是忽略 Close 帧
+                                // 后干等下一个接收超时（最长 60s）才判定断连。
+                                Message::Close(_) => {
+                                    return Err(anyhow!("WebSocket 服务端关闭连接"));
+                                }
+                                _ => {}
                             }
                         }
                         Ok(Some(Err(e))) => {
@@ -470,7 +501,23 @@ fn reconnect_backoff(attempt: u32) -> Duration {
     }
     #[cfg(not(test))]
     {
-        Duration::from_secs(2u64.pow(exponent).min(30))
+        with_reconnect_jitter(Duration::from_secs(2u64.pow(exponent).min(30)))
+    }
+}
+
+/// 给退避时长加 ±20% 抖动：多个直播间同时断网（如本地网络闪断）后，
+/// 避免同频重连形成对弹幕服务器的请求风暴。测试构建下保持原值以稳定时序。
+fn with_reconnect_jitter(base: Duration) -> Duration {
+    #[cfg(test)]
+    {
+        base
+    }
+    #[cfg(not(test))]
+    {
+        use rand::Rng;
+        let factor = rand::rng().random_range(-0.2..=0.2);
+        let millis = (base.as_millis() as f64 * (1.0 + factor)).max(1.0);
+        Duration::from_millis(millis as u64)
     }
 }
 
@@ -483,6 +530,11 @@ fn is_fatal_error(error: &anyhow::Error) -> bool {
 }
 
 fn is_auth_error(error: &anyhow::Error) -> bool {
+    // 优先结构化错误：认证回复携带 B 站错误码（AuthRejected 仅在 code!=0 时构造），
+    // 精确判定后再退回错误文案匹配兜底，文案变更不影响分类行为。
+    if error.downcast_ref::<protocol::AuthRejected>().is_some() {
+        return true;
+    }
     let message = error.to_string().to_ascii_lowercase();
     message.contains("认证失败")
         || message.contains("认证回复")
@@ -689,5 +741,109 @@ mod tests {
         );
         runner.await.expect("collector runner");
         server.await.expect("server task");
+    }
+
+    /// B3 回归：连接成功并稳定运行超过阈值后断开，重连预算必须归零，
+    /// 不能因全会话累计闪断次数而永久熔断。
+    #[tokio::test]
+    async fn stable_connection_resets_reconnect_budget() {
+        let (listener, host) = local_server().await;
+        let port = listener.local_addr().expect("address").port() as i32;
+        let server = tokio::spawn(async move {
+            async fn flash_disconnect(listener: &TcpListener) {
+                let (stream, _) = listener.accept().await.expect("accept client");
+                let ws = accept_async(stream).await.expect("upgrade websocket");
+                let (mut write, mut read) = ws.split();
+                let _ = read.next().await;
+                write
+                    .send(Message::Binary(
+                        make_packet(&serde_json::json!({"code": 0}), op::AUTH_REPLY).into(),
+                    ))
+                    .await
+                    .expect("send auth reply");
+                write.close().await.expect("close websocket");
+            }
+            // 两次闪断：消耗 2 次预算
+            flash_disconnect(&listener).await;
+            flash_disconnect(&listener).await;
+            // 第三次：认证成功后稳定运行超过 STABLE_CONNECTION_RESET 再断开
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let ws = accept_async(stream).await.expect("upgrade websocket");
+            let (mut write, mut read) = ws.split();
+            let _ = read.next().await;
+            write
+                .send(Message::Binary(
+                    make_packet(&serde_json::json!({"code": 0}), op::AUTH_REPLY).into(),
+                ))
+                .await
+                .expect("send auth reply");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            write.close().await.expect("close stable websocket");
+            // 若预算未归零，接下来第 4 次闪断会触发永久熔断
+            flash_disconnect(&listener).await;
+            // 最后一条连接保持打开，等待测试取消
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let ws = accept_async(stream).await.expect("upgrade websocket");
+            let (mut write, mut read) = ws.split();
+            let _ = read.next().await;
+            write
+                .send(Message::Binary(
+                    make_packet(&serde_json::json!({"code": 0}), op::AUTH_REPLY).into(),
+                ))
+                .await
+                .expect("send auth reply");
+            let _ = read.next().await;
+            let _ = write.close().await;
+        });
+
+        let (tx, mut rx) = mpsc::channel(64);
+        let cancellation = CancellationToken::new();
+        let runner = tokio::spawn(DanmuCollector::run_loop(
+            1,
+            7,
+            "token".to_owned(),
+            vec![(host, port)],
+            None,
+            None,
+            cancellation.clone(),
+            tx,
+        ));
+        // 共 5 次连接（2 闪断 + 1 稳定 + 1 闪断 + 1 保持），
+        // 若稳定连接未归零预算，第 4 次断开后会发布 unavailable。
+        let mut capturing = 0usize;
+        let mut unavailable = false;
+        let mut last_status = String::new();
+        while capturing < 5 {
+            let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await
+            else {
+                break;
+            };
+            let status = event
+                .raw
+                .pointer("/data/status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<none>")
+                .to_string();
+            eprintln!("[test] status={status}");
+            match status.as_str() {
+                "capturing" => capturing += 1,
+                "unavailable" => {
+                    unavailable = true;
+                    break;
+                }
+                _ => {}
+            }
+            last_status = status;
+        }
+        cancellation.cancel();
+        // 用超时保护 JoinHandle：熔断路径下 server 会停在多余的 accept 上，
+        // 无超时保护会把「断言失败」拖成「测试挂死」。
+        let _ = tokio::time::timeout(Duration::from_secs(5), runner).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+        assert!(!unavailable, "稳定连接后断开不得触发永久熔断");
+        assert_eq!(
+            capturing, 5,
+            "应完成全部 5 次连接（预算已归零），last_status={last_status}"
+        );
     }
 }

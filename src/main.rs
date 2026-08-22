@@ -25,12 +25,13 @@ async fn main() -> anyhow::Result<()> {
     }
     install_crypto_provider()?;
     if let Err(e) = run(args).await {
-        // 在 tracing 初始化之前用 eprintln 确保错误可见
+        // 在 tracing 初始化之前用 eprintln 确保错误可见；随后直接 exit(1)，
+        // 避免错误再经 Termination 的 Debug 输出打印第二遍（stderr 双份）。
         eprintln!(
             "{}",
             app::term_style::error(&format!("应用启动失败: {e:#}"))
         );
-        return Err(e);
+        std::process::exit(1);
     }
     Ok(())
 }
@@ -45,6 +46,7 @@ fn install_crypto_provider() -> anyhow::Result<()> {
 }
 
 async fn run(args: Vec<String>) -> anyhow::Result<()> {
+    validate_cli_args(&args)?;
     let (config, paths) = load_config()?;
     // 上次运行暂存的更新在启动早期完成替换（只换程序文件、不碰 data/）。
     // tracing 尚未初始化，错误用 eprintln 保证可见但不阻塞启动。
@@ -55,9 +57,32 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
         );
     }
     if args.first().is_some_and(|value| value == "ctl") {
-        let response = app::control::run_client(&paths.data_dir, &args[1..]).await?;
-        println!("{response}");
-        return Ok(());
+        // 退出码约定：0 成功 / 1 命令被拒绝或执行失败 / 2 本地连接失败。
+        // 响应本来就是 JSON 信封，按 ok 字段判定结果供 AI/脚本靠 exit code 决策。
+        return match app::control::run_client(&paths.data_dir, &args[1..]).await {
+            Ok(response) => {
+                let envelope: Result<serde_json::Value, _> = serde_json::from_str(&response);
+                match envelope {
+                    Ok(value) if value.get("ok") == Some(&serde_json::Value::Bool(false)) => {
+                        let error = value
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("未知错误");
+                        let code = value.get("code").and_then(|v| v.as_str()).unwrap_or("-");
+                        eprintln!("ctl 命令失败 [{code}]: {error}");
+                        std::process::exit(1);
+                    }
+                    _ => {
+                        println!("{response}");
+                        Ok(())
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("ctl 连接失败（服务未运行？）: {e:#}");
+                std::process::exit(2);
+            }
+        };
     }
 
     // `--open` / `open`：仅打开浏览器到网页管理界面，不启动服务。
@@ -78,6 +103,12 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
 
     let console_writer = app::tui::init(interactive);
     app::tracing_setup::init_tracing(&paths.data_dir.join("logs"), console_writer)?;
+
+    // 防双实例：对 data/bulibuli.lock 加排他文件锁，句柄在进程生命周期内持有。
+    // 拿不到锁说明已有实例在运行，直接报错退出。
+    // 错误链已含"实例锁被占用（可能已有实例在运行）"上下文，由 main 的
+    // eprintln 统一打印一次即可；这里不再先 error! 一遍避免双份输出。
+    let _instance_lock = acquire_instance_lock(&paths.data_dir)?;
 
     info!("starting {} v{}", config.app_name, config.app_version);
     let db = init_database(&paths, &config).await?;
@@ -101,13 +132,22 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     // 启动 Setup 独立端口服务（始终 localhost，供首次设置向导和重新配置使用）
     // 必须先于 onboarding 启动，这样 onboarding 打开浏览器时服务器已就绪。
     let actual_setup_port = match app::setup_server::start_setup_server(state.clone()).await {
-        Ok(port) => {
+        Ok(port) if port != 0 => {
             info!("setup server started on port {port}");
             port
         }
+        // 0 = 未启动：onboarding 已完成（默认模式）或 BILI__SETUP_PORT_ENABLED=false。
+        Ok(_) => {
+            info!("setup server 未启动");
+            0
+        }
         Err(e) => {
-            tracing::warn!(%e, "setup server 启动失败，使用默认端口");
-            config_port + 1
+            // 不再回退到"假端口"（port+1 上并无服务监听，浏览器会指向连接拒绝地址）。
+            // 需要该端口却绑定失败时明确报错退出，让用户看到真实原因。
+            return Err(anyhow::anyhow!(
+                "Setup 端口绑定失败（首次配置向导依赖该端口，请检查端口 {} 是否被占用）: {e}",
+                config_port + 1
+            ));
         }
     };
 
@@ -138,70 +178,25 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
         .start_cleanup_task(state.infra.cancellation.clone());
 
     // 先绑定端口再启动 TUI/浏览器，确保浏览器打开时服务器已就绪。
-    let (listener, actual_port) = match app::server::bind_main_listener(&state).await {
-        Ok(result) => result,
-        Err(e) => {
-            error!("主服务器端口绑定失败: {e}");
-            return Err(e);
-        }
+    // 失败原因已包含在错误链里，交由 main 的 eprintln 打印一次（避免双份输出）。
+    let (listener, actual_port) = app::server::bind_main_listener(&state).await?;
+
+    // 首次/后续启动统一走 TUI：banner 与摘要经 console_line 进日志缓冲，TUI 接管后首屏可见。
+    // 状态栏已含 URL/模式/AI，这里只补充状态栏没有的增量信息。
+    let bili_text = match startup_state.bili_logged_in_uid {
+        Some(uid) => format!("B站登录: 已登录({uid})"),
+        None => "B站登录: 未登录".to_string(),
     };
+    app::tui::console_line(bili_text);
+    let main_url = app::server::main_url(&state);
+    app::tui::console_line(format!("网页管理: {main_url}"));
+    app::tui::console_line("正在自动打开浏览器...".to_string());
+    app::onboarding::open_browser_safe(&main_url);
 
-    let is_first_launch = !startup_state.onboarding_completed;
     let mut tui_handle = None;
-    if is_first_launch {
-        info!("首次启动，请在浏览器中完成设置向导");
-        app::control::start_stdin_loop(state.clone());
-    } else {
-        // 后续启动：显示状态摘要（TUI 启动前用 println，用户可见）
-        let mode = crate::services::security_config::SecurityConfigService::load(
-            &state.infra.paths.data_dir,
-            &state.infra.paths.app_root,
-        )
-        .map(|s| s.current().mode)
-        .unwrap_or(crate::services::security_config::AccessMode::Local);
-        let mode_text = match mode {
-            crate::services::security_config::AccessMode::Local => "本机",
-            crate::services::security_config::AccessMode::Lan => "局域网",
-            crate::services::security_config::AccessMode::Proxy => "代理",
-        };
-        let ai_text = if startup_state.ai_skill_enabled {
-            "已启用"
-        } else {
-            "未启用"
-        };
-        let bili_text = match startup_state.bili_logged_in_uid {
-            Some(uid) => format!("已登录({uid})"),
-            None => "未登录".to_string(),
-        };
-        println!("═══════════════════════════════════════════════════════");
-        println!("  补哩补哩 bulibuli v{}", env!("CARGO_PKG_VERSION"));
-        let main_url = app::server::main_url(&state);
-        println!("  网页管理: {}", app::term_style::url(&main_url));
-        println!(
-            "  监听模式: {} | AI 模式: {} | B站: {}",
-            app::term_style::ok(mode_text),
-            if startup_state.ai_skill_enabled {
-                app::term_style::ok(ai_text)
-            } else {
-                app::term_style::dim(ai_text)
-            },
-            if startup_state.bili_logged_in_uid.is_some() {
-                app::term_style::ok(&bili_text)
-            } else {
-                app::term_style::dim(&bili_text)
-            },
-        );
-        println!();
-        println!("  {}", app::term_style::dim("正在自动打开浏览器..."));
-        println!("  {}", app::term_style::dim("Ctrl+C 停止服务"));
-        println!("═══════════════════════════════════════════════════════");
-
-        app::onboarding::open_browser_safe(&main_url);
-
-        match app::tui::start(state.clone()) {
-            Some(handle) => tui_handle = Some(handle),
-            None => app::control::start_stdin_loop(state.clone()),
-        }
+    match app::tui::start(state.clone()) {
+        Some(handle) => tui_handle = Some(handle),
+        None => app::control::start_stdin_loop(state.clone()),
     }
 
     state.media.download_manager.start_monitor().await;
@@ -239,12 +234,32 @@ fn handle_early_cli(args: &[String]) -> Option<anyhow::Result<()>> {
         }
         Some("--help") | Some("-h") => {
             println!(
-                "补哩补哩 bulibuli {}\n\n用法:\n  bulibuli                 启动服务\n  bulibuli --version       输出版本并退出\n  bulibuli --help          显示帮助并退出\n  bulibuli ctl <command>   执行高级控制命令\n\n常用控制命令（需服务已运行）:\n  bulibuli ctl sys status\n  bulibuli ctl sys ffmpeg-test\n  bulibuli ctl sys aria2-restart\n  bulibuli ctl dl status\n\n提示：ctl 命令默认仅放行 status/help/quit/ai，先执行 `bulibuli ctl ai on` 启用 AI Skill 模式后，AI 可执行与人工相同的全部命令（含 mode/access/geo/trust/pair）。",
+                "补哩补哩 bulibuli {}\n\n用法:\n  bulibuli                 启动服务\n  bulibuli open            打开浏览器到网页管理界面后退出\n  bulibuli --version       输出版本并退出\n  bulibuli --help          显示帮助并退出\n  bulibuli ctl <command>   执行高级控制命令\n\n常用控制命令（需服务已运行）:\n  bulibuli ctl sys status\n  bulibuli ctl sys ffmpeg-test\n  bulibuli ctl sys aria2-restart\n  bulibuli ctl dl status\n\n提示：ctl 命令默认仅放行 status/help/quit/ai/pair，先执行 `bulibuli ctl ai on` 启用 AI Skill 模式后，AI 可执行与人工相同的全部命令（含 mode/access/geo/trust）。",
                 env!("CARGO_PKG_VERSION")
             );
             Some(Ok(()))
         }
         _ => None,
+    }
+}
+
+/// 校验剩余命令行参数：合法入口仅 `ctl <command...>` / `open` / `--open`，
+/// 其余（含拼写错误的 flag，如 `--potr`）直接报错而非静默忽略——否则用户
+/// 以为参数生效了。`ctl` 的子命令合法性由 control 层自行校验。
+fn validate_cli_args(args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("ctl") => Ok(()),
+        Some("open") | Some("--open") | None => {
+            if let Some(extra) = args.get(1) {
+                return Err(anyhow::anyhow!(
+                    "未知命令行参数 `{extra}`；用法见 `bulibuli --help`"
+                ));
+            }
+            Ok(())
+        }
+        Some(other) => Err(anyhow::anyhow!(
+            "未知命令行参数 `{other}`；用法见 `bulibuli --help`"
+        )),
     }
 }
 
@@ -255,6 +270,28 @@ fn read_actual_port(paths: &crate::config::AppPaths) -> Option<u16> {
         .and_then(|s| s.trim().parse().ok())
 }
 
+/// 对 `data/bulibuli.lock` 加排他文件锁防止双实例。
+/// 返回的文件句柄必须由调用方持有到进程结束，drop 后锁自动释放。
+fn acquire_instance_lock(data_dir: &std::path::Path) -> anyhow::Result<std::fs::File> {
+    use anyhow::Context;
+    use fs2::FileExt;
+    std::fs::create_dir_all(data_dir).context("创建数据目录失败")?;
+    let lock_path = data_dir.join("bulibuli.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("打开实例锁文件失败: {}", lock_path.display()))?;
+    file.try_lock_exclusive().with_context(|| {
+        format!(
+            "实例锁被占用（可能已有实例在运行）: {}",
+            lock_path.display()
+        )
+    })?;
+    Ok(file)
+}
+
 #[cfg(test)]
 mod tls_tests {
     #[test]
@@ -262,6 +299,19 @@ mod tls_tests {
         assert!(super::handle_early_cli(&["--version".to_string()]).is_some());
         assert!(super::handle_early_cli(&["--help".to_string()]).is_some());
         assert!(super::handle_early_cli(&["ctl".to_string()]).is_none());
+    }
+
+    #[test]
+    fn unknown_cli_args_are_rejected() {
+        // 拼写错误的 flag 必须报错而非静默忽略。
+        assert!(super::validate_cli_args(&["--potr".to_string(), "8080".into()]).is_err());
+        assert!(super::validate_cli_args(&["sreve".to_string()]).is_err());
+        // open 不接受多余参数。
+        assert!(super::validate_cli_args(&["open".to_string(), "extra".into()]).is_err());
+        // 合法入口放行。
+        assert!(super::validate_cli_args(&[]).is_ok());
+        assert!(super::validate_cli_args(&["ctl".to_string(), "sys status".into()]).is_ok());
+        assert!(super::validate_cli_args(&["--open".to_string()]).is_ok());
     }
 
     #[test]

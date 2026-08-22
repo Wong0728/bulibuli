@@ -5,16 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>补哩补哩 bulibuli</title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon" />
-    <!-- 字体基底：与原版 vanilla JS 时代一致；保证图标 (Font Awesome 6) 与
-         等宽字体 (JetBrains Mono) 在新 Vue 框架里仍按原版样式渲染。 -->
     <link rel="stylesheet" href="/app/css/lib/jetbrains-mono.css" />
-    <link rel="stylesheet" href="/app/css/lib/fontawesome.min.css" />
-    <!-- 复用旧版已验证的本地二维码渲染器，避免新增依赖。 -->
-    <script src="/js/qrcode.min.js"></script>
-    <script type="module" crossorigin src="/app/assets/index-0UnvH3pP.js"></script>
-    <link rel="stylesheet" crossorigin href="/app/assets/index-BJxnTHhD.css">
+    <!-- fontawesome（约 100KB CSS + 字体）非首屏必需：用 media="print" 欺骗加载 + onload 切回 all，
+         异步加载不阻塞首屏渲染；图标区在加载完成前以无图标形态短暂降级。 -->
+    <link rel="stylesheet" href="/app/css/lib/fontawesome.min.css" media="print" onload="this.media='all'" />
+    <noscript><link rel="stylesheet" href="/app/css/lib/fontawesome.min.css" /></noscript>
+    <script type="module" crossorigin src="/app/assets/index-1RsrdwO2.js"></script>
+    <link rel="modulepreload" crossorigin href="/app/assets/vendor-Cu74fIAe.js">
+    <link rel="stylesheet" crossorigin href="/app/assets/index-B5PfPdCF.css">
   </head>
   <body>
     <div id="app"></div>
+    <!-- 二维码库（约 23KB）仅扫码登录弹窗使用：已改为 CookieLoginModals 打开弹窗时动态注入加载，
+         不再随首屏 HTML 下发。 -->
   </body>
 </html>

@@ -36,6 +36,8 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 # 数据库（使用 rustls，避免依赖系统 OpenSSL）
 sea-orm = { version = "2.0", default-features = false, features = ["macros", "runtime-tokio", "sqlx-sqlite", "with-chrono", "with-json"] }
 sea-orm-migration = { version = "2.0", default-features = false, features = ["runtime-tokio", "sqlx-sqlite"] }
+# 直接引用 sqlx：连接池 PRAGMA 必须通过 SqliteConnectOptions 才能对每个池化连接生效
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
 
 # WebSocket / Socket.IO
 socketioxide = { version = "0.18", features = ["state"] }
@@ -103,7 +105,7 @@ prost = "0.13"
 
 # Windows 专用：用 Job Object 确保父进程退出（含被强杀）时子进程 aria2c 一起被系统结束，避免残留占用下载目录
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [dev-dependencies]
 # 弹幕协议边界测试：随机包头、压缩正文和嵌套包均必须返回错误或结果，不能 panic。
@@ -113,4 +115,6 @@ proptest = "1"
 strip = true
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# 保持 unwind：download/live_recorder 等后台任务依赖 catch_unwind 兜底回滚状态，
+# abort 会让任一 worker panic 直接带走整个进程（经 Job Object 连带杀 aria2c）。
+panic = "unwind"

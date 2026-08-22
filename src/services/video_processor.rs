@@ -9,7 +9,7 @@ use crate::config::AppPaths;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 
 pub type MergeCallback = Box<dyn FnOnce(MergeResult) + Send + Sync>;
 pub type ProgressCallback = Box<dyn Fn(MergeProgress) + Send + Sync>;
@@ -51,6 +51,12 @@ pub struct VideoProcessor {
     paths: Arc<AppPaths>,
     custom_ffmpeg_path: Option<String>,
     tasks: Arc<Mutex<HashMap<String, MergeTaskInfo>>>,
+    /// 直播可用的 FFmpeg 探测缓存：外层 None = 未探测，
+    /// 内层 None = 已探测但所有候选都不支持网络流/FLV。
+    live_ffmpeg_cache: Arc<Mutex<Option<Option<PathBuf>>>>,
+    /// 合并并发闸门：批量重试或集中完成时避免同时拉起 N 个 ffmpeg
+    /// （与烧录 Semaphore(2)、下载并发闸门同思路）。
+    pub(crate) merge_gate: Arc<Semaphore>,
 }
 
 impl VideoProcessor {
@@ -59,6 +65,8 @@ impl VideoProcessor {
             paths,
             custom_ffmpeg_path: None,
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            live_ffmpeg_cache: Arc::new(Mutex::new(None)),
+            merge_gate: Arc::new(Semaphore::new(2)),
         }
     }
 }

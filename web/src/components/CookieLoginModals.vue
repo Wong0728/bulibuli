@@ -30,6 +30,43 @@ let qrGeneration = 0;
 const qrRoot = ref<HTMLElement | null>(null);
 useModalFocus(showQr, qrRoot, closeQrLogin);
 
+/** 本地 qrcode.min.js（UMD）暴露的全局渲染器；vendored 库无类型声明，这里补最小接口。 */
+interface QrcodeRenderer {
+  toCanvas(canvas: HTMLCanvasElement | null, text: string, opts?: { width?: number; margin?: number; color?: { dark?: string; light?: string } }): Promise<unknown>;
+}
+
+/** 二维码库（约 23KB）只在打开扫码弹窗时按需加载，不进首屏关键路径。 */
+let qrcodeLoader: Promise<QrcodeRenderer> | null = null;
+function loadQrcodeRenderer(): Promise<QrcodeRenderer> {
+  if (!qrcodeLoader) {
+    qrcodeLoader = new Promise((resolve, reject) => {
+      const win = window as unknown as Record<string, unknown>;
+      const ready = (lib: unknown): lib is QrcodeRenderer =>
+        !!lib && typeof (lib as QrcodeRenderer).toCanvas === 'function';
+      if (ready(win.QRCode)) {
+        resolve(win.QRCode);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = '/app/assets/qrcode.min.js';
+      script.async = true;
+      script.onload = () => {
+        if (ready(win.QRCode)) resolve(win.QRCode);
+        else {
+          qrcodeLoader = null;
+          reject(new Error('QRCode 库加载失败，请刷新页面重试'));
+        }
+      };
+      script.onerror = () => {
+        qrcodeLoader = null;
+        reject(new Error('QRCode 库未加载，请检查网络连接或刷新页面'));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return qrcodeLoader;
+}
+
 // 与全局 cookieLoginVisible 同步：App.vue 的"未登录"按钮 / TabSettings 的"扫码登录" 共享
 watch(() => app.cookieLoginVisible, (v) => {
   if (v) {
@@ -70,11 +107,8 @@ async function refreshQrcode() {
   qrHint.value = '正在获取二维码...';
   refreshBtnVisible.value = false;
   try {
-    // 检查 QRCode 库是否加载（老框架在请求前检查）。
-    const renderer = (window as any).QRCode;
-    if (typeof renderer?.toCanvas !== 'function') {
-      throw new Error('QRCode 库未加载，请检查网络连接或刷新页面');
-    }
+    // 按需加载二维码渲染库（对齐老框架"请求前检查库是否就绪"，未就绪则现场注入 script）。
+    const renderer = await loadQrcodeRenderer();
     const data = await cookiesApi.qrcodeGenerate();
     if (generation !== qrGeneration || !showQr.value) return;
     // 对齐老框架 getQRCodePayload：url / qrcode_key 必须是非空字符串。

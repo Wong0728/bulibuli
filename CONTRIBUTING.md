@@ -16,7 +16,7 @@ python build.py --check
 Frontend changes also require:
 
 ```bash
-cd static/js
+cd web
 npm ci --ignore-scripts
 npm run build
 npm run test:smoke

@@ -108,11 +108,11 @@
     word-break: break-all;
 }
 
-/* ===== ÍøÂç½µ¼¶£¨¶ÔÆëÀÏ¿ò¼Ü network.js network-disabled£©=====
- * ÀëÏß/ºó¶Ë²»¿ÉÓÃÊ±»Ò»¯ĞèÒªºó¶ËµÄ¿Ø¼ş£»´¿±¾µØ UI ²Ù×÷£¨LOCAL_ONLY_ACTIONS£©
- * ¾­ :not() °×Ãûµ¥·ÅĞĞ£»data-network-required Óë¶ÀÁ¢°´Å¥ id ÎŞ»íÃâ
- * £¨ÀÏ¿ò¼Ü updateNetworkDisabledButtons µÄÈıÀà½ûÓÃÄ¿±êÒ»ÖÂ£©¡£
- * µã»÷À¹½ØÓÉ App.vue µÄ guardNetworkAction capture ÊØÎÀÅäºÏÍê³É¡£ */
+/* ===== ç½‘ç»œé™çº§ï¼ˆå¯¹é½è€æ¡†æ¶ network.js network-disabledï¼‰=====
+ * ç¦»çº¿/åç«¯ä¸å¯ç”¨æ—¶ç°åŒ–éœ€è¦åç«¯çš„æ§ä»¶ï¼›çº¯æœ¬åœ° UI æ“ä½œï¼ˆLOCAL_ONLY_ACTIONSï¼‰
+ * ç» :not() ç™½åå•æ”¾è¡Œï¼›data-network-required ä¸ç‹¬ç«‹æŒ‰é’® id æ— è±å…
+ * ï¼ˆè€æ¡†æ¶ updateNetworkDisabledButtons çš„ä¸‰ç±»ç¦ç”¨ç›®æ ‡ä¸€è‡´ï¼‰ã€‚
+ * ç‚¹å‡»æ‹¦æˆªç”± App.vue çš„ guardNetworkAction capture å®ˆå«é…åˆå®Œæˆã€‚ */
 .network-degraded [data-action]:not([data-action="switch-tab"]):not([data-action="switch-board-tab"]):not([data-action="close-video-drawer"]):not([data-action="close-blogger-modal"]):not([data-action="close-add-blogger-modal"]):not([data-action="close-edit-blogger-modal"]):not([data-action="close-qr-modal"]):not([data-action="close-blogger-notice-modal"]):not([data-action="dismiss-network-toast"]):not([data-action="dismiss-cookie-warning"]):not([data-action="toggle-manual-cookie"]):not([data-action="add-time-point"]):not([data-action="remove-time-point"]):not([data-action="select-quality"]):not([data-action="toggle-all-pages"]):not([data-action="toggle-all-episodes"]):not([data-action="browser-download-master"]):not([data-action="browser-download-check"]),
 .network-degraded [data-network-required],
 .network-degraded :is(#blogger-search-btn, #manual-query-btn, #manual-resolve-btn, #show-add-blogger-btn, #detail-start-btn, #detail-stop-btn, #board-refresh-btn) {
@@ -121,7 +121,7 @@
     filter: grayscale(0.5);
 }
 
-/* ·şÎñÆ÷×´Ì¬Ö¸Ê¾Æ÷¿Éµã»÷£¨¶ÔÆëÀÏ¿ò¼Ü updateServerStatus µÄµã»÷·´À¡£©¡£ */
+/* æœåŠ¡å™¨çŠ¶æ€æŒ‡ç¤ºå™¨å¯ç‚¹å‡»ï¼ˆå¯¹é½è€æ¡†æ¶ updateServerStatus çš„ç‚¹å‡»åé¦ˆï¼‰ã€‚ */
 .server-status {
     cursor: pointer;
 }

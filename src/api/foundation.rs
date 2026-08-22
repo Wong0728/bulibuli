@@ -2,9 +2,10 @@
 //! 可写的 Setup API 只由 `setup_server` 提供。
 
 use crate::error::ApiResponse;
+use crate::services::auth::SessionAuth;
 use crate::services::security_config::AccessMode;
 use crate::state::SharedState;
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::Extension, extract::State, routing::get, Json, Router};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 
@@ -17,13 +18,18 @@ struct FoundationStatus {
     configuration_status: &'static str,
     ai_skill_enabled: bool,
     /// AI Skill 文件的绝对路径：发给 AI 前可直接复制使用。
-    ai_skill_path: String,
+    /// 仅 Owner 会话可见；Viewer/Operator 只读角色脱敏为 null，
+    /// 避免向受限会话泄露服务器本机绝对路径（S4）。
+    ai_skill_path: Option<String>,
     access_mode: &'static str,
     setup_access: &'static str,
     restart_required: bool,
 }
 
-async fn status(State(state): State<SharedState>) -> Json<ApiResponse<FoundationStatus>> {
+async fn status(
+    State(state): State<SharedState>,
+    Extension(session): Extension<Option<SessionAuth>>,
+) -> Json<ApiResponse<FoundationStatus>> {
     let active = state.bili.security.current();
     let configured = crate::services::security_config::SecurityConfigService::load(
         &state.infra.paths.data_dir,
@@ -36,17 +42,20 @@ async fn status(State(state): State<SharedState>) -> Json<ApiResponse<Foundation
         AccessMode::Lan => "lan",
         AccessMode::Proxy => "proxy",
     };
+    let is_owner = session.as_ref().is_some_and(|value| value.role.is_owner());
     Json(ApiResponse::success(FoundationStatus {
         configuration_status: "normal",
         ai_skill_enabled: state.infra.ai_skill_enabled.load(Ordering::Relaxed),
-        ai_skill_path: state
-            .infra
-            .paths
-            .app_root
-            .join("docs")
-            .join("skill.md")
-            .to_string_lossy()
-            .replace('\\', "/"),
+        ai_skill_path: is_owner.then(|| {
+            state
+                .infra
+                .paths
+                .app_root
+                .join("docs")
+                .join("skill.md")
+                .to_string_lossy()
+                .replace('\\', "/")
+        }),
         access_mode,
         // Setup 监听器按设计只绑定回环地址；未来的短时签名 Setup URL
         // 可以在不扩大主 API 暴露面的前提下改变这一点。

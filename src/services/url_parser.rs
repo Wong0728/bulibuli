@@ -106,17 +106,22 @@ pub async fn resolve_media_input(
     parse_media_input(trimmed)
 }
 
+/// B 站官方域名白名单：b23/短链解析的最终结果 URL 必须落在这些域名（或其子域）上。
+/// 该校验与 TLS 校验开关解耦：即使匿名客户端按配置关闭了证书校验
+/// （`tls_verify=false`，存在 MITM 风险），解析结果域名不在白名单也一律拒绝，
+/// 防止被污染的跳转目标混入后续业务流程。
+fn is_bilibili_trusted_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    ["bilibili.com", "bilibili.tv", "b23.tv", "hdslb.com"]
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
 fn is_allowed_b23_redirect_host(url: &url::Url) -> bool {
     matches!(url.scheme(), "http" | "https")
         && url
             .host_str()
-            .map(|host| {
-                let host = host.to_ascii_lowercase();
-                host == "b23.tv"
-                    || host.ends_with(".b23.tv")
-                    || host == "bilibili.com"
-                    || host.ends_with(".bilibili.com")
-            })
+            .map(is_bilibili_trusted_host)
             .unwrap_or(false)
 }
 
@@ -124,10 +129,7 @@ fn is_final_bilibili_url(url: &url::Url) -> bool {
     url.scheme() == "https"
         && url
             .host_str()
-            .map(|host| {
-                let host = host.to_ascii_lowercase();
-                host == "bilibili.com" || host.ends_with(".bilibili.com")
-            })
+            .map(is_bilibili_trusted_host)
             .unwrap_or(false)
 }
 
@@ -173,5 +175,74 @@ mod tests {
         assert!(!is_allowed_b23_redirect_host(
             &url::Url::parse("https://evil.example/BV1xx411c7mD").expect("evil")
         ));
+    }
+
+    #[test]
+    fn final_url_whitelist_covers_official_domains_only() {
+        // 白名单与 TLS 开关解耦：仅 B 站官方域名（含子域）可通过。
+        for ok in [
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+            "https://b23.tv/BV1xx411c7mD",
+            "https://www.bilibili.tv/video/BV1xx411c7mD",
+            "https://i0.hdslb.com/bfs/face.png",
+        ] {
+            assert!(
+                is_final_bilibili_url(&url::Url::parse(ok).expect("ok")),
+                "应放行: {ok}"
+            );
+        }
+        for bad in [
+            "https://evil.example/BV1xx411c7mD",
+            "https://bilibili.com.evil.example/BV1xx411c7mD",
+            "http://www.bilibili.com/video/BV1xx411c7mD",
+        ] {
+            assert!(
+                !is_final_bilibili_url(&url::Url::parse(bad).expect("bad")),
+                "应拒绝: {bad}"
+            );
+        }
+    }
+
+    mod proptest_suite {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// 任意输入（含乱码、超长、控制字符）解析不得 panic；
+            /// 接受的结果必须落在五种已知变体之一。
+            #[test]
+            fn parse_media_input_never_panics_and_result_is_bounded(input in ".*") {
+                if let Ok(resolved) = parse_media_input(&input) {
+                    prop_assert!(matches!(
+                        resolved,
+                        ResolvedMedia::VideoBv(_)
+                            | ResolvedMedia::VideoAv(_)
+                            | ResolvedMedia::Episode(_)
+                            | ResolvedMedia::Season(_)
+                            | ResolvedMedia::Course(_)
+                    ));
+                }
+            }
+
+            /// 白名单属性：无论 host 如何构造，最终 URL 校验要么拒绝，
+            /// 要么放行的域名必然是 B 站官方域名（或其子域）。
+            #[test]
+            fn final_url_accepts_only_whitelisted_hosts(
+                scheme in proptest::sample::select(vec!["http".to_string(), "https".to_string()]),
+                host in "[a-zA-Z0-9.\\-]{0,64}",
+            ) {
+                let candidate = format!("{scheme}://{host}/video/BV1xx411c7mD");
+                if let Ok(url) = url::Url::parse(&candidate) {
+                    if is_final_bilibili_url(&url) {
+                        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+                        let whitelisted = ["bilibili.com", "bilibili.tv", "b23.tv", "hdslb.com"]
+                            .iter()
+                            .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")));
+                        prop_assert!(whitelisted, "非白名单域名被放行: {host}");
+                        prop_assert_eq!(url.scheme(), "https");
+                    }
+                }
+            }
+        }
     }
 }

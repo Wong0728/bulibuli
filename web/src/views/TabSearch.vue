@@ -130,8 +130,10 @@ async function removeSaved(b: SavedBlogger) {
   try {
     await bloggerApi.savedDelete(id);
     await blogger.refreshSaved();
-  } catch (e) {
-    // 老框架 removeKnownBlogger 无任何 toast。
+  } catch (e: any) {
+    // 失败必须可见：点击像没反应会让用户以为已移除。
+    if (e?.code === 0) toast.error('网络连接异常，移除博主失败');
+    else toast.error(e?.message || '移除博主失败');
     console.warn('移除已添加博主失败:', e);
   }
 }
@@ -311,9 +313,11 @@ function imageError(event: Event) {
               <div class="blogger-notice-compare">
                 <div class="blogger-notice-col">
                   <div class="blogger-notice-label">旧</div>
-                  <img v-if="b.last_seen_face" :src="imageUrl(b.last_seen_face)" class="blogger-avatar-sm" alt="" @error="imageError" />
+                  <!-- 只改头像（或只改名）时 last_seen_name/face 为空：
+                       旧栏回退显示当前值，避免"原来没有名字"的错觉。 -->
+                  <img v-if="b.last_seen_face || b.face" :src="imageUrl(b.last_seen_face || b.face)" class="blogger-avatar-sm" alt="" @error="imageError" />
                   <div v-else class="blogger-avatar-sm blogger-avatar-placeholder"><i class="fa-solid fa-user"></i></div>
-                  <div class="blogger-notice-name-old">{{ b.last_seen_name || '--' }}</div>
+                  <div class="blogger-notice-name-old">{{ b.last_seen_name || b.name || '--' }}</div>
                 </div>
                 <div class="blogger-notice-arrow"><i class="fa-solid fa-arrow-right"></i></div>
                 <div class="blogger-notice-col">

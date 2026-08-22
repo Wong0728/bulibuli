@@ -114,11 +114,20 @@ impl Aria2Manager {
         let aria2c = self.find_aria2c()?;
         std::fs::create_dir_all(&self.paths.download_dir)?;
         std::fs::create_dir_all(&self.paths.data_dir)?;
-        let session = self.paths.data_dir.join("aria2.session");
         let log = self.paths.data_dir.join("aria2.log");
-        // aria2c 要求 input-file 存在，否则立即退出
-        if !session.exists() {
-            std::fs::write(&session, b"")?;
+        // 不再启用 aria2 的 session 持久化（--save-session / --input-file）：
+        // session 文件会把下载项的 header（含用户 Cookie）每 30s 明文落盘，
+        // 与 DB 侧 AES-GCM 加密 Cookie 的威胁模型不一致。删掉旧版残留的
+        // session 文件（内含明文 Cookie）。重启后的任务恢复由
+        // DownloadManager::resume_pending_tasks 完成：GID 失效时用当前登录态
+        // 重新解析 URL 并重加任务（CDN URL 本就约 2h 过期，重解析比复用
+        // session 中的旧 URL 更可靠），字节级断点续传仍由下载文件旁的
+        // .aria2 控制文件（--continue）保证，与 session 文件无关。
+        let legacy_session = self.paths.data_dir.join("aria2.session");
+        if legacy_session.exists() {
+            if let Err(e) = std::fs::remove_file(&legacy_session) {
+                warn!("清理旧 aria2.session（含明文 Cookie）失败: {e}");
+            }
         }
 
         let mut cmd = Command::new(aria2c);
@@ -130,11 +139,8 @@ impl Aria2Manager {
                 "--dir={}",
                 self.paths.download_dir.to_string_lossy()
             ))
-            .arg(format!("--save-session={}", session.to_string_lossy()))
-            .arg("--save-session-interval=30")
             .arg(format!("--log={}", log.to_string_lossy()))
             .arg("--log-level=warn")
-            .arg(format!("--input-file={}", session.to_string_lossy()))
             // aria2 可能携带用户 Cookie，凭据下载始终严格校验证书。
             .arg("--check-certificate=true")
             // `--timeout` 是单连接停滞超时，不是整个文件的下载时限。

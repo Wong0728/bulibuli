@@ -50,6 +50,14 @@ impl MonitorService {
             .filter(history::Column::Source.eq("auto"))
             .filter(history::Column::PubTimestamp.gt(0))
             .filter(history::Column::NextDownloadIndex.lt(time_points.len() as i32))
+            // 被付费/下架拦截（pay_blocked）或已下架（removed）的视频不再排弹幕计划：
+            // 弹幕 API 虽可能仍可用，但产物缺失，且拦截状态可能随时解除，
+            // 状态恢复（重新入队下载）后调度会随 source=auto 记录自然恢复。
+            .filter(
+                Condition::any()
+                    .add(history::Column::State.is_null())
+                    .add(history::Column::State.is_not_in(["pay_blocked", "removed"])),
+            )
             .filter(
                 Condition::any()
                     .add(history::Column::NextSidecarAt.is_null())
@@ -151,7 +159,7 @@ impl MonitorService {
                         .timestamp_opt(h.pub_timestamp.unwrap_or(0) + (hours as i64) * 3600, 0)
                         .single()
                 });
-                tokio::spawn(async move {
+                crate::services::spawn_util::spawn_logged("scheduled_sidecar", async move {
                     let Ok(_permit) = service.sidecar_semaphore.clone().acquire_owned().await
                     else {
                         service
@@ -392,7 +400,7 @@ impl MonitorService {
             let burn_semaphore = self.burn_semaphore.clone();
             let history_service = self.history_service.clone();
             let cancellation = self.cancellation.clone();
-            tokio::spawn(async move {
+            crate::services::spawn_util::spawn_logged("auto_burn", async move {
                 let Ok(_permit) = burn_semaphore.acquire_owned().await else {
                     let mut guard = in_progress.lock().await;
                     guard.remove(&history_id);

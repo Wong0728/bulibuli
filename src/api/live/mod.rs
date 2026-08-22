@@ -1,6 +1,6 @@
 use crate::error::{ApiResponse, AppError};
-use crate::models::operation_log::OperationTarget;
 use crate::models::burn::BurnTask;
+use crate::models::operation_log::OperationTarget;
 use crate::services::auth::ClientInfo;
 use crate::services::live_recorder::RecordingTrigger;
 use crate::services::live_source::{
@@ -145,6 +145,20 @@ async fn start_recording(
     if body.room_id <= 0 {
         return Err(AppError::BadRequest("直播间号必须为正整数".into()));
     }
+    // 放入独立任务执行：客户端断开（刷新页面/前端超时）会丢弃本 handler 的
+    // future，但不能打断录制启动流程和 ConflictGuard 的 commit/rollback，
+    // 否则 sessions 里会留下永久卡死的 Starting 条目（房间无法再次启动）。
+    let task = tokio::spawn(async move { run_start_recording(state, body).await });
+    match task.await {
+        Ok(result) => result,
+        Err(error) => Err(AppError::Internal(format!("录制启动任务异常退出: {error}"))),
+    }
+}
+
+async fn run_start_recording(
+    state: SharedState,
+    body: RoomBody,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     let source_before = state
         .business
         .live_source_service
@@ -218,6 +232,18 @@ async fn stop_recording(
     if body.room_id <= 0 {
         return Err(AppError::BadRequest("直播间号必须为正整数".into()));
     }
+    // 同 start_recording：断开连接不能打断停止收尾与 guard 收尾。
+    let task = tokio::spawn(async move { run_stop_recording(state, body).await });
+    match task.await {
+        Ok(result) => result,
+        Err(error) => Err(AppError::Internal(format!("录制停止任务异常退出: {error}"))),
+    }
+}
+
+async fn run_stop_recording(
+    state: SharedState,
+    body: RoomBody,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     let session_key = match state.infra.settings_service.cookie_header().await {
         Ok(cookies) => state
             .bili

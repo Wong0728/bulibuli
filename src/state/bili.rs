@@ -26,10 +26,12 @@ impl BiliState {
     ///
     /// 依赖 `InfraState` 提供的 config / paths / db / ws / settings_service / cancellation，
     /// 以及上游产出的 `secret_store`。
+    /// 同时返回首次启动自动生成的 Owner 配对码（仅 bootstrap 时为 Some；
+    /// 生产路径由 `AppState::new` 打印到终端，测试用它配对 Owner 会话）。
     pub(crate) async fn build(
         infra: &InfraState,
         secret_store: Arc<crate::services::secret_store::SecretStore>,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<(Self, Option<String>)> {
         let security = Arc::new(
             SecurityConfigService::load(&infra.paths.data_dir, &infra.paths.app_root)
                 .context("初始化安全配置失败")?,
@@ -43,15 +45,6 @@ impl BiliState {
         .await
         .context("初始化认证服务失败")?;
         let auth = Arc::new(auth_service);
-
-        if let Some(code) = initial_pair_code {
-            // 配对码仅在终端打印；如果 nohup/systemd 等场景下终端不可见，需重启程序重新生成。
-            crate::app::tui::console_line(format!(
-                "首次设备配对码：{}-{}（10 分钟内有效，仅可使用一次）",
-                &code[..4],
-                &code[4..]
-            ));
-        }
 
         let cookie_manager = Arc::new(
             CookieManager::new(
@@ -88,13 +81,14 @@ impl BiliState {
             infra.cancellation.child_token(),
         ));
 
-        Ok(Self {
+        let this = Self {
             bili_api,
             cookie_manager,
             resource_client,
             auth,
             security,
             verify_service,
-        })
+        };
+        Ok((this, initial_pair_code))
     }
 }

@@ -43,7 +43,15 @@ export const useToastStore = defineStore('toast', () => {
     // 老框架：error 至少展示 5000ms；持续提示（<=0）不设自动关闭。
     const autoDismiss = type === 'error' && duration > 0 ? Math.max(duration, 5000) : duration;
     const item: ToastItem = { id, type, message, duration: autoDismiss, createdAt: Date.now() };
-    items.value = [...items.value, item].slice(-MAX_TOASTS);
+    const next = [...items.value, item];
+    if (next.length > MAX_TOASTS) {
+      // 挤占时优先淘汰最旧的自动消失提示；持续提示（duration<=0，如离线横幅）
+      // 不被普通 toast 挤掉，只有持续提示自身超上限时才淘汰最旧的持续提示。
+      const evictableIndex = next.findIndex(t => t.duration > 0);
+      const [removed] = next.splice(evictableIndex >= 0 ? evictableIndex : 0, 1);
+      if (removed && networkToastId.value === removed.id) networkToastId.value = null;
+    }
+    items.value = next;
     if (isNetworkMessage) networkToastId.value = id;
     if (autoDismiss > 0) {
       setTimeout(() => dismiss(id), autoDismiss);

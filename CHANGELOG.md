@@ -2,6 +2,10 @@
 
 ## v2.0.0-alpha.9
 
+- 运行时替换：Windows 包内 FFmpeg/ffprobe 换为本仓库 Actions 自编译的精简构建（FFmpeg n8.1.2，GPL-2.0+，含弹幕烧录所需 libass/libx264 全能力，替换原 gyan.dev 5.1.6 通用构建）；NOTICE 与 resources 清单同步更正许可声明，x264 固定 commit、依赖 tarball 增加 SHA-256 校验。
+- 前端产物目录统一：Vue 构建产物固定为 `static/app/`（根路由唯一入口），移除旧版 `static/index.html`、`static/js/`、`static/css/` 与 `settings.html`/`setup.html` 独立页面；三平台安装器与 build.py 校验路径同步。
+- 发版前审查修复（高危项）：clippy `-D warnings` 门禁恢复零警告；release profile 改回 `panic=unwind` 使后台任务 panic 兜底（catch_unwind 状态回滚）真正生效；`ctl audit --since` 多字节输入不再 panic；Linux/Termux 安装器内嵌校验改用 `static/app/index.html`（修复全新安装无声失败）；`static/app/` 全量 hash 资产随源码入库；aria2 不再将含 Cookie 的下载项明文写入 session 文件（重启恢复改由应用重新解析 URL）。
+
 - 数据安全：Linux 安装器重装/升级保留 `data/`（与 Windows/Termux 对齐），运行中先提示停止服务再升级；root 下 `run` 与 `service` 统一数据目录 `/var/lib/bulibuli`；三平台重跑脚本均有明确的升级/最新/需 `-Force` 提示。
 - 行为修复：网络恢复重试失败任务正确携带 `since`（不再静默重试全部历史失败任务）；删除 `ai assist` 短时授权层——AI 模式开启后 AI 与人工权限一致（README/`--help`/设置向导已写明）；默认画质统一为 1080P（80），用户修改设置后抽屉与链接下载均按设置值；抽屉移除 8K/杜比视界下载项（后端白名单最高 125），设置页相应加注。
 - 修复：`sys logs` 与 TUI 退出摘要使用实际日志目录；`refresh video` 查不到记录返回 404；迁移 002 补列存在性守卫；`/settings.html` 直链 302 回主界面（片段改走 `/_fragments/settings.html`）；`sys ffmpeg-test` 与设置页测试一致；网页退出登录补调设备会话注销；`storage.history_limit` 接入历史清理（设置值优先、环境变量兜底），移除 `uid_history_limit`/`prefer_audio_quality`/`danmaku_download_all` 死配置项；Operator 设置页只读并提示仅 Owner 可修改；博主载入配置按 UID 取真实自动任务配置；`blg add` 重复返回友好 Conflict；`audit list` 非法 `--source/--since` 报错；ctl 移除半实现的 `dl burn` 入口。

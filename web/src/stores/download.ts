@@ -4,8 +4,8 @@
  *
  * 后端 WS 载荷字段（见 src/services/download/status.rs 的 broadcast_progress）：
  *   task_id, bvid, cid, page, type, status, progress_percent, downloaded_size,
- *   total_size, speed, step, total_steps, step_label, error
- * **不含 title/priority/version**（HTTP 快照 /api/download/status 才有）——
+ *   total_size, speed, step, total_steps, step_label, error,
+ *   title（后端兜底为 bvid）, priority
  * 合并 WS 推送时必须跳过缺失键，否则标题会被 bvid 覆盖、优先级会被 0 覆盖。
  *
  * 对齐老框架（download-queue.js / download-status-store.js / download-status.js）：
@@ -21,7 +21,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { download as downloadApi, video as videoApi } from '@/api';
 import { postFull } from '@/api/client';
-import type { DownloadTask, DownloadHealth } from '@/api/types';
+import type { DownloadTask, DownloadHealth, DownloadProgressEvent } from '@/api/types';
 
 /** 老框架 download-status-store.js 的缓存节奏：status 250ms / health 2000ms。 */
 const STATUS_TTL_MS = 250;
@@ -95,29 +95,38 @@ export const useDownloadStore = defineStore('download', () => {
 
   /**
    * 接收单条 WS 进度推送（老框架 patchSingleCardProgress 的数据面）。
-   * WS 载荷只有增量字段（无 title/priority/version），合并时跳过缺失键：
+   * WS 载荷的增量字段（无 title/priority 时）合并时跳过缺失键：
    * 标题不被 bvid 覆盖、优先级不被 0 覆盖。
-   * 找不到对应条目时不新建（避免 UUID 消息 id 变成 NaN 幽灵任务），等 refreshStatus 全量快照补齐。
+   * 载荷带可信标题（后端兜底 bvid）时，未知条目直接创建——
+   * 新任务在首条推送（入队后 ≤2 秒）即出现在队列里，
+   * 不必等下一次全量快照；否则小文件会"下载完成都没进过队列"。
    */
-  function applyWsProgress(payload: any) {
+  function applyWsProgress(payload: DownloadProgressEvent) {
     if (!payload) return;
     const rawId = Number(payload.task_id);
     const incomingId = Number.isFinite(rawId) && rawId > 0 ? rawId : 0;
     const bvid = String(payload.bvid ?? '');
+    const rawTitle = typeof payload.title === 'string' ? payload.title : '';
+    const trustedTitle = rawTitle.trim().length > 0;
     // WS 载荷必带字段（broadcast_progress 的 json! 固定键）。
-    const patch: DownloadTask = {
+    // title/priority 是可选增量：载荷没有时不进 patch（合并时保留现有值）。
+    const patch = {
       id: incomingId,
       bvid,
-      title: '',
       status: (payload.status as DownloadTask['status']) ?? 'pending',
       progress: Number(payload.progress_percent ?? 0),
       total_size: Number(payload.total_size ?? 0),
       downloaded_size: Number(payload.downloaded_size ?? 0),
       speed: Number(payload.speed ?? 0),
-    };
+    } as Partial<DownloadTask> & { id: number; bvid: string };
+    if (trustedTitle) patch.title = rawTitle.trim();
+    if (payload.priority != null && Number.isFinite(Number(payload.priority))) {
+      patch.priority = Number(payload.priority);
+    }
     // 可选字段：载荷里没有的键不进 patch（合并时保留现有值）。
     if (payload.part_title != null) patch.part_title = String(payload.part_title);
     if (payload.type != null) patch.type = String(payload.type);
+    else patch.type = 'video';
     if (payload.cid != null) patch.cid = Number(payload.cid);
     if (payload.page != null) patch.page = Number(payload.page);
     if (payload.step != null) patch.step = Number(payload.step);
@@ -136,11 +145,18 @@ export const useDownloadStore = defineStore('download', () => {
         }
       }
     }
-    if (key == null) return;
+    if (key == null) {
+      // 新任务首条推送：标题可信才建条目，避免 UUID 消息 id 变成 NaN 幽灵任务。
+      if (!(incomingId > 0 && trustedTitle)) return;
+      const created: DownloadTask = { ...(patch as DownloadTask), id: incomingId, title: patch.title! };
+      tasks.value.set(incomingId, created);
+      tasks.value = new Map(tasks.value);
+      return;
+    }
     const existing = tasks.value.get(key);
     // title 仅在现有条目缺失时用 bvid 兜底（WS 载荷本身不带标题）。
-    const merged: DownloadTask = { ...existing, ...patch, id: key };
-    if (existing && !existing.title) merged.title = bvid;
+    const merged: DownloadTask = { ...existing, ...patch, id: key } as DownloadTask;
+    if (!merged.title) merged.title = bvid;
     tasks.value.set(key, merged);
     tasks.value = new Map(tasks.value);
   }
@@ -155,7 +171,7 @@ export const useDownloadStore = defineStore('download', () => {
     if (statusInFlight) return statusInFlight;
     statusInFlight = (async () => {
       try {
-        const snapshot: any = await downloadApi.status();
+        const snapshot = await downloadApi.status();
         const statuses = snapshot?.statuses;
         if (statuses && typeof statuses === 'object') {
           statusError.value = null;
@@ -489,6 +505,20 @@ export const useDownloadStore = defineStore('download', () => {
   const pendingTasks = pendingList;
   const failedTasks = failedList;
 
+  /** 设备会话 401 失效时清空本会话的队列快照与缓存（app store 调用）。 */
+  function reset() {
+    tasks.value = new Map();
+    health.value = { aria2_connected: false };
+    healthChecked.value = false;
+    statusError.value = null;
+    healthError.value = null;
+    metrics.value = null;
+    metricsError.value = false;
+    statusCacheAt = 0;
+    healthCacheAt = 0;
+    metricsCacheAt = 0;
+  }
+
   return {
     tasks, health, statusError, healthError, healthChecked, metrics, metricsError,
     queueSummary,
@@ -500,6 +530,6 @@ export const useDownloadStore = defineStore('download', () => {
     pauseDownload, resumeDownload, removeDownload, retryDownload,
     pauseAll, resumeAll, retryAll, setPriority, adjustDownloadPriority, burn,
     start, retry, remove, pause, resume, priority, adjustPriority,
-    upsert, applyWsProgress,
+    upsert, applyWsProgress, reset,
   };
 });

@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { onMounted, computed, ref, watch } from 'vue';
+import { onMounted, computed, ref, watch, defineAsyncComponent } from 'vue';
 import { useAppStore } from './stores/app';
 import { useAuthStore } from './stores/auth';
 import { useDownloadStore } from './stores/download';
-import TabSearch from './views/TabSearch.vue';
-import TabManual from './views/TabManual.vue';
-import TabAuto from './views/TabAuto.vue';
-import TabHistory from './views/TabHistory.vue';
-import TabLive from './views/TabLive.vue';
-import TabSettings from './views/TabSettings.vue';
-import PairView from './views/PairView.vue';
-import SetupView from './views/SetupView.vue';
+// 视图按需加载：8 个视图全部动态 import，拆分 chunk 缩小首屏 bundle。
+const TabSearch = defineAsyncComponent(() => import('./views/TabSearch.vue'));
+const TabManual = defineAsyncComponent(() => import('./views/TabManual.vue'));
+const TabAuto = defineAsyncComponent(() => import('./views/TabAuto.vue'));
+const TabHistory = defineAsyncComponent(() => import('./views/TabHistory.vue'));
+const TabLive = defineAsyncComponent(() => import('./views/TabLive.vue'));
+const TabSettings = defineAsyncComponent(() => import('./views/TabSettings.vue'));
+const PairView = defineAsyncComponent(() => import('./views/PairView.vue'));
+const SetupView = defineAsyncComponent(() => import('./views/SetupView.vue'));
 import VideoDrawer from './components/VideoDrawer.vue';
 import ConfirmDialogList from './components/ConfirmDialogList.vue';
 import CookieLoginModals from './components/CookieLoginModals.vue';
@@ -21,6 +22,7 @@ import { useToastStore } from './stores/toast';
 const app = useAppStore();
 const auth = useAuthStore();
 const download = useDownloadStore();
+
 const toast = useToastStore();
 
 const tabs = [
@@ -32,8 +34,6 @@ const tabs = [
   { id: 'settings', icon: 'fa-cog', label: '设置' },
 ] as const;
 
-const aria2Status = computed(() => download.health.aria2_connected ? 'connected' : 'disconnected');
-const aria2Title = computed(() => download.health.aria2_connected ? 'aria2 已连接' : 'aria2 未连接');
 const cookieWarningDismissed = ref(false);
 const isOwner = computed(() => auth.state.role === 'owner');
 const isViewer = computed(() => auth.state.role === 'viewer');
@@ -121,10 +121,18 @@ function onPaired() {
   // PairView 只有在 auth/state 已确认 authenticated 后才会发出 paired。
   // 这里绝不再把页面切回 loading；配对成功只做一次稳定的 phase 切换。
   if (!auth.isAuthenticated) return;
+  // 新会话必须立刻持有 CSRF token，否则进入主界面后的首个写请求就会 403。
+  void auth.refreshCsrfToken();
   phase.value = 'main';
   app.activateSession();
   void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
 }
+// 设备会话 401 失效：切回配对流程（不整页 reload，保留用户现场）。
+watch(() => app.sessionInvalid, (invalid) => {
+  if (!invalid) return;
+  app.sessionInvalid = false;
+  phase.value = 'pair';
+});
 function onSetupDone() {
   // Setup 向导完成，进入主界面
   phase.value = 'main';
@@ -246,7 +254,6 @@ watch(() => auth.isAuthenticated, (authenticated) => {
       <div class="header-left">
         <h1>补哩补哩 <span class="brand-latin">bulibuli</span></h1>
         <p>下架之前，先下为敬。　博主搜索 / 手动查询 / 自动任务 / 下载管理 / 直播 / 设置</p>
-        <p class="migration-links"><a href="/legacy/" rel="nofollow">遇到问题？打开旧版</a></p>
       </div>
       <div class="header-right">
         <div id="login-user-card" class="login-user-card" :hidden="!isOwner || !auth.isCookieValid">
@@ -294,7 +301,6 @@ watch(() => auth.isAuthenticated, (authenticated) => {
               :tabindex="app.currentTab === t.id ? 0 : -1"
               @click="app.setTab(t.id)">
         <i class="fa-solid" :class="t.icon"></i> {{ t.label }}
-            <span v-if="t.id === 'history'" id="aria2-status-dot" class="aria2-dot" :class="aria2Status" :title="aria2Title"></span>
       </button>
     </nav>
 

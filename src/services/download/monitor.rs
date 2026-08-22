@@ -7,6 +7,7 @@ use futures::{stream, StreamExt};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
@@ -14,6 +15,57 @@ use super::completion::CompleteOutcome;
 use super::{task_cache_key, DownloadManager, ProgressCache};
 
 impl DownloadManager {
+    /// 对账 DB 状态为 paused 但仍有 gid 的任务：若 aria2 报告该 gid 仍在
+    /// 传输（active/waiting），说明此前暂停未生效，补一次 forcePause；
+    /// 若该 gid 已 complete，则补走完成流程，避免下载记录永久缺失。
+    async fn paused_orphan_reconcile(&self) {
+        let Ok(paused_tasks) = download_task::Entity::find()
+            .filter(download_task::Column::Status.eq("paused"))
+            .filter(download_task::Column::Gid.is_not_null())
+            .all(&self.db)
+            .await
+        else {
+            return;
+        };
+        for task in paused_tasks {
+            let Some(gid) = task.gid.clone() else {
+                continue;
+            };
+            let Ok(status) = self.aria2.get_download_status(&gid).await else {
+                continue;
+            };
+            match status.status.as_str() {
+                "active" | "waiting" => {
+                    warn!(
+                        "paused 任务 {} 的 aria2 gid={gid} 仍在传输，强制暂停",
+                        task.bvid
+                    );
+                    if let Err(e) = self.aria2.force_pause(&gid).await {
+                        warn!("强制暂停 aria2 任务 gid={gid} 失败: {e}");
+                    }
+                }
+                "complete" => {
+                    info!(
+                        "paused 任务 {} 的 aria2 gid={gid} 已完成，补写下载记录",
+                        task.bvid
+                    );
+                    match self.handle_complete(&task, &status).await {
+                        CompleteOutcome::Skip { .. } => {}
+                        CompleteOutcome::Finished { uid } => {
+                            if let Err(e) = self
+                                .on_task_completed(&task.bvid, task.cid, uid.as_deref())
+                                .await
+                            {
+                                error!("处理完成任务失败 {}: {e}", task.bvid);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     async fn queue_terminal_failure(
         &self,
         task: &download_task::Model,
@@ -29,6 +81,42 @@ impl DownloadManager {
             .lock()
             .await
             .remove(&task_cache_key(&task.bvid, task.cid));
+        self.cleanup_failed_transfer_leftovers(task).await;
+    }
+
+    /// aria2 任务判失败后清理 `.downloading` 临时文件与对应 `.aria2` 控制文件，
+    /// 与 native 路径"失败即删残片"的行为对齐，避免反复失败在下载目录累积垃圾文件。
+    async fn cleanup_failed_transfer_leftovers(&self, task: &download_task::Model) {
+        let Some(filename) = task
+            .filename
+            .as_deref()
+            .filter(|name| name.ends_with(".downloading"))
+        else {
+            return;
+        };
+        let Some(dir) = task.download_dir.as_deref() else {
+            return;
+        };
+        let dir = PathBuf::from(dir);
+        for leftover in [dir.join(filename), dir.join(format!("{filename}.aria2"))] {
+            // 路径来自 DB（旧库可能残留越界值），删除前确认仍位于下载根目录内
+            if crate::services::file_safety::ensure_existing_within_root(
+                &self.paths.download_dir,
+                &leftover,
+            )
+            .await
+            .is_err()
+            {
+                continue;
+            }
+            match tokio::fs::remove_file(&leftover).await {
+                Ok(()) => info!("已清理下载残片: {}", leftover.display()),
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    warn!("清理下载残片失败 {}: {e}", leftover.display());
+                }
+                Err(_) => {}
+            }
+        }
     }
 
     /// 按 generation 守卫应用一次任务字段更新：仅当数据库中该任务的 generation
@@ -125,7 +213,10 @@ impl DownloadManager {
         let mut aria2_fail_count: u32 = 0;
         let mut status_failures: HashMap<i32, u8> = HashMap::new();
         let mut disk_full_notified = false;
+        // 磁盘满时被自动暂停的任务 ID：恢复后据此自动续传。
+        let mut disk_paused_ids: Vec<i32> = Vec::new();
         let mut last_audio_retry = Instant::now() - std::time::Duration::from_secs(30);
+        let mut last_paused_check = Instant::now() - std::time::Duration::from_secs(30);
         let mut last_disk_check = Instant::now() - std::time::Duration::from_secs(15);
         let mut disk_space_error: Option<String> = None;
 
@@ -138,11 +229,12 @@ impl DownloadManager {
 
             if last_audio_retry.elapsed() >= std::time::Duration::from_secs(30) {
                 self.check_audio_retry().await;
+                self.check_video_retry().await;
                 last_audio_retry = Instant::now();
             }
 
             let all_tasks = match download_task::Entity::find()
-                .filter(download_task::Column::Status.is_in(vec!["downloading", "pending"]))
+                .filter(download_task::Column::Status.is_in(DownloadStatus::MONITOR_STATUSES))
                 .all(&self.db)
                 .await
             {
@@ -196,11 +288,14 @@ impl DownloadManager {
                 last_disk_check = Instant::now();
             }
             if let Some(error) = disk_space_error.as_deref() {
-                if let Err(pause_error) = self.aria2.pause_all().await {
-                    warn!("磁盘空间不足后暂停 aria2 任务失败: {pause_error}");
-                }
+                // 逐任务暂停（不调全局 pauseAll）：与逐任务路径并发会互相误判
                 for task in &all_tasks {
-                    if let Err(transition_error) = self
+                    if let Some(gid) = &task.gid {
+                        if let Err(pause_error) = self.pause_gid_with_fallback(gid).await {
+                            warn!("磁盘空间不足时暂停 aria2 任务 gid={gid} 失败: {pause_error}");
+                        }
+                    }
+                    if self
                         .state_service
                         .transition(
                             task.id,
@@ -209,11 +304,11 @@ impl DownloadManager {
                             DownloadStage::Transferring,
                         )
                         .await
+                        .is_ok()
                     {
-                        warn!(
-                            task_id = task.id,
-                            "磁盘空间不足时持久化暂停状态失败: {transition_error}"
-                        );
+                        disk_paused_ids.push(task.id);
+                    } else {
+                        warn!(task_id = task.id, "磁盘空间不足时持久化暂停状态失败");
                     }
                 }
                 let mut native = self.native_tasks.lock().await;
@@ -243,6 +338,19 @@ impl DownloadManager {
                     warn!("推送磁盘恢复事件失败: {error}");
                 }
                 disk_full_notified = false;
+                // 磁盘恢复：自动续传因磁盘满被暂停的任务（后台执行，不阻塞监控循环）。
+                let ids = std::mem::take(&mut disk_paused_ids);
+                if !ids.is_empty() {
+                    info!("磁盘空间已恢复，自动续传 {} 个任务", ids.len());
+                    let manager = self.clone();
+                    tokio::spawn(async move {
+                        for id in ids {
+                            if let Err(error) = manager.resume_task(Some(id)).await {
+                                debug!(task_id = id, "磁盘恢复后自动续传未完成: {error}");
+                            }
+                        }
+                    });
+                }
             }
 
             let aria2_available = self.aria2.is_available().await;
@@ -284,7 +392,18 @@ impl DownloadManager {
             }
             aria2_fail_count = 0;
 
+            // paused 任务对账（低频，30s 一次）：暂停 RPC 失败可能留下
+            // "DB 状态为 paused 但 aria2 里仍在下载/已完成"的孤儿 gid。
+            // monitor 主循环只查 MONITOR_STATUSES，不会轮询这些任务，
+            // 这里补查：仍在传输则强制暂停；已 complete 则补走完成流程写历史记录。
+            if last_paused_check.elapsed() >= std::time::Duration::from_secs(30) {
+                last_paused_check = Instant::now();
+                self.paused_orphan_reconcile().await;
+            }
+
             let mut to_update: Vec<(String, i32, i64, download_task::ActiveModel)> = Vec::new();
+            // GID 失效被判失败的任务：待 guarded 写库确认后补发一次 failed 进度广播
+            let mut gid_lost_failures: Vec<download_task::Model> = Vec::new();
             let mut deferred_progress: Vec<(download_task::Model, String, i32, i64, i64, i64)> =
                 Vec::new();
             let mut completed_bvids: Vec<(String, Option<i64>, Option<String>)> = Vec::new();
@@ -510,6 +629,28 @@ impl DownloadManager {
                             }
                         }
                         Err(e) => {
+                            // GID 已失效（下载器重启后 session 丢失/记录被清理）是永久性
+                            // 错误：立即判失败并走既有自动重试机制（重新解析 URL 重下），
+                            // 不再按瞬时故障累计 3 次，避免每 2 秒刷一遍无效轮询告警。
+                            if matches!(
+                                e.downcast_ref::<crate::services::aria2::Aria2Error>(),
+                                Some(crate::services::aria2::Aria2Error::GidNotFound(_))
+                            ) {
+                                status_failures.remove(&task.id);
+                                info!(
+                                    "[DownloadManager] aria2 已丢失任务 {} 的 GID={gid}，标记为失败等待自动重试",
+                                    task.bvid
+                                );
+                                self.queue_terminal_failure(
+                                    &task,
+                                    "aria2 已丢失该下载任务（GID 失效，可能因程序重启）"
+                                        .to_string(),
+                                    &mut to_update,
+                                )
+                                .await;
+                                gid_lost_failures.push(task.clone());
+                                continue;
+                            }
                             let failures = status_failures.entry(task.id).or_default();
                             *failures = failures.saturating_add(1);
                             warn!("获取 aria2 状态失败 (gid={gid}, attempt={failures}): {e}");
@@ -531,7 +672,23 @@ impl DownloadManager {
             // 若以“本轮是否更新”为门槛，稳态下进度推送与 DB 落盘会完全停摆
             // （DB 进度从 0 直接跳 100，WS 无下载中事件）。进度提交本身已有
             // generation 守卫与合并去抖，可无条件执行。
-            let _ = self.apply_guarded_updates(to_update).await;
+            let updated_ids = self.apply_guarded_updates(to_update).await;
+            // 仅对写库成功的任务广播失败进度，避免覆盖用户重试后的新状态
+            for task in &gid_lost_failures {
+                if !updated_ids.contains(&task.id) {
+                    continue;
+                }
+                self.broadcast_progress(
+                    task,
+                    "failed",
+                    task.progress_percent,
+                    task.downloaded_size,
+                    task.total_size,
+                    0,
+                    Some("aria2 已丢失该下载任务（GID 失效）"),
+                )
+                .await;
+            }
             for (task, status, progress, downloaded, total, speed) in deferred_progress {
                 self.broadcast_progress(&task, &status, progress, downloaded, total, speed, None)
                     .await;

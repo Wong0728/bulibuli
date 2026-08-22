@@ -9,16 +9,18 @@
     "build": "vue-tsc -b --noEmit && vite build",
     "build:nocheck": "vite build",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test:smoke": "playwright test --config playwright.config.mjs",
+    "test:e2e": "playwright test --config playwright.real-backend.mjs"
   },
   "dependencies": {
     "pinia": "^2.2.0",
     "socket.io-client": "^4.7.5",
-    "vue": "^3.5.0",
-    "vue-router": "^4.4.0"
+    "vue": "^3.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
+    "@playwright/test": "^1.62.1",
     "@vitejs/plugin-vue": "^5.1.0",
     "typescript": "^5.5.0",
     "vite": "^5.4.0",

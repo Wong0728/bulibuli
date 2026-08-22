@@ -916,7 +916,8 @@ select option.quality-vip-required {
 }
 
 .form-control:disabled,
-.form-control[disabled] {
+.form-control[disabled],
+.form-control[readonly] {
     background: var(--bg);
     color: var(--text-muted);
     cursor: not-allowed;
@@ -1070,45 +1071,6 @@ select.blogger-select option .opt-meta {
 select.blogger-select option[value=""] {
     color: var(--text-muted);
     font-weight: 400;
-}
-
-/* 选中博主预览（添加监控博主弹窗：下拉下方实时展示头像与名称）。 */
-.known-blogger-preview {
-    display: flex;
-    align-items: center;
-    gap: var(--size-10);
-    margin-top: var(--size-8);
-    padding: var(--size-8) var(--size-10);
-    background: var(--bg);
-    border: var(--size-1) solid var(--border);
-    border-radius: var(--radius-md);
-    font-size: var(--size-13);
-    color: var(--text-muted);
-    min-height: var(--size-44);
-}
-
-.known-blogger-preview img {
-    width: var(--size-28);
-    height: var(--size-28);
-    border-radius: 50%;
-    object-fit: cover;
-    flex-shrink: 0;
-    background: var(--surface);
-    border: var(--size-1) solid var(--border);
-}
-
-.known-blogger-preview-fallback {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--size-28);
-    height: var(--size-28);
-    border-radius: 50%;
-    flex-shrink: 0;
-    background: var(--surface);
-    border: var(--size-1) solid var(--border);
-    color: var(--text-muted);
-    font-size: var(--size-13);
 }
 
 #manual-cookies {
@@ -3475,7 +3437,6 @@ tr:hover {
 }
 .drawer-progress-bar {
     height: 100%;
-    background: var(--brand);
     transition: width 0.3s ease;
 }
 .drawer-progress-text {
@@ -5144,7 +5105,6 @@ tr:hover {
 }
 .board-card-progress-bar {
     height: 100%;
-    background: var(--brand);
     border-radius: var(--radius-full);
     transition: width var(--transition-normal);
 }
@@ -5159,14 +5119,20 @@ tr:hover {
 .board-card-speed { color: var(--brand); }
 .board-card-size { color: var(--text-muted); }
 
-/* 暂停 / 恢复按钮：浮于卡片右下角，避免遮挡进度与文案。 */
+/* 卡片底部操作行：文档流布局（优先级居左、暂停/恢复居右）。
+   此前按钮绝对定位悬浮在右下角，会遮挡路径/sidecar 行且随任务启停跳版。 */
+.board-card-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--size-8);
+    min-height: var(--size-28);
+}
 .board-card-action-btn {
-    position: absolute;
-    right: var(--size-8);
-    bottom: var(--size-8);
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
     width: var(--size-28);
     height: var(--size-28);
     padding: 0;
@@ -5183,17 +5149,13 @@ tr:hover {
     border-color: var(--brand);
 }
 
-/* 下载优先级 −/＋ 控件：位于暂停/恢复按钮左侧（自老框架 style.css 4999-5020 迁移）。 */
+/* 下载优先级 −/＋ 控件：与暂停/恢复同排（自老框架 style.css 4999-5020 迁移）。 */
 .board-card-priority {
-    position: absolute;
-    right: var(--size-44);
-    bottom: var(--size-8);
     display: inline-flex;
     align-items: center;
     gap: var(--size-4);
 }
 .board-card-priority .board-card-action-btn {
-    position: static;
     width: var(--size-24);
     height: var(--size-24);
     font-size: 14px;
@@ -5453,12 +5415,37 @@ tr:hover {
     flex: 1;
     border-top: var(--size-1) solid var(--divider);
 }
+/* 原生 <progress> 渲染：appearance:none 后浏览器默认填充透明，
+   不补伪元素样式时进度值不可见、只看到整条轨道底色（进度条"不动"的根因）。 */
 progress.board-card-progress-bar,
 progress.video-card-progress-bar,
 progress.drawer-progress-bar,
 progress.download-item-progress-fill {
     appearance: none;
     border: 0;
+    display: block;
+    width: 100%;
+}
+progress.board-card-progress-bar::-webkit-progress-bar,
+progress.video-card-progress-bar::-webkit-progress-bar,
+progress.drawer-progress-bar::-webkit-progress-bar,
+progress.download-item-progress-fill::-webkit-progress-bar {
+    background: var(--divider);
+    border-radius: var(--radius-full);
+}
+progress.board-card-progress-bar::-webkit-progress-value,
+progress.video-card-progress-bar::-webkit-progress-value,
+progress.drawer-progress-bar::-webkit-progress-value,
+progress.download-item-progress-fill::-webkit-progress-value {
+    background: var(--brand);
+    border-radius: var(--radius-full);
+}
+progress.board-card-progress-bar::-moz-progress-bar,
+progress.video-card-progress-bar::-moz-progress-bar,
+progress.drawer-progress-bar::-moz-progress-bar,
+progress.download-item-progress-fill::-moz-progress-bar {
+    background: var(--brand);
+    border-radius: var(--radius-full);
 }
 
 

@@ -15,6 +15,8 @@ mod m20260813_000012_history_fts_rebuild;
 mod m20260816_000013_history_sha256;
 mod m20260820_000014_live_source_version;
 mod m20260820_000015_burn_tasks;
+mod m20260821_000016_history_source_uniqueness;
+mod m20260822_000017_rename_live_recording_trigger;
 
 pub struct Migrator;
 
@@ -37,6 +39,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260816_000013_history_sha256::Migration),
             Box::new(m20260820_000014_live_source_version::Migration),
             Box::new(m20260820_000015_burn_tasks::Migration),
+            Box::new(m20260821_000016_history_source_uniqueness::Migration),
+            Box::new(m20260822_000017_rename_live_recording_trigger::Migration),
         ]
     }
 }

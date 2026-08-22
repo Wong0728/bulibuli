@@ -36,6 +36,14 @@ pub struct SidecarStatus {
     pub subtitle: bool,
 }
 
+/// 批量侧车探测的输入三元组，参数语义与 [`HistoryService::sidecar_status`] 一致。
+#[derive(Clone, Copy)]
+pub struct SidecarProbe<'a> {
+    pub bvid: &'a str,
+    pub uid: Option<&'a str>,
+    pub video_path: Option<&'a str>,
+}
+
 /// 已下载文件条目。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FileEntry {

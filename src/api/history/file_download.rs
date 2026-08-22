@@ -55,7 +55,19 @@ fn content_type_for(path: &std::path::Path) -> &'static str {
 
 fn attachment_disposition(filename: &str) -> String {
     if filename.is_ascii() {
-        format!("attachment; filename=\"{filename}\"")
+        // ASCII 文件名仍可能含引号/反斜杠/控制字符，直接包引号会破坏
+        // Content-Disposition 头结构；统一替换为下划线。
+        let sanitized: String = filename
+            .chars()
+            .map(|c| {
+                if matches!(c, '"' | '\\' | '\r' | '\n') {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        format!("attachment; filename=\"{sanitized}\"")
     } else {
         format!(
             "attachment; filename*=UTF-8''{}",
@@ -190,5 +202,17 @@ mod tests {
             "attachment; filename=\"video.mp4\""
         );
         assert!(attachment_disposition("视频.mp4").contains("filename*=UTF-8''"));
+    }
+
+    #[test]
+    fn disposition_neutralizes_quote_and_backslash() {
+        assert_eq!(
+            attachment_disposition("vi\"deo\\.mp4"),
+            "attachment; filename=\"vi_deo_.mp4\""
+        );
+        assert_eq!(
+            attachment_disposition("a\r\nb.mp4"),
+            "attachment; filename=\"a__b.mp4\""
+        );
     }
 }

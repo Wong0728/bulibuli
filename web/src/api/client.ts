@@ -9,7 +9,7 @@
  * 错误分级：网络、非 JSON、HTTP 和 envelope 业务错误都抛出 ApiError，
  * 由 store/页面显示真实失败原因，不能把搜索失败伪装成空结果。
  */
-import type { ApiError } from './types';
+import type { ApiError, ApiResp } from './types';
 
 const _BASE = ''; // 同源部署，直接用相对路径
 let csrfToken: string | null = null;
@@ -18,8 +18,8 @@ let csrfToken: string | null = null;
 export const NETWORK_ERR_MSG = '网络连接异常，请检查网络或后端服务状态';
 
 type ApiErrorHandlers = {
-  onUnauthorized?: (e: ApiError, url: string) => any;
-  onRiskControl?: (e: ApiError, url: string) => any;
+  onUnauthorized?: (e: ApiError, url: string) => void | Promise<void>;
+  onRiskControl?: (e: ApiError, url: string) => void | Promise<void>;
 };
 let globalHandlers: ApiErrorHandlers = {};
 
@@ -33,6 +33,30 @@ type NetworkHooks = {
   onInvalidResponse?: (e: ApiError) => void;
 };
 let networkHooks: NetworkHooks = {};
+
+/** 请求默认超时（毫秒）：可用环境变量 VITE_API_TIMEOUT 覆盖（如 "30000"）；
+ *  后端挂起时不能让 UI 永久 pending，调用方可经 options.signal 对大文件/慢端点单独覆盖。 */
+const ENV_TIMEOUT_MS = Number(import.meta.env?.VITE_API_TIMEOUT);
+export const DEFAULT_TIMEOUT_MS =
+  Number.isFinite(ENV_TIMEOUT_MS) && ENV_TIMEOUT_MS > 0 ? ENV_TIMEOUT_MS : 15_000;
+
+/** 慢端点按前缀匹配差异化超时：这些接口依赖 B 站上游 / GitHub / 本机 ffmpeg 子进程，
+ *  固定 15s 会把上游慢误报为自身网络故障（对齐审查项"按端点调参，保守小步"）。
+ *  显式 env 覆盖时以 env 为准，不再二次放大。 */
+const SLOW_ENDPOINT_TIMEOUTS: Array<[prefix: string, timeoutMs: number]> = [
+  ['/api/update/', 30_000], // GitHub API 检查 / 应用更新
+  ['/api/settings/ffmpeg-test', 30_000], // 本机拉起 ffmpeg 探测
+  ['/api/video/resolve', 25_000], // B 站链接解析（番剧/课程上游慢）
+  ['/api/video/get-video-urls', 25_000], // 取播放地址（B 站上游）
+  ['/api/blogger/search', 25_000], // B 站用户搜索
+  ['/api/refresh', 30_000], // 手动触发全量刷新
+];
+
+function endpointTimeoutMs(url: string): number {
+  if (Number.isFinite(ENV_TIMEOUT_MS) && ENV_TIMEOUT_MS > 0) return DEFAULT_TIMEOUT_MS;
+  const hit = SLOW_ENDPOINT_TIMEOUTS.find(([prefix]) => url.startsWith(prefix));
+  return hit ? hit[1] : DEFAULT_TIMEOUT_MS;
+}
 
 /** 认证状态加载后由 auth store 注入；所有写请求共用这一份会话 token。 */
 export function setCsrfToken(token: string | null | undefined) {
@@ -67,8 +91,15 @@ export class ApiErrorImpl extends Error implements ApiError {
   }
 }
 
-function parseEnvelope(envelope: any, status: number): { code: number; message: string; data: any } {
-  if (!envelope || !Number.isInteger(envelope.code) || typeof envelope.message !== 'string' || !Object.prototype.hasOwnProperty.call(envelope, 'data')) {
+/** envelope 最小结构校验：{ code, message, data } 三键齐备才算合法响应。 */
+function isEnvelopeLike(value: unknown): value is { code: number; message: string; data: unknown } {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return Number.isInteger(v.code) && typeof v.message === 'string' && Object.prototype.hasOwnProperty.call(value, 'data');
+}
+
+function parseEnvelope(envelope: unknown, status: number): ApiResp<unknown> {
+  if (!isEnvelopeLike(envelope)) {
     throw new ApiErrorImpl(502, 'API 响应契约无效', { status, retryable: true });
   }
   if (status < 200 || status >= 300 || envelope.code !== 0) {
@@ -81,11 +112,11 @@ function parseEnvelope(envelope: any, status: number): { code: number; message: 
   return envelope;
 }
 
-async function requestEnvelope<T = any>(
+async function requestEnvelope<T = unknown>(
   url: string,
   options: RequestInit = {},
   handlers: ApiErrorHandlers = {},
-): Promise<{ code: number; message: string; data: T | null }> {
+): Promise<ApiResp<T | null>> {
   let response: Response;
   try {
     const method = (options.method || 'GET').toUpperCase();
@@ -98,6 +129,7 @@ async function requestEnvelope<T = any>(
       credentials: 'same-origin',
       ...options,
       headers,
+      signal: options.signal ?? AbortSignal.timeout(endpointTimeoutMs(url)),
     });
   } catch (error) {
     if (error instanceof ApiErrorImpl) throw error;
@@ -127,7 +159,7 @@ async function requestEnvelope<T = any>(
     throw error;
   }
 
-  let envelope: any;
+  let envelope: unknown;
   try {
     envelope = await response.json();
   } catch (error) {
@@ -140,16 +172,18 @@ async function requestEnvelope<T = any>(
     const parsed = parseEnvelope(envelope, response.status);
     // 请求成功：接入全局恢复清账（对齐老框架 onNetworkRecovered()）。
     networkHooks.onRequestSuccess?.();
-    return parsed as { code: number; message: string; data: T | null };
+    // data 的具体形状由调用方以泛型声明，运行时结构已由 parseEnvelope 校验为 envelope。
+    return parsed as ApiResp<T | null>;
   } catch (error) {
     if (!(error instanceof ApiErrorImpl)) throw error;
     // 对齐老框架：code 502（响应契约无效）视为后端异常。
     if (error.code === 502) networkHooks.onInvalidResponse?.(error);
     const activeHandlers = { ...globalHandlers, ...handlers };
     // 对齐老框架 api.js：401/-101 → onUnauthorized；403/-352/-403 → onRiskControl。
-    if (response.status === 401 || envelope.code === -101) {
+    const envCode = isEnvelopeLike(envelope) ? envelope.code : undefined;
+    if (response.status === 401 || envCode === -101) {
       await activeHandlers.onUnauthorized?.(error, url);
-    } else if (response.status === 403 || [-352, -403].includes(envelope.code)) {
+    } else if (response.status === 403 || (envCode !== undefined && [-352, -403].includes(envCode))) {
       await activeHandlers.onRiskControl?.(error, url);
     }
     throw error;
@@ -157,7 +191,7 @@ async function requestEnvelope<T = any>(
 }
 
 /** 与老框架 requestEnvelope 一致：需要消费后端 message（如保存设置的暂存提示）时用 Full 变体。 */
-async function requestFull<T = any>(
+async function requestFull<T = unknown>(
   url: string,
   options: RequestInit = {},
   handlers: ApiErrorHandlers = {},
@@ -166,16 +200,16 @@ async function requestFull<T = any>(
   return { data: parsed.data, message: parsed.message };
 }
 
-async function request<T = any>(
+async function request<T = unknown>(
   url: string,
   options: RequestInit = {},
   handlers: ApiErrorHandlers = {},
 ): Promise<T | null> {
   const parsed = await requestEnvelope<T>(url, options, handlers);
-  return parsed.data as T;
+  return parsed.data as T | null;
 }
 
-const get = <T = any>(url: string, params?: Record<string, any>) => {
+const get = <T = unknown>(url: string, params?: Record<string, unknown>) => {
   if (params) {
     const qs = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
@@ -187,11 +221,11 @@ const get = <T = any>(url: string, params?: Record<string, any>) => {
   }
   return request<T>(url, { method: 'GET' });
 };
-const post = <T = any>(url: string, body?: any) =>
+const post = <T = unknown>(url: string, body?: unknown) =>
   request<T>(url, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined });
-const put = <T = any>(url: string, body?: any) =>
+const put = <T = unknown>(url: string, body?: unknown) =>
   request<T>(url, { method: 'PUT', body: body !== undefined ? JSON.stringify(body) : undefined });
-const getFull = <T = any>(url: string, params?: Record<string, any>) => {
+const getFull = <T = unknown>(url: string, params?: Record<string, unknown>) => {
   if (params) {
     const qs = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
@@ -203,9 +237,9 @@ const getFull = <T = any>(url: string, params?: Record<string, any>) => {
   }
   return requestFull<T>(url, { method: 'GET' });
 };
-const postFull = <T = any>(url: string, body?: any) =>
+const postFull = <T = unknown>(url: string, body?: unknown) =>
   requestFull<T>(url, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined });
-const putFull = <T = any>(url: string, body?: any) =>
+const putFull = <T = unknown>(url: string, body?: unknown) =>
   requestFull<T>(url, { method: 'PUT', body: body !== undefined ? JSON.stringify(body) : undefined });
 
 export { request, requestFull, get, post, put, getFull, postFull, putFull };

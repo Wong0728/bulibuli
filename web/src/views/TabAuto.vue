@@ -151,7 +151,7 @@ function formFromBlogger(b: Blogger): BloggerConfigFormModel {
     download_comments: b.download_comments !== false, download_cover: b.download_cover !== false,
     burn_danmaku: b.burn_danmaku === true, burn_subtitle: b.burn_subtitle === true,
     series_filter_regex: b.series_filter_regex || '',
-    start_monitoring: b.monitor_enabled === true || b.running === true,
+    start_monitoring: b.monitor_enabled === true || b.is_running === true,
   };
 }
 
@@ -207,10 +207,11 @@ async function loadBloggerLogs(uid: number | string) {
   }
 }
 
-/** 对齐老框架 startLogRefresh：每 2 秒刷新当前选中博主的日志。 */
+/** 对齐老框架 startLogRefresh：每 2 秒刷新当前选中博主的日志（页面隐藏时跳过，同状态轮询守卫）。 */
 function startLogRefresh() {
   if (logTimer) return;
   logTimer = window.setInterval(() => {
+    if (document.hidden) return;
     const selectedBlogger = blogger.selected;
     if (selectedBlogger) void loadBloggerLogs(selectedBlogger.uid);
   }, 2000);
@@ -660,18 +661,10 @@ useModalFocus(showAddModal, addModalRoot, closeAddModal);
                 </span>
               </option>
             </select>
-            <div v-if="selectedKnownBlogger" class="known-blogger-preview" aria-live="polite">
-              <template v-if="selectedKnownBlogger.face">
-                <img :src="imageUrl(selectedKnownBlogger.face)" alt="" @error="imageError" />
-                <span class="known-blogger-preview-fallback" hidden><i class="fa-solid fa-user"></i></span>
-              </template>
-              <span v-else class="known-blogger-preview-fallback"><i class="fa-solid fa-user"></i></span>
-              <span>{{ selectedKnownBlogger.name || '未命名博主' }}（{{ selectedKnownBlogger.uid }}）</span>
-            </div>
-            <div class="form-note">也可以直接在下方输入 UID；选择已有记录时将更新其完整配置。</div>
+            <div class="form-note">选择博主后自动载入其 UID 与配置，UID 不可手动修改。</div>
           </div>
         </div>
-        <BloggerConfigForm v-model="addForm" />
+        <BloggerConfigForm v-model="addForm" :uid-readonly="true" />
         <div class="modal-footer">
           <button class="btn" @click="closeAddModal">
             <i class="fa-solid fa-times"></i> 取消

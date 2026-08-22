@@ -1,11 +1,7 @@
 use crate::services::audit_log::AuditEvent;
 use crate::services::auth::SessionAuth;
-use crate::services::file_safety::validate_uid;
 use anyhow::Result;
-use socketioxide::{
-    extract::{Data, SocketRef},
-    SocketIo,
-};
+use socketioxide::{extract::SocketRef, SocketIo};
 use std::sync::Arc;
 use tokio::sync::{broadcast, OnceCell};
 use tracing::{info, warn};
@@ -29,7 +25,8 @@ impl WebSocketManager {
     }
 
     /// 注册 Socket.IO 事件处理器。
-    /// 下载进度与博主日志按房间发送，未订阅的客户端不会接收业务事件。
+    /// 下载进度按房间发送，未订阅的客户端不会接收业务事件。
+    /// 博主日志不在此推送：WS 房间链路已移除，前端统一走 /api/logs/blogger HTTP 轮询。
     pub fn setup_handlers(io: &SocketIo) {
         io.ns("/", async move |s: SocketRef| {
             let session_id = s
@@ -55,40 +52,6 @@ impl WebSocketManager {
                 warn!("[WebSocket] 发送连接确认失败: {e}");
             }
 
-            s.on(
-                "blogger:logs:subscribe",
-                move |s: SocketRef, Data(data): Data<serde_json::Value>| async move {
-                    if let Some(raw_uid) = data.get("uid").and_then(|v| v.as_str()) {
-                        let uid = match validate_uid(raw_uid) {
-                            Ok(uid) => uid,
-                            Err(error) => {
-                                warn!("[WebSocket] 拒绝无效博主 UID {raw_uid:?}: {error}");
-                                return;
-                            }
-                        };
-                        let uid = uid.as_str();
-                        let room = format!("blogger:{uid}");
-                        s.join(room);
-                        if let Err(e) = s.emit(
-                            "subscribed",
-                            &serde_json::json!({
-                                "id": uuid::Uuid::new_v4().to_string(),
-                                "uid": uid,
-                                "message": format!("已订阅博主 {uid} 的日志更新"),
-                            }),
-                        ) {
-                            warn!("[WebSocket] 发送订阅确认失败: {e}");
-                        }
-                        info!("[WebSocket] 客户端 {} 订阅博主日志 uid={}", s.id, uid);
-                    } else {
-                        warn!(
-                            "[WebSocket] 客户端 {} subscribe_blogger_logs 缺少 uid 字段",
-                            s.id
-                        );
-                    }
-                },
-            );
-
             s.on("download:subscribe", move |s: SocketRef| async move {
                 s.join("download");
                 if let Err(e) = s.emit(
@@ -103,29 +66,6 @@ impl WebSocketManager {
                 info!("[WebSocket] 客户端 {} 订阅下载进度", s.id);
             });
 
-            s.on(
-                "blogger:logs:unsubscribe",
-                move |s: SocketRef, Data(data): Data<serde_json::Value>| async move {
-                    if let Some(raw_uid) = data.get("uid").and_then(|v| v.as_str()) {
-                        let uid = match validate_uid(raw_uid) {
-                            Ok(uid) => uid,
-                            Err(error) => {
-                                warn!("[WebSocket] 拒绝取消无效博主 UID {raw_uid:?}: {error}");
-                                return;
-                            }
-                        };
-                        let uid = uid.as_str();
-                        s.leave(format!("blogger:{uid}"));
-                        info!("[WebSocket] 客户端 {} 取消订阅博主日志 uid={}", s.id, uid);
-                    } else {
-                        warn!(
-                            "[WebSocket] 客户端 {} unsubscribe_blogger_logs 缺少 uid 字段",
-                            s.id
-                        );
-                    }
-                },
-            );
-
             s.on("download:unsubscribe", move |s: SocketRef| async move {
                 s.leave("download");
             });
@@ -134,31 +74,6 @@ impl WebSocketManager {
                 info!("[WebSocket] 客户端 {} 已断开", s.id);
             });
         });
-    }
-
-    pub async fn broadcast_log(&self, uid: Option<&str>, message: &str, level: &str) -> Result<()> {
-        let data = serde_json::json!({
-            "id": uuid::Uuid::new_v4().to_string(),
-            "uid": uid,
-            "message": message,
-            "level": level,
-            "ts": chrono::Utc::now().timestamp_millis(),
-            "time": chrono::Local::now().format("%H:%M:%S").to_string(),
-        });
-
-        if let Some(io) = self.io.get().cloned() {
-            if let Some(uid) = uid {
-                io.to(format!("blogger:{uid}"))
-                    .emit("log:update", &data)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("广播日志事件失败: {e}"))?;
-            } else {
-                io.emit("log:update", &data)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("广播日志事件失败: {e}"))?;
-            }
-        }
-        Ok(())
     }
 
     /// 广播下载进度。`bvid` 包含在 `data` 内，由前端区分任务。
@@ -244,4 +159,84 @@ pub fn start_audit_event_bridge(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::audit_log::AuditEvent;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn unattached_manager_broadcasts_are_noop_success() {
+        // 未 attach Socket.IO 时所有广播/断开都必须安全地返回 Ok，不得 panic。
+        let manager = WebSocketManager::new();
+        manager
+            .broadcast_download_progress(serde_json::json!({"bvid": "BV1xx411c7mD"}))
+            .await
+            .expect("broadcast_download_progress");
+        manager
+            .disconnect_session("some-session")
+            .await
+            .expect("disconnect_session");
+        manager
+            .disconnect_session("all")
+            .await
+            .expect("disconnect all");
+        manager
+            .broadcast_system("audit:event", serde_json::json!({}))
+            .await
+            .expect("broadcast_system");
+    }
+
+    #[tokio::test]
+    async fn attach_is_idempotent_and_broadcasts_stay_safe() {
+        let manager = WebSocketManager::new();
+        let (layer1, io1) = SocketIo::new_layer();
+        WebSocketManager::setup_handlers(&io1);
+        manager.attach(io1).await;
+        // 重复 attach：应被忽略而不是 panic / 覆盖。
+        let (_layer2, io2) = SocketIo::new_layer();
+        manager.attach(io2).await;
+        drop(layer1);
+        // 已 attach 但无客户端连接：广播仍必须成功（空房间 emit 是合法操作）。
+        manager
+            .broadcast_download_progress(serde_json::json!({"bvid": "BV"}))
+            .await
+            .expect("progress to empty room");
+        manager
+            .disconnect_session("nobody")
+            .await
+            .expect("disconnect empty room");
+    }
+
+    #[tokio::test]
+    async fn audit_event_bridge_survives_events_and_closed_channel() {
+        let manager = Arc::new(WebSocketManager::new());
+        let (layer, io) = SocketIo::new_layer();
+        WebSocketManager::setup_handlers(&io);
+        manager.attach(io).await;
+        drop(layer);
+
+        let (tx, rx) = tokio::sync::broadcast::channel::<AuditEvent>(8);
+        start_audit_event_bridge(manager.clone(), rx);
+        let event = AuditEvent {
+            at: "2026-08-21T00:00:00Z".to_string(),
+            source: "test",
+            caller_id: "caller".to_string(),
+            route_or_command: "/api/backup".to_string(),
+            target_type: "db".to_string(),
+            target_id: None,
+            action: "backup".to_string(),
+            outcome: "Success",
+            new_version: None,
+            request_id: "req-1".to_string(),
+        };
+        // 事件可序列化且发送后桥接不 panic。
+        serde_json::to_value(&event).expect("serialize audit event");
+        tx.send(event).expect("send audit event");
+        // 关闭通道后桥接任务应正常退出（Closed 分支），不 panic、不悬挂进程。
+        drop(tx);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }

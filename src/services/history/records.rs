@@ -4,7 +4,7 @@ use crate::error::AppResult;
 use crate::models::{download_task, history};
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect,
+    QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -49,11 +49,20 @@ impl HistoryService {
     }
 
     /// 看板查询：状态过滤、排序、计数和分页均在数据库完成。
-    pub async fn board_page(&self, tab: &str, page: u64, page_size: u64) -> AppResult<BoardPage> {
+    /// `fresh=true` 时绕过 2s 看板缓存强制查库（终态事件后的刷新用）。
+    pub async fn board_page(
+        &self,
+        tab: &str,
+        page: u64,
+        page_size: u64,
+        fresh: bool,
+    ) -> AppResult<BoardPage> {
         let cache_key = (tab.to_owned(), page, page_size);
-        if let Some((cached, fetched_at)) = self.board_cache.read().await.get(&cache_key) {
-            if fetched_at.elapsed() < super::BOARD_CACHE_TTL {
-                return Ok(cached.clone());
+        if !fresh {
+            if let Some((cached, fetched_at)) = self.board_cache.read().await.get(&cache_key) {
+                if fetched_at.elapsed() < super::BOARD_CACHE_TTL {
+                    return Ok(cached.clone());
+                }
             }
         }
         // 活跃集合 = 所有非终态任务（含 paused/retrying/merging）：
@@ -61,22 +70,27 @@ impl HistoryService {
         // 一旦漏出活跃集合就会掉进「已下载」或从三个 tab 全部消失）。
         let active_tasks = download_task::Entity::find()
             .select_only()
-            .column(download_task::Column::Bvid)
+            .columns([download_task::Column::Bvid, download_task::Column::Status])
             .filter(
-                download_task::Column::Status.is_in([
-                    "pending",
-                    "downloading",
-                    "paused",
-                    "retrying",
-                    "merging",
-                ]),
+                download_task::Column::Status.is_in(crate::domain::DownloadStatus::ACTIVE_STATUSES),
             )
-            .into_tuple::<String>()
+            .into_tuple::<(String, String)>()
             .all(&self.db)
             .await?;
-        let mut active_bvids = active_tasks;
+        let mut active_bvids: Vec<String> = Vec::with_capacity(active_tasks.len());
+        // 「已下载」排除集合不含 paused：任务暂停不应把已完成的产物从
+        // 「已下载」里藏起来（如暂停 RPC 失败遗留的孤儿任务，记录已入库）。
+        let mut hide_from_completed: Vec<String> = Vec::with_capacity(active_tasks.len());
+        for (bvid, status) in active_tasks {
+            if status != "paused" && !hide_from_completed.contains(&bvid) {
+                hide_from_completed.push(bvid.clone());
+            }
+            active_bvids.push(bvid);
+        }
         active_bvids.sort();
         active_bvids.dedup();
+        hide_from_completed.sort();
+        hide_from_completed.dedup();
 
         let mut query = history::Entity::find();
         query = match tab {
@@ -92,7 +106,7 @@ impl HistoryService {
                     .add(history::Column::State.eq("failed"))
                     .add(history::Column::Bvid.is_not_in(active_bvids.clone())),
             ),
-            _ if active_bvids.is_empty() => query.filter(history::Column::State.is_in([
+            _ if hide_from_completed.is_empty() => query.filter(history::Column::State.is_in([
                 "completed",
                 "removed",
                 "pay_blocked",
@@ -106,7 +120,7 @@ impl HistoryService {
                         "pay_blocked",
                         "tampered",
                     ]))
-                    .add(history::Column::Bvid.is_not_in(active_bvids.clone())),
+                    .add(history::Column::Bvid.is_not_in(hide_from_completed.clone())),
             ),
         };
 
@@ -278,6 +292,9 @@ impl HistoryService {
             }
         }
 
+        // 任务删除与记录删除必须在同一事务：任一步失败留下孤儿任务或悬空记录
+        // （写法对齐 blogger.rs 的 enforce_retain）。
+        let transaction = self.db.begin().await?;
         // 删除与所选 history 对应的任务；无 history_id 时清理该 BV 全部任务。
         let mut deleted_task_count = 0;
         for h in &histories {
@@ -287,7 +304,7 @@ impl HistoryService {
                 Some(cid) => query.filter(download_task::Column::Cid.eq(cid)),
                 None => query.filter(download_task::Column::Cid.is_null()),
             };
-            deleted_task_count += query.exec(&self.db).await?.rows_affected;
+            deleted_task_count += query.exec(&transaction).await?.rows_affected;
         }
         info!(
             "[delete_history] {bvid} 级联清理 download_task: {} 条",
@@ -298,8 +315,9 @@ impl HistoryService {
         let ids = histories.iter().map(|h| h.id).collect::<Vec<_>>();
         history::Entity::delete_many()
             .filter(history::Column::Id.is_in(ids))
-            .exec(&self.db)
+            .exec(&transaction)
             .await?;
+        transaction.commit().await?;
         info!(
             "[delete_history] {bvid} 已删除记录，文件 {} 个",
             removed_files.len()

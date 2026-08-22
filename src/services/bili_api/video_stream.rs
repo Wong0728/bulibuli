@@ -13,6 +13,36 @@ use super::{session_fingerprint, BiliApi, QUALITY_NAMES};
 
 const VIDEO_INFO_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// B 站流不可下载的业务性错误（区别于网络/风控等瞬时错误）：
+/// - `permission = true`：充电专属/付费内容无观看权限，playurl 只回试看片段（durl）。
+///   下载试看片段会产出时长正确但后半段为空的坏文件，必须拒绝。
+/// - `permission = false`：有权限但只有暂不支持下载语义的流（如多分段 durl）。
+///
+/// 由 `AppError::From<anyhow>` 映射为 HTTP 402/400 并透传真实文案；
+/// 此前用裸 anyhow 报错会被归为 Internal(500)，前端只能看到"服务器内部错误"。
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{message}")]
+pub struct StreamUnavailableError {
+    pub message: String,
+    pub permission: bool,
+}
+
+impl StreamUnavailableError {
+    pub fn permission(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            permission: true,
+        }
+    }
+
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            permission: false,
+        }
+    }
+}
+
 impl BiliApi {
     /// 获取视频详情（`/x/web-interface/wbi/view`）。
     /// 业务失败（下架/风控/未登录等）一律走 `Err`（由统一入口 classify）。
@@ -148,11 +178,11 @@ impl BiliApi {
 
         let qn_value = preferred_quality.unwrap_or(127);
         let fnval_value = if fnval <= 0 { 4048 } else { fnval };
-        let data = self
+        let mut data = self
             .request_playurl(bvid, cid, cookies, qn_value, fnval_value)
             .await?;
 
-        if let Some(dash) = data.dash {
+        if let Some(dash) = data.dash.take() {
             let mut qualities: Vec<StreamQuality> = Vec::new();
             for stream in dash.video {
                 let urls = stream.collect_urls();
@@ -189,33 +219,86 @@ impl BiliApi {
                     ),
                 });
             }
-            qualities.sort_by_key(|q| std::cmp::Reverse(q.quality));
-            let selected = preferred_quality.and_then(|pq| {
-                choose_video_stream(
-                    &qualities,
-                    pq,
-                    16,
-                    &["av1".to_string(), "hevc".to_string(), "avc".to_string()],
-                    true,
-                )
-            });
-            let available_qualities = qualities.iter().map(|q| i64::from(q.quality)).collect();
-            return Ok(VideoStreams {
-                cid,
-                qualities,
-                selected_quality: selected,
-                available_qualities,
-                accept_quality: data.accept_quality,
-            });
+            return self.finish_video_streams(data, cid, qualities, preferred_quality);
         }
 
-        if data.durl.is_some() {
-            // 方案B 明确拒绝：durl(FLV) 分段流无分段下载+拼接语义，
-            // 半成品回退路径会产出损坏文件（多段未拼接、画质硬编码 80/流畅/720p）。
-            // 直接报错让用户感知，避免僵尸任务与损坏产物。
-            return Err(anyhow!(
-                "该视频仅提供 FLV 分段流（durl），暂不支持下载。请等待 DASH 流恢复或联系开发者"
-            ));
+        // 无 DASH 时的 durl 分支。durl 是音视频已封装的直链（现代 B 站几乎总是单段），
+        // 出现场景与处置：
+        // - 充电专属/付费内容且无观看权限 → 只回"试看"片段，下载会产出坏文件，明确拒绝；
+        // - 有权限但仅有多分段流 → 需要分段下载+拼接语义，暂不支持，明确拒绝；
+        // - 有权限的单段直链（多为老投稿）→ 直接构建可下载流，不再一刀切报错。
+        if let Some(durl) = data.durl.take().filter(|segments| !segments.is_empty()) {
+            let info = self.get_video_info(bvid, cookies).await?;
+            if info.is_upower_exclusive && !info.is_upower_play {
+                return Err(anyhow!(StreamUnavailableError::permission(
+                    "该视频为充电专属内容，当前账号没有观看权限，仅能获取试看片段",
+                )));
+            }
+            if info.rights.ugc_pay == 1 || info.rights.pay == 1 {
+                return Err(anyhow!(StreamUnavailableError::permission(
+                    "该视频为付费内容，当前账号未购买，仅能获取试看片段",
+                )));
+            }
+            if durl.len() > 1 {
+                return Err(anyhow!(StreamUnavailableError::unsupported(format!(
+                    "该视频仅提供 {} 段分段流（durl），暂不支持分段下载拼接",
+                    durl.len()
+                ))));
+            }
+            let segment = &durl[0];
+            let mut urls = Vec::new();
+            if let Some(main) = segment.url.as_deref().filter(|u| !u.is_empty()) {
+                urls.push(main.to_string());
+            }
+            for backup in segment.backup_url.iter().flatten() {
+                if !backup.is_empty() && !urls.contains(backup) {
+                    urls.push(backup.clone());
+                }
+            }
+            if urls.is_empty() {
+                // durl 存在但全部 URL 为空：按“未找到视频流”处理
+                return Ok(VideoStreams {
+                    cid,
+                    qualities: Vec::new(),
+                    selected_quality: None,
+                    available_qualities: Vec::new(),
+                    accept_quality: data.accept_quality,
+                });
+            }
+            let url = self
+                .bad_cdns
+                .choose_url(&urls)
+                .await
+                .unwrap_or(&urls[0])
+                .to_string();
+            let quality = data.quality.unwrap_or(16).clamp(16, 127) as i32;
+            let quality_name = QUALITY_NAMES
+                .iter()
+                .find(|(q, _)| *q == quality)
+                .map(|(_, n)| n.to_string())
+                .unwrap_or_else(|| "直链".to_string())
+                .to_string();
+            let format = durl_container_format(&urls[0]);
+            tracing::info!(
+                bvid,
+                cid,
+                quality,
+                format,
+                size = segment.size,
+                "playurl 仅提供 durl 直链（有观看权限），按单段封装流构建下载"
+            );
+            let qualities = vec![StreamQuality {
+                quality,
+                quality_name,
+                width: 0,
+                height: 0,
+                url,
+                urls,
+                size: segment.size,
+                format: format.to_string(),
+                codec: None,
+            }];
+            return self.finish_video_streams(data, cid, qualities, preferred_quality);
         }
 
         // dash/durl 均缺失：返回空流集合，调用方按“未找到视频流”处理
@@ -224,6 +307,35 @@ impl BiliApi {
             qualities: Vec::new(),
             selected_quality: None,
             available_qualities: Vec::new(),
+            accept_quality: data.accept_quality,
+        })
+    }
+
+    /// 流集合的公共收尾：排序、按偏好选流、组装 VideoStreams。
+    /// DASH 与 durl 单段直链两条构建路径共用。
+    fn finish_video_streams(
+        &self,
+        data: PlayurlData,
+        cid: i64,
+        mut qualities: Vec<StreamQuality>,
+        preferred_quality: Option<i32>,
+    ) -> Result<VideoStreams> {
+        qualities.sort_by_key(|q| std::cmp::Reverse(q.quality));
+        let selected = preferred_quality.and_then(|pq| {
+            choose_video_stream(
+                &qualities,
+                pq,
+                16,
+                &["av1".to_string(), "hevc".to_string(), "avc".to_string()],
+                true,
+            )
+        });
+        let available_qualities = qualities.iter().map(|q| i64::from(q.quality)).collect();
+        Ok(VideoStreams {
+            cid,
+            qualities,
+            selected_quality: selected,
+            available_qualities,
             accept_quality: data.accept_quality,
         })
     }
@@ -338,6 +450,17 @@ impl BiliApi {
     }
 }
 
+/// 从 durl 直链推断封装容器：B 站 durl 只有 flv/mp4 两种，
+/// 扩展名在 URL 路径里（查询串是签名参数）。无法识别时按 mp4 兜底。
+fn durl_container_format(url: &str) -> &'static str {
+    let path = url.split('?').next().unwrap_or_default();
+    if path.to_ascii_lowercase().ends_with(".flv") {
+        "flv"
+    } else {
+        "mp4"
+    }
+}
+
 /// 在可用视频流中执行稳定、可测试的“画质优先、编码偏好、最低画质”选择。
 /// 只允许向下回退；所有候选都低于最低画质时返回 None。
 pub(crate) fn choose_video_stream(
@@ -379,7 +502,9 @@ pub(crate) fn choose_video_stream(
 #[cfg(test)]
 mod stream_selection_tests {
     use super::choose_video_stream;
+    use super::durl_container_format;
     use super::StreamQuality;
+    use super::StreamUnavailableError;
 
     fn stream(quality: i32, codec: &str) -> StreamQuality {
         StreamQuality {
@@ -401,5 +526,26 @@ mod stream_selection_tests {
     fn refuses_fallback_below_minimum() {
         let streams = vec![stream(64, "avc1")];
         assert!(choose_video_stream(&streams, 80, 80, &["avc".into()], true).is_none());
+    }
+
+    #[test]
+    fn durl_format_is_derived_from_url_path_only() {
+        assert_eq!(
+            durl_container_format("https://cdn/x/main.flv?e=sig&uipk=5"),
+            "flv"
+        );
+        assert_eq!(
+            durl_container_format("https://cdn/x/main.MP4?deadline=1"),
+            "mp4"
+        );
+        assert_eq!(durl_container_format("https://cdn/x/no-ext"), "mp4");
+    }
+
+    #[test]
+    fn stream_unavailable_error_flags_permission() {
+        let permission = StreamUnavailableError::permission("无权限");
+        assert!(permission.permission);
+        let unsupported = StreamUnavailableError::unsupported("多分段");
+        assert!(!unsupported.permission);
     }
 }

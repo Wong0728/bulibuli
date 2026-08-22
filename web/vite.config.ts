@@ -3,7 +3,7 @@ import vue from '@vitejs/plugin-vue';
 import path from 'node:path';
 
 // 产物落位到 `static/app/`，由 Rust 后端以 /app/* 路径 serve。
-// 入口固定为 `static/app/index.html`，与现有 static/index.html 共存，方便灰度切换。
+// 唯一前端入口固定为 `static/app/index.html`。
 export default defineConfig({
   root: path.resolve(__dirname),
   base: '/app/',
@@ -19,7 +19,11 @@ export default defineConfig({
         // 给 asset 文件名加 hash，方便 Rust 端设置缓存
         entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash].[ext]'
+        assetFileNames: 'assets/[name]-[hash].[ext]',
+        // 框架依赖单独成 vendor chunk，业务代码更新时不使其缓存失效。
+        manualChunks: {
+          vendor: ['vue', 'pinia', 'socket.io-client']
+        }
       }
     }
   },

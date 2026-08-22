@@ -46,7 +46,9 @@ async fn start_task(
     State(state): State<SharedState>,
     Json(req): Json<StartTaskRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = crate::services::file_safety::validate_uid(&req.uid)?.as_str().to_owned();
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?
+        .as_str()
+        .to_owned();
     let blogger = state
         .business
         .blogger_service
@@ -57,7 +59,11 @@ async fn start_task(
     let guard = state
         .infra
         .conflict_guard
-        .check_and_bump(OperationTarget::Blogger, &blogger.id.to_string(), req.expected_version)
+        .check_and_bump(
+            OperationTarget::Blogger,
+            &blogger.id.to_string(),
+            req.expected_version,
+        )
         .await?;
     let toggle = match state
         .business
@@ -127,7 +133,9 @@ async fn stop_task(
     State(state): State<SharedState>,
     Json(req): Json<StartTaskRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let uid = crate::services::file_safety::validate_uid(&req.uid)?.as_str().to_owned();
+    let uid = crate::services::file_safety::validate_uid(&req.uid)?
+        .as_str()
+        .to_owned();
     let blogger = state
         .business
         .blogger_service
@@ -138,7 +146,11 @@ async fn stop_task(
     let guard = state
         .infra
         .conflict_guard
-        .check_and_bump(OperationTarget::Blogger, &blogger.id.to_string(), req.expected_version)
+        .check_and_bump(
+            OperationTarget::Blogger,
+            &blogger.id.to_string(),
+            req.expected_version,
+        )
         .await?;
     let toggle = match state
         .business

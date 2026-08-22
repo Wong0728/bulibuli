@@ -54,7 +54,9 @@ impl MonitorService {
     }
 
     /// 用 get_video_urls 探测当前 Cookie 能否下载付费视频。
-    /// 有 dash.video[] → *_paid；否则 → *_no_permission。
+    /// 有 dash.video[] → *_paid；权限型拦截（试看片段 durl）→ *_no_permission。
+    /// 其余请求失败（网络/风控）属于瞬时错误：返回未映射的原始错误，
+    /// 由调用方仅告警并下周期重试，而不是误落 pay_blocked。
     async fn probe_download_permission(
         &self,
         bvid: &str,
@@ -68,12 +70,30 @@ impl MonitorService {
         {
             Ok(streams) => {
                 if !streams.qualities.is_empty() {
-                    Err(format!("{}_paid", kind))
+                    Err(format!("{kind}_paid"))
                 } else {
-                    Err(format!("{}_no_permission", kind))
+                    Err(format!("{kind}_no_permission"))
                 }
             }
-            Err(_) => Err(format!("{}_no_permission", kind)),
+            Err(error) => {
+                // 未购买的付费视频 playurl 有两种确定性无权限信号：
+                // - 业务码 87007（需要充电/付费）
+                // - 回"试看"durl，被服务层以权限型 StreamUnavailableError 拒绝
+                // 两者都归类为 no_permission 落库，不能当瞬时错误无限重试
+                // （此前会每个监控周期刷一遍探测日志）。
+                if let Some(bili_error) = error.downcast_ref::<crate::error::BiliApiError>() {
+                    if bili_error.kind == crate::error::BiliErrorKind::ChargeRequired {
+                        return Err(format!("{kind}_no_permission"));
+                    }
+                }
+                if error
+                    .downcast_ref::<crate::services::bili_api::StreamUnavailableError>()
+                    .is_some_and(|e| e.permission)
+                {
+                    return Err(format!("{kind}_no_permission"));
+                }
+                Err(format!("探测{kind}下载权限失败: {error}"))
+            }
         }
     }
 
@@ -137,18 +157,21 @@ impl MonitorService {
 /// - `ugc_pay_no_permission` → `pay_blocked` / `ugc_pay_no_permission`
 /// - `pay_paid` → `pay_blocked` / `pay_paid`
 /// - `pay_no_permission` → `pay_blocked` / `pay_no_permission`
-/// - `not_found` / 其他 → `removed` / `unknown`
-pub(crate) fn pay_reason_to_state(reason: &str) -> (&'static str, &'static str) {
+///
+/// 返回 `None` 表示瞬时错误（网络失败、风控、获取视频信息失败等）：
+/// 这类原因**不能**落库为 `removed`（会被前端展示成"已下架"造成误判），
+/// 调用方应仅告警并让下个监控周期自然重试。
+pub(crate) fn pay_reason_to_state(reason: &str) -> Option<(&'static str, &'static str)> {
     match reason {
-        "state_deleted" => ("removed", "state_deleted"),
-        "state_under_review" => ("pay_blocked", "state_under_review"),
-        "upower_paid" => ("pay_blocked", "upower_paid"),
-        "upower_no_permission" => ("pay_blocked", "upower_no_permission"),
-        "ugc_pay_paid" => ("pay_blocked", "ugc_pay_paid"),
-        "ugc_pay_no_permission" => ("pay_blocked", "ugc_pay_no_permission"),
-        "pay_paid" => ("pay_blocked", "pay_paid"),
-        "pay_no_permission" => ("pay_blocked", "pay_no_permission"),
-        _ => ("removed", "unknown"),
+        "state_deleted" => Some(("removed", "state_deleted")),
+        "state_under_review" => Some(("pay_blocked", "state_under_review")),
+        "upower_paid" => Some(("pay_blocked", "upower_paid")),
+        "upower_no_permission" => Some(("pay_blocked", "upower_no_permission")),
+        "ugc_pay_paid" => Some(("pay_blocked", "ugc_pay_paid")),
+        "ugc_pay_no_permission" => Some(("pay_blocked", "ugc_pay_no_permission")),
+        "pay_paid" => Some(("pay_blocked", "pay_paid")),
+        "pay_no_permission" => Some(("pay_blocked", "pay_no_permission")),
+        _ => None,
     }
 }
 
@@ -160,34 +183,39 @@ mod tests {
     fn test_pay_reason_to_state_mapping() {
         assert_eq!(
             pay_reason_to_state("state_deleted"),
-            ("removed", "state_deleted")
+            Some(("removed", "state_deleted"))
         );
         assert_eq!(
             pay_reason_to_state("upower_paid"),
-            ("pay_blocked", "upower_paid")
+            Some(("pay_blocked", "upower_paid"))
         );
         assert_eq!(
             pay_reason_to_state("upower_no_permission"),
-            ("pay_blocked", "upower_no_permission")
+            Some(("pay_blocked", "upower_no_permission"))
         );
         assert_eq!(
             pay_reason_to_state("ugc_pay_paid"),
-            ("pay_blocked", "ugc_pay_paid")
+            Some(("pay_blocked", "ugc_pay_paid"))
         );
         assert_eq!(
             pay_reason_to_state("ugc_pay_no_permission"),
-            ("pay_blocked", "ugc_pay_no_permission")
+            Some(("pay_blocked", "ugc_pay_no_permission"))
         );
-        assert_eq!(pay_reason_to_state("pay_paid"), ("pay_blocked", "pay_paid"));
+        assert_eq!(
+            pay_reason_to_state("pay_paid"),
+            Some(("pay_blocked", "pay_paid"))
+        );
         assert_eq!(
             pay_reason_to_state("pay_no_permission"),
-            ("pay_blocked", "pay_no_permission")
+            Some(("pay_blocked", "pay_no_permission"))
         );
         assert_eq!(
             pay_reason_to_state("state_under_review"),
-            ("pay_blocked", "state_under_review")
+            Some(("pay_blocked", "state_under_review"))
         );
-        assert_eq!(pay_reason_to_state("not_found"), ("removed", "unknown"));
-        assert_eq!(pay_reason_to_state("xxx"), ("removed", "unknown"));
+        // 瞬时错误（网络失败 / 获取视频信息失败等）不落库，返回 None
+        assert_eq!(pay_reason_to_state("not_found"), None);
+        assert_eq!(pay_reason_to_state("获取视频信息失败: 超时"), None);
+        assert_eq!(pay_reason_to_state("xxx"), None);
     }
 }

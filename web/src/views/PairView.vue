@@ -13,6 +13,8 @@ const polling = ref(false);
 const error = ref('');
 const paired = ref(false);
 const now = ref(Math.floor(Date.now() / 1000));
+/** 服务器时钟偏移（server_time - 本地时间）：倒计时用本地时钟 + 偏移校准。 */
+const clockOffset = ref(0);
 let timer: number | null = null;
 let clock: number | null = null;
 
@@ -24,7 +26,8 @@ const floatingBits = [
 ];
 const heroSlots = Array.from({ length: 28 }, (_, index) => index);
 
-const remaining = computed(() => expiresAt.value == null ? 0 : Math.max(0, expiresAt.value - now.value));
+const serverNow = computed(() => now.value + clockOffset.value);
+const remaining = computed(() => expiresAt.value == null ? 0 : Math.max(0, expiresAt.value - serverNow.value));
 const hint = computed(() => {
   if (paired.value) return '正在进入管理界面…';
   if (error.value) return error.value;
@@ -88,6 +91,10 @@ async function loadState() {
     }
     pairingOpen.value = !!state?.pairing_open;
     expiresAt.value = state?.pairing_expires_at ?? null;
+    // 用服务器时间校准时钟偏移：客户端时钟偏差不再影响倒计时准确性。
+    if (typeof state?.server_time === 'number') {
+      clockOffset.value = state.server_time - Math.floor(Date.now() / 1000);
+    }
     error.value = '';
   } catch (e: any) {
     error.value = e?.message || '无法连接服务器，正在重试…';

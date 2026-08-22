@@ -16,6 +16,22 @@ pub enum DownloadStatus {
 }
 
 impl DownloadStatus {
+    /// 非终态（活跃）任务全集：进度快照、历史三态过滤、看板活跃集合等
+    /// 统一引用此处，避免散落的字面量数组遗漏状态导致任务从视图中消失。
+    pub const ACTIVE_STATUSES: [&'static str; 5] =
+        ["pending", "downloading", "paused", "retrying", "merging"];
+
+    /// 监控循环需要驱动的运行态：paused 有意排除（暂停是用户意图，
+    /// 不参与 aria2 轮询）；merging 有意排除（由完成链路驱动，轮询会重复触发完成）。
+    /// retrying 必须包含：重试中断后仅靠该轮询收敛到 downloading/failed，
+    /// 否则任务永久卡死。
+    pub const MONITOR_STATUSES: [&'static str; 3] = ["downloading", "pending", "retrying"];
+
+    /// 重启后需要断点续传的状态：paused 保持暂停（用户意图），
+    /// retrying/merging 属运行中断，重建后继续。
+    pub const RESUME_STATUSES: [&'static str; 4] =
+        ["pending", "downloading", "retrying", "merging"];
+
     pub fn can_transition_to(&self, next: &Self) -> bool {
         use DownloadStatus::*;
         matches!(
@@ -26,7 +42,7 @@ impl DownloadStatus {
                     Paused | Retrying | Merging | Completed | Failed | Cancelled
                 )
                 | (Paused, Downloading | Retrying | Cancelled | Failed)
-                | (Retrying, Downloading | Failed | Cancelled)
+                | (Retrying, Downloading | Paused | Failed | Cancelled)
                 | (Merging, Completed | Failed | Cancelled)
                 | (Failed, Retrying | Cancelled)
         ) || self == next
@@ -154,6 +170,23 @@ pub struct TaskInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_status_sets_cover_every_non_terminal_state() {
+        // 非终态全集与终端态互补：任何新增状态必须同步维护这些常量，
+        // 否则会重现“retrying/merging 被轮询与看板遗漏而永久卡死”的缺陷。
+        for active in DownloadStatus::ACTIVE_STATUSES {
+            assert!(!DownloadStatus::from_str(active).unwrap().is_terminal());
+        }
+        assert_eq!(DownloadStatus::ACTIVE_STATUSES.len(), 8 - 3);
+        // 监控/续传集合必须是活跃全集的子集。
+        for status in DownloadStatus::MONITOR_STATUSES {
+            assert!(DownloadStatus::ACTIVE_STATUSES.contains(&status));
+        }
+        for status in DownloadStatus::RESUME_STATUSES {
+            assert!(DownloadStatus::ACTIVE_STATUSES.contains(&status));
+        }
+    }
 
     #[test]
     fn transitions_are_restricted() {

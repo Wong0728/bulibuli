@@ -1,11 +1,11 @@
 use crate::error::{ApiResponse, AppError};
 use crate::services::aria2::rpc_endpoint;
+use crate::services::auth::SessionAuth;
 use crate::services::file_safety::render_path_template;
 use crate::services::settings::{RuntimeSettings, SECRET_MASK};
 use crate::state::SharedState;
 use axum::{
-    extract::Query,
-    extract::State,
+    extract::{Extension, Query, State},
     routing::{get, post},
     Json, Router,
 };
@@ -156,22 +156,31 @@ struct SettingsPayload {
     secret_configured: bool,
 }
 
-fn settings_for_response(settings: &RuntimeSettings) -> RuntimeSettings {
+/// 响应脱敏：aria2 RPC 密钥永远打码；非 Owner 会话额外清空自定义 FFmpeg
+/// 本机绝对路径——GET /api/settings 允许 Viewer/Operator 只读查看业务设置，
+/// 但服务器文件系统布局不应暴露给受限角色（S4）。
+fn settings_for_response(settings: &RuntimeSettings, is_owner: bool) -> RuntimeSettings {
     let mut response = settings.clone();
     response.aria2_rpc.secret = if settings.aria2_rpc.secret.is_empty() {
         String::new()
     } else {
         SECRET_MASK.to_string()
     };
+    if !is_owner {
+        response.ffmpeg.custom_path.clear();
+    }
     response
 }
 
 async fn get_settings(
     State(state): State<SharedState>,
+    Extension(session): Extension<Option<SessionAuth>>,
 ) -> Result<Json<ApiResponse<SettingsPayload>>, AppError> {
     let current = state.infra.settings_service.current();
+    // 仅 Owner 可见本机绝对路径；Viewer/Operator 脱敏（见 settings_for_response）。
+    let is_owner = session.as_ref().is_some_and(|value| value.role.is_owner());
     Ok(Json(ApiResponse::success(SettingsPayload {
-        current: settings_for_response(current.as_ref()),
+        current: settings_for_response(current.as_ref(), is_owner),
         defaults: RuntimeSettings::default(),
         constraints: json!({
             "parallel_download.max_parallel": { "min": 1, "max": 32 },
@@ -210,7 +219,8 @@ async fn save_settings(
         .map(|warning| format!("设置已保存，但 Aria2 未能完全重载：{warning}"))
         .unwrap_or_else(|| "设置已保存".to_string());
     Ok(Json(ApiResponse::with_message(
-        settings_for_response(saved.as_ref()),
+        // 保存/重置均为 Owner-only 写操作（RBAC 在中间件层拦截），响应不过滤路径。
+        settings_for_response(saved.as_ref(), true),
         message,
     )))
 }
@@ -286,7 +296,8 @@ async fn reset_settings(
         .map(|warning| format!("已恢复默认设置，但 Aria2 未能完全重载：{warning}"))
         .unwrap_or_else(|| "已恢复默认设置".to_string());
     Ok(Json(ApiResponse::with_message(
-        settings_for_response(settings.as_ref()),
+        // 同 save_settings：重置为 Owner-only 写操作，响应不过滤路径。
+        settings_for_response(settings.as_ref(), true),
         message,
     )))
 }

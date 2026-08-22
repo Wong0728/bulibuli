@@ -58,7 +58,10 @@ function stopPolling() {
  */
 onActivated(() => {
   history.selectTab(subTab.value);
-  void history.loadBoard(subTab.value);
+  // 有终态事件待消费时绕过后端 2s 看板缓存强制重拉，保证刚完成的下载立即可见。
+  const fresh = history.boardDirty;
+  history.boardDirty = false;
+  void history.loadBoard(subTab.value, false, fresh);
   void download.refreshStatus();
   startPolling();
 });
@@ -204,11 +207,14 @@ function taskMatchesEntry(task: any, entry: HistoryEntry): boolean {
     && entry.cid == null && entry.page == null;
 }
 
-/** 按内存任务的 video 类型建 bvid 索引（WS 推送后 O(1) 匹配看板卡片）。 */
+/** 按内存任务的 video/audio 类型建 bvid 索引（WS 推送后 O(1) 匹配看板卡片）。
+ *  audio 任务也纳入：视频流完成后进度条继续跟踪音频下载，
+ *  liveTaskFor 的 TASK_STATUS_PRIORITY 会自动选中仍在传输的那个任务。 */
 const tasksByBvid = computed(() => {
   const map = new Map<string, DownloadTask[]>();
   for (const t of download.tasks.values()) {
-    if ((t.type || 'video') !== 'video') continue;
+    const type = t.type || 'video';
+    if (type !== 'video' && type !== 'audio') continue;
     const list = map.get(t.bvid);
     if (list) list.push(t);
     else map.set(t.bvid, [t]);
@@ -297,7 +303,9 @@ function cardProgress(e: HistoryEntry) {
   const isTaskActive = status === 'downloading' || status === 'pending' || status === 'paused';
   const show = isTaskActive
     && (e.state === 'pending' || e.state === 'downloading' || e.state === 'paused' || subTab.value === 'downloading');
-  const percent = clampPercent(task.progress_percent);
+  // live store 任务的字段名是 progress（fromBackendTask/applyWsProgress 映射），
+  // 板数据 e.task 是 progress_percent；两者都兼容，否则实时进度恒为 0。
+  const percent = clampPercent(task.progress ?? task.progress_percent);
   const isPaused = status === 'paused';
   const speed = task.speed ? formatSpeed(task.speed) : '';
   const downloadedSize = task.downloaded_size ? formatSize(task.downloaded_size) : '';
@@ -322,6 +330,25 @@ function cardProgress(e: HistoryEntry) {
     speedText: !isPaused && speed ? speed : '',
     sizeText: downloadedSize && totalSize ? `${downloadedSize} / ${totalSize}` : '',
   };
+}
+
+/**
+ * 卡片视图模型缓存：每张卡只算一次 cardProgress/cardControls（模板里多处消费），
+ * 避免每次渲染对同一卡片重复计算、WS 高频推送时全板放大开销。
+ */
+const cardVmById = computed(() => {
+  const map = new Map<number, { progress: ReturnType<typeof cardProgress>; controls: ReturnType<typeof cardControls> }>();
+  for (const g of sortedGroups.value) {
+    for (const e of g.videos) {
+      map.set(e.id, { progress: cardProgress(e), controls: cardControls(e) });
+    }
+  }
+  return map;
+});
+function cardVm(e: HistoryEntry) {
+  return (
+    cardVmById.value.get(e.id) ?? { progress: cardProgress(e), controls: cardControls(e) }
+  );
 }
 
 /**
@@ -428,6 +455,19 @@ const sortedGroups = computed(() => {
       : history.downloadingGroups;
   return [...groups].sort((a, b) => String(a.uid || '').localeCompare(String(b.uid || '')));
 });
+
+/** 手动下载且未知博主的分组 uid 是 "unknown"（board.rs 兜底键），
+ *  直接展示会像任务名出错；映射为"手动下载"。 */
+function groupDisplayName(g: HistoryGroup): string {
+  if (g.name) return g.name;
+  const uid = String(g.uid ?? '');
+  return uid && uid !== 'unknown' ? uid : '手动下载';
+}
+
+/** 只有数字 uid 的分组才可按博主整理/清理。 */
+function isManagedGroup(g: HistoryGroup): boolean {
+  return /^\d+$/.test(String(g.uid ?? ''));
+}
 const loadedCount = computed(() => sortedGroups.value.reduce((count, g) => count + g.videos.length, 0));
 /** 「加载更多」用后端按 tab 的 data.total（老框架 historyPagination.total）。 */
 const currentTotal = computed(() => history.boardTotals[subTab.value] ?? 0);
@@ -505,7 +545,11 @@ function describeFailure(failure?: { message?: string; kind?: string; fallback_r
 
       <div class="history-board" id="history-board">
         <!-- 三个子 tab 统一按博主分组的卡片列表（老框架 renderHistoryBoard）。 -->
-        <div v-if="sortedGroups.length === 0" class="empty-state-grid">
+        <div v-if="history.loading[subTab]" class="empty-state-grid" data-board-loading>
+          <i class="fa-solid fa-spinner fa-spin"></i>
+          <p>正在加载…</p>
+        </div>
+        <div v-else-if="sortedGroups.length === 0" class="empty-state-grid">
           <i class="fa-solid fa-inbox"></i>
           <p>{{ emptyHint }}</p>
           <p class="empty-hint"><a href="#" @click.prevent="app.setTab('search')">去博主搜索</a> 或 <a href="#" @click.prevent="app.setTab('manual')">手动查询</a></p>
@@ -520,11 +564,11 @@ function describeFailure(failure?: { message?: string; kind?: string; fallback_r
                 </template>
                 <div v-else class="blogger-section-avatar blogger-section-avatar-fallback">{{ String(g.name || g.uid || '?').slice(0, 1) }}</div>
                 <div class="blogger-section-text">
-                  <div class="blogger-section-name">{{ g.name || g.uid || '未知博主' }}</div>
-                  <div class="blogger-section-uid">UID: {{ g.uid }}</div>
+                  <div class="blogger-section-name">{{ groupDisplayName(g) }}</div>
+                  <div v-if="isManagedGroup(g)" class="blogger-section-uid">UID: {{ g.uid }}</div>
                 </div>
               </div>
-              <button class="btn btn-sm btn-ghost" data-mutating title="立即按保留数清理该博主" @click="cleanupGroup(g)">
+              <button v-if="isManagedGroup(g)" class="btn btn-sm btn-ghost" data-mutating title="立即按保留数清理该博主" @click="cleanupGroup(g)">
                 <i class="fa-solid fa-broom"></i> 立即整理
               </button>
             </div>
@@ -545,14 +589,14 @@ function describeFailure(failure?: { message?: string; kind?: string; fallback_r
                     <span title="发布时间"><i class="fa-solid fa-calendar-alt"></i> {{ e.pub_date || formatTimestamp(e.pub_timestamp) || '--' }}</span>
                     <span title="播放量"><i class="fa-solid fa-play"></i> {{ formatViewCount(e.view) }}</span>
                   </div>
-                  <template v-if="cardProgress(e).show">
+                  <template v-if="cardVm(e).progress.show">
                     <div class="board-card-progress">
-                      <progress class="board-card-progress-bar" max="100" :value="cardProgress(e).percent"></progress>
+                      <progress class="board-card-progress-bar" max="100" :value="cardVm(e).progress.percent"></progress>
                     </div>
                     <div class="board-card-progress-text">
-                      <span>{{ cardProgress(e).label }}</span>
-                      <span v-if="cardProgress(e).speedText" class="board-card-speed">{{ cardProgress(e).speedText }}</span>
-                      <span v-if="cardProgress(e).sizeText" class="board-card-size">{{ cardProgress(e).sizeText }}</span>
+                      <span>{{ cardVm(e).progress.label }}</span>
+                      <span v-if="cardVm(e).progress.speedText" class="board-card-speed">{{ cardVm(e).progress.speedText }}</span>
+                      <span v-if="cardVm(e).progress.sizeText" class="board-card-size">{{ cardVm(e).progress.sizeText }}</span>
                     </div>
                   </template>
                   <div v-if="(e.state === 'failed' || e.state === 'merge_failed') && describeFailure(e.failure)" class="board-card-failure" :title="describeFailure(e.failure)">
@@ -571,16 +615,19 @@ function describeFailure(failure?: { message?: string; kind?: string; fallback_r
                     <button v-if="e.local_path" class="btn btn-sm btn-ghost" title="复制路径" @click.stop="copyPath(e.local_path!)"><i class="fa-solid fa-copy"></i></button>
                     <button v-if="e.can_open_directory && e.relative_path" class="btn btn-sm btn-ghost" title="打开文件所在目录" @click.stop="openDirectory(e)"><i class="fa-solid fa-folder-open"></i></button>
                   </div>
-                  <button v-if="cardControls(e).show" class="board-card-action-btn" data-mutating
-                          :title="cardControls(e).isPaused ? '恢复下载' : '暂停下载'"
-                          @click.stop="cardPauseResume(e)">
-                    <i class="fa-solid" :class="cardControls(e).isPaused ? 'fa-play' : 'fa-pause'"></i>
-                  </button>
-                  <span v-if="cardControls(e).show" class="board-card-priority" title="下载优先级（1-300，越大越先下载）">
-                    <button class="board-card-action-btn" data-mutating title="降低优先级" @click.stop="adjustCardPriority(e, -10)">−</button>
-                    <span class="board-card-priority-value">{{ cardControls(e).priority }}</span>
-                    <button class="board-card-action-btn" data-mutating title="提高优先级" @click.stop="adjustCardPriority(e, 10)">+</button>
-                  </span>
+                  <!-- 操作行走文档流：绝对定位悬浮在内容上会遮挡路径/图标行 -->
+                  <div v-if="cardVm(e).controls.show" class="board-card-controls">
+                    <span class="board-card-priority" title="下载优先级（1-300，越大越先下载）">
+                      <button class="board-card-action-btn" data-mutating title="降低优先级" @click.stop="adjustCardPriority(e, -10)">−</button>
+                      <span class="board-card-priority-value">{{ cardVm(e).controls.priority }}</span>
+                      <button class="board-card-action-btn" data-mutating title="提高优先级" @click.stop="adjustCardPriority(e, 10)">+</button>
+                    </span>
+                    <button class="board-card-action-btn" data-mutating
+                            :title="cardVm(e).controls.isPaused ? '恢复下载' : '暂停下载'"
+                            @click.stop="cardPauseResume(e)">
+                      <i class="fa-solid" :class="cardVm(e).controls.isPaused ? 'fa-play' : 'fa-pause'"></i>
+                    </button>
+                  </div>
                 </div>
               </article>
             </div>

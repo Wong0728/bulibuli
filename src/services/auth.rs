@@ -1,5 +1,5 @@
 use crate::error::{AppError, AppResult};
-use crate::services::security_config::SecurityConfigService;
+use crate::services::security_config::{AccessMode, SecurityConfigService};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
 use rand::{Rng, RngCore};
@@ -14,12 +14,18 @@ use tokio::sync::Mutex;
 
 const PAIR_TTL_SECONDS: i64 = 600;
 const SESSION_IDLE_SECONDS: i64 = 30 * 24 * 60 * 60;
+/// LAN 模式空闲 TTL：HTTP 明文传输下会话 Cookie 被嗅探的窗口应尽量短，
+/// 从 30 天收紧到 7 天（绝对上限 90 天不变）。
+const LAN_SESSION_IDLE_SECONDS: i64 = 7 * 24 * 60 * 60;
 const SESSION_ABSOLUTE_SECONDS: i64 = 90 * 24 * 60 * 60;
 const ROTATE_AFTER_SECONDS: i64 = 24 * 60 * 60;
 const PREVIOUS_TOKEN_GRACE_SECONDS: i64 = 120;
 const CODE_ALPHABET: &[u8] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 /// 每 IP 每分钟最大登录/配对尝试次数
 const LOGIN_RATE_LIMIT_PER_IP: usize = 5;
+/// `/api/auth/state` 未认证探测限流：每 IP 每分钟上限（PairView 5s 轮询 ≈ 12 次/分钟，
+/// 正常前端不受影响；快速枚举配对窗口的脚本会被拦下）。
+const STATE_PROBE_LIMIT_PER_IP: usize = 20;
 const MAX_AUTHENTICATION_LOCKS: usize = 4096;
 
 #[derive(Clone)]
@@ -32,6 +38,8 @@ pub struct AuthService {
     authentication_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     /// 每 IP 登录尝试时间戳，用于速率限制
     login_attempts: Arc<Mutex<HashMap<IpAddr, VecDeque<i64>>>>,
+    /// 每 IP `/api/auth/state` 未认证探测时间戳（抑制远程探测配对窗口）
+    state_probes: Arc<Mutex<HashMap<IpAddr, VecDeque<i64>>>>,
     /// 全局每分钟最大登录/配对尝试次数（由 AppConfig 注入）
     login_rate_limit_global: usize,
 }
@@ -62,6 +70,24 @@ struct FailedAttempts {
     failures: u32,
     blocked_until: i64,
     last_seen: i64,
+}
+
+/// 记录一次失败尝试：封禁过期后的首个失败重置计数；连续失败达到 5 次后
+/// 按指数退避封禁，封顶 1 小时（持续爆破者每小时最多获得一次尝试机会）。
+fn apply_failure(failed: &mut FailedAttempts, now: i64) {
+    if failed.blocked_until > 0 && failed.blocked_until <= now {
+        failed.failures = 0;
+        failed.blocked_until = 0;
+    }
+    failed.last_seen = now;
+    failed.failures = failed.failures.saturating_add(1);
+    if failed.failures >= 5 {
+        let delay = 1i64
+            .checked_shl((failed.failures - 5).min(12))
+            .unwrap_or(3600)
+            .min(3600);
+        failed.blocked_until = now + delay;
+    }
 }
 
 /// 每 IP 跟踪表容量上限：两处限流 map 的条目此前永不删除，
@@ -175,6 +201,7 @@ impl AuthService {
             attempts: Arc::new(Mutex::new(AttemptBook::default())),
             authentication_locks: Arc::new(Mutex::new(HashMap::new())),
             login_attempts: Arc::new(Mutex::new(HashMap::new())),
+            state_probes: Arc::new(Mutex::new(HashMap::new())),
             login_rate_limit_global: login_rate_limit_global.max(1),
         };
         let initial = if service.bootstrap_needed().await? {
@@ -286,7 +313,7 @@ impl AuthService {
         if row.expires_at <= now || row.absolute_expires_at <= now {
             return Ok(None);
         }
-        let next_expiry = (now + SESSION_IDLE_SECONDS).min(row.absolute_expires_at);
+        let next_expiry = (now + self.session_idle_seconds()).min(row.absolute_expires_at);
         let rotated_token = if now - row.last_rotated_at >= ROTATE_AFTER_SECONDS {
             Some(random_token())
         } else {
@@ -465,7 +492,7 @@ impl AuthService {
                     sea_orm::Value::from(csrf),
                     sea_orm::Value::from(device),
                     sea_orm::Value::from(now),
-                    sea_orm::Value::from(now + SESSION_IDLE_SECONDS),
+                    sea_orm::Value::from(now + self.session_idle_seconds()),
                     sea_orm::Value::from(now + SESSION_ABSOLUTE_SECONDS),
                     sea_orm::Value::from(now),
                     sea_orm::Value::from(now),
@@ -529,19 +556,42 @@ impl AuthService {
         Ok(())
     }
 
+    /// `/api/auth/state` 未认证探测限流：每 IP 每分钟最多 STATE_PROBE_LIMIT_PER_IP 次。
+    /// 已认证会话不消耗配额（由调用方判断）。抑制未认证访问者定向探测配对窗口。
+    pub async fn check_state_probe_allowed(&self, ip: IpAddr) -> AppResult<()> {
+        let now = Utc::now().timestamp();
+        let mut probes = self.state_probes.lock().await;
+        evict_stalest_ip(&mut probes, |timestamps| {
+            timestamps.back().copied().unwrap_or(0)
+        });
+        let timestamps = probes.entry(ip).or_default();
+        while timestamps
+            .front()
+            .is_some_and(|timestamp| *timestamp <= now - 60)
+        {
+            timestamps.pop_front();
+        }
+        if timestamps.len() >= STATE_PROBE_LIMIT_PER_IP {
+            return Err(AppError::Conflict("请求过于频繁，请稍后重试".to_string()));
+        }
+        timestamps.push_back(now);
+        Ok(())
+    }
+
+    /// LAN 模式下会话空闲 TTL：明文 HTTP 暴露面更大，收紧到 7 天。
+    fn session_idle_seconds(&self) -> i64 {
+        if self.security.current().mode == AccessMode::Lan {
+            LAN_SESSION_IDLE_SECONDS
+        } else {
+            SESSION_IDLE_SECONDS
+        }
+    }
+
     async fn record_failure(&self, ip: IpAddr, now: i64) {
         let mut attempts = self.attempts.lock().await;
         evict_stalest_ip(&mut attempts.per_ip, |failed| failed.last_seen);
         let failed = attempts.per_ip.entry(ip).or_default();
-        failed.last_seen = now;
-        failed.failures = failed.failures.saturating_add(1);
-        if failed.failures >= 5 {
-            let delay = 1i64
-                .checked_shl((failed.failures - 5).min(6))
-                .unwrap_or(60)
-                .min(60);
-            failed.blocked_until = now + delay;
-        }
+        apply_failure(failed, now);
     }
 
     fn ip_is_cn(&self, ip: IpAddr) -> AppResult<bool> {
@@ -669,5 +719,40 @@ mod tests {
         assert!(SessionRole::Owner.can_operate());
         assert!(SessionRole::Operator.can_operate());
         assert!(!SessionRole::Viewer.can_operate());
+    }
+
+    #[test]
+    fn failure_backoff_caps_at_one_hour() {
+        let mut failed = FailedAttempts::default();
+        for _ in 0..4 {
+            apply_failure(&mut failed, 1000);
+            assert_eq!(failed.blocked_until, 0, "前 4 次失败不封禁");
+        }
+        // 同一时刻连续失败（封禁未过期不触发重置）：第 5 次起指数退避 1s, 2s, 4s ... 封顶 3600s。
+        let mut delays = Vec::new();
+        for failures in 5..=20 {
+            apply_failure(&mut failed, 1000);
+            assert_eq!(failed.failures, failures);
+            delays.push(failed.blocked_until - 1000);
+        }
+        assert_eq!(delays[0], 1);
+        assert_eq!(delays[1], 2);
+        assert_eq!(delays[2], 4);
+        assert!(delays.iter().all(|delay| *delay <= 3600));
+        assert_eq!(*delays.last().unwrap(), 3600, "退避必须封顶 1 小时");
+    }
+
+    #[test]
+    fn failure_counter_resets_after_block_expires() {
+        let mut failed = FailedAttempts::default();
+        for _ in 0..6 {
+            apply_failure(&mut failed, 1000);
+        }
+        assert!(failed.blocked_until > 1000);
+        // 封禁过期后的首个失败：计数从 1 重新开始，而不是在旧值上继续累加。
+        let expired_at = failed.blocked_until + 1;
+        apply_failure(&mut failed, expired_at);
+        assert_eq!(failed.failures, 1);
+        assert_eq!(failed.blocked_until, 0);
     }
 }

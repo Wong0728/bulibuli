@@ -1,5 +1,6 @@
 use crate::error::BiliErrorKind;
 use crate::models::{blogger, history};
+use crate::services::bili_api::models::user::same_image_url;
 use crate::services::bili_api::models::video::VideoInfo;
 use crate::services::bili_api::BiliApi;
 use crate::services::settings::SettingsService;
@@ -431,7 +432,9 @@ async fn refresh_blogger_profile(
         model.name = Set(Some(info.name.clone()));
         changed = true;
     }
-    if Some(info.face.as_str()) != blogger.face.as_deref()
+    // 头像用"同图"比较：同一张图的 CDN 主机会在 i0/i1/i2 间轮换，
+    // 整串比较会误报改头像。
+    if !same_image_url(Some(info.face.as_str()), blogger.face.as_deref())
         && blogger.last_seen_face.is_none()
         && blogger.face.is_some()
     {
@@ -439,7 +442,7 @@ async fn refresh_blogger_profile(
         model.last_seen_at = Set(Some(Local::now()));
         changed = true;
     }
-    if Some(info.face.as_str()) != blogger.face.as_deref() {
+    if !same_image_url(Some(info.face.as_str()), blogger.face.as_deref()) {
         model.face = Set(Some(info.face.clone()));
         changed = true;
     }
@@ -507,6 +510,11 @@ fn map_video_info(history: &history::Model, info: &VideoInfo) -> history::Active
     }
     model.view_refreshed_at = Set(Some(Local::now()));
     model.view_source = Set(Some("live".to_string()));
+    // uid 缺失的旧记录（完成时 get_video_info 失败落库）：用视频信息回填，
+    // 否则看板会永久归入 "unknown" 分组（add_to_history 对已完成记录不回头补）。
+    if history.uid.is_none() && info.owner.mid != 0 {
+        model.uid = Set(Some(info.owner.mid.to_string()));
+    }
     if history.owner_name.is_none() && !info.owner.name.is_empty() {
         model.owner_name = Set(Some(info.owner.name.clone()));
     }
@@ -552,5 +560,84 @@ async fn read_l1_interval(db: &DatabaseConnection) -> u64 {
             .and_then(|v| v.as_u64())
             .unwrap_or(DEFAULT_L1_INTERVAL_MINUTES),
         Err(_) => DEFAULT_L1_INTERVAL_MINUTES,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_risk_or_permission, RefreshGate, RefreshReport};
+    use crate::error::{BiliApiError, BiliErrorKind};
+
+    #[tokio::test]
+    async fn gate_blocks_endpoint_after_all_failure_and_lifts_on_success() {
+        let gate = RefreshGate::default();
+        assert!(!gate.is_blocked("space.bilibili.com", "cookie-a").await);
+        // 整批失败（success=0）：该端点 30s 冷却
+        gate.record(
+            "space.bilibili.com",
+            "cookie-a",
+            RefreshReport {
+                success: 0,
+                risk_limited: false,
+            },
+        )
+        .await;
+        assert!(gate.is_blocked("space.bilibili.com", "cookie-a").await);
+        // 冷却按 (endpoint, cookie 指纹) 隔离：不同 cookie / 不同端点不受影响
+        assert!(!gate.is_blocked("space.bilibili.com", "cookie-b").await);
+        assert!(!gate.is_blocked("api.bilibili.com", "cookie-a").await);
+        // 成功后解除
+        gate.record(
+            "space.bilibili.com",
+            "cookie-a",
+            RefreshReport {
+                success: 3,
+                risk_limited: false,
+            },
+        )
+        .await;
+        assert!(!gate.is_blocked("space.bilibili.com", "cookie-a").await);
+    }
+
+    #[tokio::test]
+    async fn gate_blocks_all_endpoints_on_risk_control() {
+        let gate = RefreshGate::default();
+        gate.record(
+            "space.bilibili.com",
+            "cookie-a",
+            RefreshReport {
+                success: 0,
+                risk_limited: true,
+            },
+        )
+        .await;
+        // 风控是账号级：所有端点都被闸门拦下
+        assert!(gate.is_blocked("space.bilibili.com", "cookie-a").await);
+        assert!(gate.is_blocked("api.bilibili.com", "cookie-a").await);
+        // 过期条目被清理（依赖短冷却不可行，仅验证风险窗口存在性判断本身）
+        let state = gate.state.lock().await;
+        assert!(state.risk_until.is_some());
+        drop(state);
+    }
+
+    #[test]
+    fn risk_or_permission_classifies_bili_errors() {
+        let risk = BiliApiError {
+            code: -352,
+            kind: BiliErrorKind::RiskControl,
+            message: "请求被拦截".to_string(),
+            retryable: false,
+        };
+        assert!(is_risk_or_permission(&anyhow::Error::new(risk)));
+        let wrapped = anyhow::Error::new(BiliApiError {
+            code: 87007,
+            kind: BiliErrorKind::ChargeRequired,
+            message: "充电专享".to_string(),
+            retryable: false,
+        })
+        .context("外层错误");
+        assert!(is_risk_or_permission(&wrapped));
+        // 普通网络/解析错误不算风控（不触发触碰 refreshed_at 的跳过逻辑）
+        assert!(!is_risk_or_permission(&anyhow::anyhow!("网络超时")));
     }
 }

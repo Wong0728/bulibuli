@@ -50,7 +50,8 @@ function Resolve-Version {
     } catch { }
     try {
         $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=20" -Headers @{ Accept = "application/vnd.github+json" }
-        $release = @($releases | Where-Object { -not $_.draft } | Select-Object -First 1)
+        # 回退只选正式版：排除 draft 与 prerelease，避免 latest.json 拉取失败时装到 alpha。
+        $release = @($releases | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1)
         $resolved = Normalize-Version ([string]$release.tag_name)
         if ($resolved) { return $resolved }
         throw "发布列表缺少可用版本"
@@ -94,8 +95,8 @@ function Read-Package([string]$Path) {
         throw "包平台或架构不匹配：$($manifest.platform)/$($manifest.architecture)，目标 windows/$Architecture"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $root "bulibuli.exe") -PathType Leaf) -or
-        -not (Test-Path -LiteralPath (Join-Path $root "static\index.html") -PathType Leaf)) {
-        throw "包缺少 bulibuli.exe 或 static/index.html"
+        -not (Test-Path -LiteralPath (Join-Path $root "static\app\index.html") -PathType Leaf)) {
+        throw "包缺少 bulibuli.exe 或 static/app/index.html"
     }
     $rootPrefix = ([IO.Path]::GetFullPath($root)).TrimEnd("\") + "\"
     foreach ($entry in @($manifest.files)) {

@@ -104,7 +104,13 @@ impl Aria2Mode {
 pub enum Aria2Error {
     Connection(String),
     Timeout(String),
-    Rpc { code: i64, message: String },
+    Rpc {
+        code: i64,
+        message: String,
+    },
+    /// RPC 报告目标 GID 不存在（下载器重启后 session 丢失，或记录已被清理）。
+    /// 永久性错误：重试无意义，调用方应直接走恢复/失败路径。
+    GidNotFound(String),
     Unexpected(String),
 }
 
@@ -114,6 +120,7 @@ impl std::fmt::Display for Aria2Error {
             Aria2Error::Connection(msg) => write!(f, "Aria2 连接失败: {msg}"),
             Aria2Error::Timeout(msg) => write!(f, "Aria2 请求超时: {msg}"),
             Aria2Error::Rpc { code, message } => write!(f, "Aria2 RPC 错误 [{code}]: {message}"),
+            Aria2Error::GidNotFound(msg) => write!(f, "Aria2 任务不存在（GID 已失效）: {msg}"),
             Aria2Error::Unexpected(msg) => write!(f, "Aria2 未知错误: {msg}"),
         }
     }
@@ -196,7 +203,8 @@ impl Aria2Status {
 
 #[cfg(test)]
 mod tests {
-    use super::rpc_endpoint;
+    use super::{rpc_endpoint, Aria2Status};
+    use serde_json::json;
 
     #[test]
     fn rpc_endpoint_uses_https_for_remote_hosts() {
@@ -213,5 +221,51 @@ mod tests {
             rpc_endpoint("2001:db8::1", 6800).unwrap(),
             "https://[2001:db8::1]:6800/jsonrpc"
         );
+    }
+
+    #[test]
+    fn status_from_json_parses_progress_and_filename() {
+        let v = json!({
+            "status": "active",
+            "totalLength": "1000",
+            "completedLength": "250",
+            "downloadSpeed": "128",
+            "errorMessage": null,
+            "files": [{ "path": "/downloads/video/BV1xx411c7mD.mp4" }]
+        });
+        let s = Aria2Status::from_json(&v);
+        assert_eq!(s.status, "active");
+        assert_eq!(s.progress_percent, 25);
+        assert_eq!(s.downloaded_size, 250);
+        assert_eq!(s.total_size, 1000);
+        assert_eq!(s.speed, 128);
+        assert_eq!(s.filename, "BV1xx411c7mD.mp4");
+        assert!(s.error_message.is_none());
+    }
+
+    #[test]
+    fn status_from_json_degrades_on_missing_fields() {
+        // aria2 重启中/异常响应可能缺字段：status 缺省 error、大小缺省 0、
+        // percent 不允许除零、文件名缺省 Unknown。
+        let s = Aria2Status::from_json(&json!({}));
+        assert_eq!(s.status, "error");
+        assert_eq!(s.progress_percent, 0);
+        assert_eq!(s.total_size, 0);
+        assert_eq!(s.filename, "Unknown");
+    }
+
+    #[test]
+    fn status_from_json_keeps_error_message() {
+        let v = json!({
+            "status": "error",
+            "totalLength": "10",
+            "completedLength": "10",
+            "downloadSpeed": "0",
+            "errorMessage": "http response 403",
+            "files": []
+        });
+        let s = Aria2Status::from_json(&v);
+        assert_eq!(s.error_message.as_deref(), Some("http response 403"));
+        assert_eq!(s.filename, "Unknown");
     }
 }

@@ -1,4 +1,0 @@
-/* 兼容性令牌层；旧入口仍为 style.css。 */
-:root {
-    --text-muted-deep: var(--text-secondary);
-}

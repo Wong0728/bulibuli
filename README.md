@@ -8,7 +8,9 @@
 
 补哩补哩是一个基于 Rust/Axum 的 B 站视频监控、补档下载、直播监控与直播录制工具。当前主线是 Rust v2 Alpha，支持 Windows、Linux、macOS Intel、macOS Apple Silicon，以及 Android arm64/Termux 云端预编译包。
 
-**前端架构**：主界面是 Vue 3 + Vite + Pinia + Vue Router 工程（位于 `web/`，构建产物落到 `static/app/`）；旧版 vanilla-JS 仍在 `static/js/`（`static/dist/app.bundle.js`）保留作为 `/legacy/` 路径下的兼容兜底，方便在新版功能尚未补齐的窗口期回退。根路由 `/` 已切到新版；旧版只在显式访问 `/legacy/` 时可见。新版构建步骤见「从源码开发」一节。
+> 隐私说明：本工具收集的 B 站 Cookie 仅存储在本地并加密，数据不回传任何第三方服务器，详见 [隐私说明（PRIVACY.md）](PRIVACY.md)。
+
+**前端架构**：主界面是唯一的 Vue 3 + Vite + Pinia + Vue Router 工程（位于 `web/`，构建产物落到 `static/app/`）；根路由 `/` 直接提供该界面。新版构建步骤见「从源码开发」一节。
 
 ## 从 Releases 安装
 
@@ -55,7 +57,7 @@ $env:BULIBULI_CACHE_DIR = 'D:\GitHub\bulibuli'
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-不传 `-PackagePath` 时，本地包会优先于 Release；没有本地包时读取 Release 的 `latest.json`，没有稳定版本时回退读取包含 Alpha 的 Releases 清单。PATH 修改为用户级设置，完成后请重新打开终端。
+不传 `-PackagePath` 时，本地包会优先于 Release；没有本地包时读取 Release 的 `latest.json`（仅指向正式版）。`latest.json` 拉取失败时的回退也只会在 Releases 清单中选取正式版（排除 draft 与 prerelease）：若当前只有 alpha 预发布版本，一键安装会终止并提示用 `BULIBULI_VERSION` 固定版本或直接下载归档。PATH 修改为用户级设置，完成后请重新打开终端。
 
 **升级已有安装**：安装目录已存在时安装器会报错，重跑安装器升级需显式加 `-Force`：
 
@@ -63,11 +65,11 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force
 ```
 
-`-Force` 为合并覆盖：`data/` 目录（数据库、下载、会话、配对状态）始终保留，但旧版本独有的文件可能残留；如遇异常建议手动删除旧安装目录（保留 `data/`）后全新安装。
+`-Force` 为合并覆盖：`data/` 目录（数据库、下载、会话、配对状态）始终保留，但旧版本独有的文件可能残留；如遇异常建议手动删除旧安装目录（保留 `data/`）后全新安装。安装器中途失败不会自动回滚到旧版本，已复制的文件会留在安装目录；此时按上述方式删除后重装即可。
 
 ### Linux 一键安装
 
-一键安装器会先检查包内运行时（完整包优先），再检查 `ARIA2C_PATH`、`FFMPEG_PATH`/`FFMPEG`/`FFMPEG_HOME`/`FFMPEG_DIR`、`FFPROBE_PATH` 和系统 `PATH`。依赖齐全时下载体积更小的 `core` 包；缺少 aria2c 或 FFmpeg 时才尝试系统包管理器，仍不可用才回退完整 `portable` 包。两种归档都会校验 SHA-256：
+一键安装器会先检查包内运行时（完整包优先），再检查 `ARIA2C_PATH`、`FFMPEG_PATH`/`FFMPEG`/`FF_PATH`/`FFMPEG_HOME`/`FFMPEG_DIR`、`FFPROBE_PATH` 和系统 `PATH`（程序运行时探测 FFmpeg 也接受同一组环境变量）。依赖齐全时下载体积更小的 `core` 包；缺少 aria2c 或 FFmpeg 时才尝试系统包管理器，仍不可用才回退完整 `portable` 包。两种归档都会校验 SHA-256：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh | bash
@@ -121,7 +123,7 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termu
 3. 在网页中完成设备配对和安全设置，再按需扫码登录 B 站。
 4. 完整包优先使用包内 aria2c 和 FFmpeg；轻量 `core` 包没有包内运行时时，按环境变量再到系统 `PATH` 查找，媒体探测会继续寻找 ffprobe 或回退 FFmpeg。
 
-常用本机控制命令（需服务已运行；ctl 默认仅放行 `status`/`help`/`quit`/`ai`）：
+常用本机控制命令（需服务已运行；ctl 默认仅放行 `status`/`help`/`quit`/`ai`/`pair`）：
 
 ```text
 bulibuli ctl sys status
@@ -148,7 +150,7 @@ Linux/macOS 将 `bulibuli.exe` 替换为 `./bulibuli`。完整命令清单见 [`
 - 数据目录包含 SQLite 数据库、下载目录、`security.toml`、日志、迁移备份和运行状态；升级前请先停止程序并备份整个目录。
 - 日志按天滚动。日志、数据库、Cookie、session 和配对码不要上传到 issue 或公开工单。
 - Unix 控制 socket 优先使用 `XDG_RUNTIME_DIR`，深层数据目录不会再触发 Linux socket 路径过长；Windows 使用仅本机可访问的命名管道。
-- 应用内更新：设置页可切换更新策略（仅提示 / 自动下载暂存 / 关闭）并手动"立即检查更新""立即更新"。自动更新只替换程序文件（可执行文件、static、resources），不触碰 `data/`；更新完成后需重启程序生效，Windows 运行中更新会在退出程序后自动完成替换。
+- 应用内更新：设置页可切换更新策略（仅提示 / 自动下载暂存 / 关闭）并手动"立即检查更新""立即更新"。自动更新只替换程序文件（可执行文件、static、resources），不触碰 `data/`；更新完成后需重启程序生效，Windows 运行中更新会在退出程序后自动完成替换。更新全程先在临时目录完成下载与校验（SHA-256），替换失败时保留原版本可执行文件继续运行（Windows 上可能残留 `bulibuli.old.exe`，可在退出程序后手动删除），不会出现半新半旧的程序文件；下载/校验失败则原样保留当前版本。
 
 ## 故障排查
 
@@ -163,15 +165,13 @@ Linux/macOS 将 `bulibuli.exe` 替换为 `./bulibuli`。完整命令清单见 [`
 
 要求：Rust 1.97.1、Python 3.11+、Node.js 22+。Rust 版本由 `rust-toolchain.toml` 固定。
 
-- **新版 Vue 3 前端**（`web/` → `static/app/`，`/` 主路由）：`cd web && npm ci --ignore-scripts && npm run build`；CI 与 `python build.py` 会自动跑这一步。
-- **旧版 vanilla-JS 前端**（`static/js/` → `static/dist/app.bundle.js`，`/legacy/` 兼容入口）：`cd static/js && npm ci --ignore-scripts && npm run build`；保留期间仍是 `python build.py` 的默认构建步骤，可通过 `--skip-frontend-legacy` 跳过。
+- **Vue 3 前端**（`web/` → `static/app/`，`/` 主路由）：`cd web && npm ci --ignore-scripts && npm run build`；CI 与 `python build.py` 会自动跑这一步。
 
 常用命令：
 
 ```bash
 cargo test --all-targets
 cd web && npm ci --ignore-scripts && npm run build && cd ..
-cd static/js && npm ci --ignore-scripts && npm run build && cd ../..
 python build.py --check
 python build.py --portable
 ```
@@ -179,10 +179,7 @@ python build.py --portable
 跳过某个前端的写法：
 
 ```bash
-# 只构建 Vue 3（旧版用现有产物）
-python build.py --skip-frontend-legacy --portable
-
-# 跳过所有前端构建
+# 复用已有 Vue 3 产物
 python build.py --skip-frontend --portable
 ```
 
@@ -194,6 +191,7 @@ python build.py --skip-frontend --portable
 - [贡献指南](CONTRIBUTING.md)
 - [行为准则](CODE_OF_CONDUCT.md)
 - [安全策略](SECURITY.md)
+- [隐私说明](PRIVACY.md)
 - [第三方资源与许可](NOTICE.md)
 - [变更记录](CHANGELOG.md)
 - [部署安全说明](deploy/SECURITY.md)
@@ -204,3 +202,7 @@ python build.py --skip-frontend --portable
 ## 项目状态
 
 `v2.0.0-alpha.*` 是预发布版本，接口和数据结构仍可能变化。升级前请备份 `data/`，不要让新旧版本同时写同一数据库。当前公开主线为 Rust v2。
+
+## 关于未签名二进制
+
+发布产物未做代码签名与公证（无 Windows Authenticode / macOS notarization）：Windows SmartScreen 与 macOS Gatekeeper 首次运行时可能提示"未知发布者"——请先按本页方法核对 SHA-256 再选择"仍要运行"（macOS 需在"系统设置 → 隐私与安全性"中点"仍要打开"，或对解压出的二进制执行 `xattr -d com.apple.quarantine`）。这也是推荐用 `install.ps1` / `install.sh` 安装的原因之一：安装器会先完成校验再落盘。

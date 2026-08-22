@@ -334,7 +334,13 @@ fn run(
         }
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                state.infra.cancellation.cancel();
+                if input.is_empty() {
+                    // 空输入 Ctrl+C = 退出服务；有内容时先清空输入，防误触关停。
+                    state.infra.cancellation.cancel();
+                } else {
+                    input.clear();
+                    history_index = None;
+                }
             }
             KeyCode::PageUp => scroll = scroll.saturating_add(10),
             KeyCode::PageDown => scroll = scroll.saturating_sub(10),

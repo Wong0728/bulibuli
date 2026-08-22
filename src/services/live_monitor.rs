@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LiveSourceRuntime {
@@ -344,8 +344,18 @@ impl LiveMonitor {
             }
             if recording {
                 info!(room_id = source.room_id, "检测到下播，自动停止录制");
-                if let Err(error) = self.inner.live_recorder.stop(source.room_id).await {
-                    warn!(room_id = source.room_id, "自动停止录制失败: {error}");
+                // 用异步收尾路径：合并等耗时操作在后台进行，不阻塞其它房间的开播检测。
+                if let Err(error) = self.inner.live_recorder.request_stop(source.room_id).await {
+                    let message = format!("{error:#}");
+                    // 会话刚被人工停止 / 已在收尾 / 启动期取消，都不算自动停止失败。
+                    if message.contains("not found")
+                        || message.contains("no longer active")
+                        || message.contains("cancellation requested")
+                    {
+                        debug!(room_id = source.room_id, "自动停止录制：会话已不在录制中");
+                    } else {
+                        warn!(room_id = source.room_id, "自动停止录制失败: {error}");
+                    }
                 }
             }
             return;

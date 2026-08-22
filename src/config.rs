@@ -152,7 +152,7 @@ impl AppPaths {
         let executable_dir = executable.parent().context("可执行文件路径没有父目录")?;
         let app_root = executable_dir
             .ancestors()
-            .find(|dir| dir.join("static").join("index.html").is_file())
+            .find(|dir| dir.join("static").join("app").join("index.html").is_file())
             .unwrap_or(executable_dir)
             .to_path_buf();
         let data_dir = match &config.data_dir {
@@ -200,7 +200,7 @@ impl AppPaths {
     pub fn static_dir(&self) -> PathBuf {
         // 开发环境使用工作目录中的 static。
         let own = self.app_root.join("static");
-        if own.join("index.html").exists() {
+        if own.join("app").join("index.html").exists() {
             return own;
         }
         // 发布目录无法推导时使用工作目录。
@@ -210,7 +210,7 @@ impl AppPaths {
 
 /// 按 URL path 规则百分号编码（保留 `/`）。sqlx 的 sqlite 解析器对 database 部分
 /// 做 percent-decode，因此编码后的 `\`、`:`、`?`、`#`、空格等都能正确还原。
-fn encode_path_for_url(path: &str) -> String {
+pub(crate) fn encode_path_for_url(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for byte in path.bytes() {
         match byte {
@@ -249,7 +249,6 @@ fn apply_environment_overrides(config: &mut AppConfig) -> Result<()> {
         };
         match name {
             "APP_NAME" => config.app_name = value,
-            "APP_VERSION" => config.app_version = value,
             "DEBUG" => config.debug = parse_env(&key, &value)?,
             "PORT" => config.port = parse_env(&key, &value)?,
             "DATA_DIR" => config.data_dir = Some(value.into()),

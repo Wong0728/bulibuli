@@ -26,6 +26,7 @@ pub(crate) mod refresh;
 pub(crate) mod secret_store;
 pub(crate) mod security_config;
 pub(crate) mod settings;
+pub(crate) mod spawn_util;
 pub(crate) mod subtitle_burner;
 pub(crate) mod subtitle_fetch;
 pub(crate) mod update;

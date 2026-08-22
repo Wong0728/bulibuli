@@ -3,13 +3,13 @@
 use crate::error::{ApiResponse, AppError};
 use crate::models::{blogger, download_task, history};
 use crate::services::auth::ClientInfo;
+use crate::services::history::{SidecarProbe, SidecarStatus};
 use crate::services::security_config::can_open_directory;
 use crate::state::business::BusinessState;
 use crate::state::infra::InfraState;
 use crate::state::SharedState;
 use axum::{extract::Query, extract::State, Extension, Json};
 use chrono::Local;
-use futures::{stream, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -24,6 +24,8 @@ pub(super) struct ListQuery {
     history_id: Option<i32>,
     page: Option<u64>,
     page_size: Option<u64>,
+    /// `fresh=1` 时绕过看板缓存强制查库（前端收到终态 WS 事件后进入页面用）。
+    fresh: Option<bool>,
 }
 
 pub(super) async fn list_history(
@@ -61,12 +63,14 @@ pub(super) async fn list_history(
         page,
         page_size,
         can_open_directory,
+        q.fresh.unwrap_or(false),
     )
     .await?;
     Ok(Json(ApiResponse::success(board)))
 }
 
 /// 构建看板分组响应。
+#[allow(clippy::too_many_arguments)]
 async fn build_board_response(
     business: &BusinessState,
     infra: &InfraState,
@@ -75,10 +79,11 @@ async fn build_board_response(
     page: u64,
     page_size: u64,
     can_open_directory: bool,
+    fresh: bool,
 ) -> Result<Value, AppError> {
     let board_page = business
         .history_service
-        .board_page(tab, page, page_size)
+        .board_page(tab, page, page_size, fresh)
         .await?;
     let histories = board_page.histories;
     let total = board_page.total;
@@ -134,6 +139,37 @@ async fn build_board_response(
         groups.entry(uid).or_default().push(h);
     }
 
+    // sidecar 状态按整页批量探测：每个唯一目录只 read_dir 一次，
+    // 替代旧版每行最多 8 次逐文件存在性探测（N+1 扇出，列表页线性劣化）。
+    let sidecar_probes = groups
+        .values()
+        .flatten()
+        .map(|h| {
+            (
+                h.id,
+                SidecarProbe {
+                    bvid: &h.bvid,
+                    uid: h.uid.as_deref(),
+                    video_path: h.file_path.as_deref(),
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let sidecar_results = business
+        .history_service
+        .sidecar_status_batch(
+            &sidecar_probes
+                .iter()
+                .map(|(_, probe)| *probe)
+                .collect::<Vec<_>>(),
+        )
+        .await;
+    let sidecar_by_id = sidecar_probes
+        .iter()
+        .map(|(id, _)| *id)
+        .zip(sidecar_results)
+        .collect::<HashMap<i32, SidecarStatus>>();
+
     // 7. 组装响应
     let mut result_groups: Vec<Value> = Vec::new();
     // 遍历所有博主，确保即使没有视频也显示（仅当有 history 时）
@@ -153,8 +189,8 @@ async fn build_board_response(
             &task_by_bvid,
             &path_display_mode,
             can_open_directory,
-        )
-        .await;
+            &sidecar_by_id,
+        );
         result_groups.push(json!({
             "uid": uid,
             "name": b.and_then(|b| b.name.clone()).or(fallback_name),
@@ -199,19 +235,27 @@ async fn build_board_response(
 }
 
 /// 构建视频列表（含 sidecar 状态 + 下载进度）。
-async fn build_video_list(
+/// sidecar 状态由调用方整页批量探测后传入，此处不再逐行访问文件系统。
+fn build_video_list(
     business: &BusinessState,
     videos: &[history::Model],
     task_by_bvid: &HashMap<String, Vec<download_task::Model>>,
     path_display_mode: &str,
     can_open_directory: bool,
+    sidecar_by_id: &HashMap<i32, SidecarStatus>,
 ) -> Vec<Value> {
-    stream::iter(videos.iter().cloned())
-        .map(|h| async move {
-            let sidecar = business
-                .history_service
-                .sidecar_status(&h.bvid, h.uid.as_deref(), h.file_path.as_deref())
-                .await;
+    videos
+        .iter()
+        .map(|h| {
+            let sidecar = sidecar_by_id
+                .get(&h.id)
+                .cloned()
+                .unwrap_or(SidecarStatus {
+                    video: false,
+                    danmaku: false,
+                    comments: false,
+                    subtitle: false,
+                });
             let filepath = display_path_for(
                 &business.history_service,
                 h.file_path.as_deref(),
@@ -225,7 +269,7 @@ async fn build_video_list(
                     .cloned()
                     .collect::<Vec<_>>()
             });
-            let task = aggregate_task_progress(matching_tasks.as_deref(), &h);
+            let task = aggregate_task_progress(matching_tasks.as_deref(), h);
 
             json!({
                 "bvid": h.bvid,
@@ -281,9 +325,7 @@ async fn build_video_list(
                 },
             })
         })
-        .buffered(4)
         .collect()
-        .await
 }
 
 /// 单视频详情响应（抽屉用）。
@@ -567,12 +609,20 @@ fn aggregate_task_progress(
             fallback_reason: None,
         };
     };
-    // 状态优先级：downloading > paused > pending > failed > completed
-    let status = ["downloading", "paused", "pending", "failed"]
-        .into_iter()
-        .find(|candidate| tasks.iter().any(|task| task.status == *candidate))
-        .unwrap_or("completed")
-        .to_string();
+    // 状态优先级：downloading > retrying > merging > paused > pending > failed > completed。
+    // retrying/merging 属运行态，缺失会被 unwrap 成 completed 导致看板伪装成已完成。
+    let status = [
+        "downloading",
+        "retrying",
+        "merging",
+        "paused",
+        "pending",
+        "failed",
+    ]
+    .into_iter()
+    .find(|candidate| tasks.iter().any(|task| task.status == *candidate))
+    .unwrap_or("completed")
+    .to_string();
     // 取该状态下的第一个任务作为代表（前端 pause/resume/priority 据此定位单任务）
     let representative = tasks.iter().find(|task| task.status == status);
     let task_id = representative.map(|task| task.id);

@@ -1,7 +1,7 @@
 //! 单博主检查：视频扫描（含检查点增量分页）、下架/重投检测与资料变更检测。
 
 use crate::models::{blogger, history};
-use crate::services::bili_api::models::user::UserVideo;
+use crate::services::bili_api::models::user::{same_image_url, UserVideo};
 use anyhow::Result;
 use chrono::{DateTime, Local};
 use sea_orm::{
@@ -370,16 +370,20 @@ impl MonitorService {
             if Some(new_name.as_str()) != current.name.as_deref() {
                 if current.last_seen_name.is_none() && current.name.is_some() {
                     model.last_seen_name = Set(current.name.clone());
+                    // last_seen_at 是前端黄点/弹窗的开关（notice_visible），
+                    // 漏写会导致监控检测到的改名永远不通知（与 refresh L2 路径不一致）。
+                    model.last_seen_at = Set(Some(Local::now()));
                 }
                 model.name = Set(Some(new_name.clone()));
                 changed = true;
             }
         }
-        // 改头像检测
+        // 改头像检测：同一张图的 CDN 主机会在 i0/i1/i2 间轮换，按路径比较
         if let Some(ref new_face) = fresh_face {
-            if Some(new_face.as_str()) != current.face.as_deref() {
+            if !same_image_url(Some(new_face.as_str()), current.face.as_deref()) {
                 if current.last_seen_face.is_none() && current.face.is_some() {
                     model.last_seen_face = Set(current.face.clone());
+                    model.last_seen_at = Set(Some(Local::now()));
                 }
                 model.face = Set(Some(new_face.clone()));
                 changed = true;

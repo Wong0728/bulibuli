@@ -172,6 +172,23 @@ pub(crate) fn normalize_image_url(url: &str) -> String {
         .unwrap_or_default()
 }
 
+/// 图床 URL 的"同图"判断：B 站同一张头像/封面会在 i0/i1/i2.hdslb.com
+/// 之间轮换，整串字符串比较会把同一张图误判为已更换（改名/改头像误报）。
+/// 这里剥掉协议与主机，只比较路径+查询串（忽略大小写）。
+pub(crate) fn same_image_url(a: Option<&str>, b: Option<&str>) -> bool {
+    fn path_part(url: &str) -> &str {
+        let no_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+        no_scheme
+            .split_once('/')
+            .map_or(no_scheme, |(_, path)| path)
+    }
+    match (a, b) {
+        (Some(a), Some(b)) => path_part(a).eq_ignore_ascii_case(path_part(b)),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 // --- 对外域模型（序列化字段名与前端契约一致） ---
 
 /// 投稿/合集视频条目。

@@ -13,7 +13,7 @@
  * - POST /api/settings/ffmpeg-test (POST) → { available, path, source, version }
  *   （这里前端用 `ok: boolean` 是旧约定，做兼容）。
  *
- * 老框架（static/js/settings.js）对齐：
+ * 迁移前设置行为对齐：
  * - 保存/reset/更新应用后的 toast 优先展示后端 result.message（Aria2 重载失败警告、
  *   Windows 更新暂存提示等），因此写操作统一用 client 的 Full 变体拿 message。
  * - reset/aria2-restart/update check/apply 一律空 body，不传 expected_revision。

@@ -74,6 +74,9 @@ const querying = ref(false);
 const resolving = ref(false);
 const batching = ref(false);
 const manualLimit = computed(() => Math.min(Math.max(Number(settings.settings.manual_query_limit) || 20, 1), 50));
+// series-videos 后端硬校验 limit 1..=30（src/api/blogger/discover.rs），
+// 设置 ≥31 时合集分支必须单独钳制，否则首查和加载更多恒 400。
+const seriesLimit = computed(() => Math.min(manualLimit.value, 30));
 const selectedCollectionType = computed(() => {
   const selected = seriesList.value.find(s => Number(s.series_id) === Number(selectedSeriesId.value));
   return selected?.type === 'season' ? 'season' : 'series';
@@ -156,8 +159,8 @@ async function queryVideos() {
   linkResult.value = null;
   try {
     // 对齐老框架 doManualQuery：limit 读设置项 setting-manual-query-limit（clamp 1..50），
-    // 合集与投稿共用同一 limit；后端 series-videos 的 limit 上限为 30，设置超限时后端会报错（老框架同样行为）。
-    const limit = manualLimit.value;
+    // 投稿查询直接用该值；合集接口后端上限 30，超设置部分由 seriesLimit 单独钳制。
+    const limit = mode.value === 'series' ? seriesLimit.value : manualLimit.value;
     queryLimit.value = limit;
     queryOffset.value = 0;
     if (mode.value === 'series') {

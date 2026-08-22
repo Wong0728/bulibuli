@@ -50,7 +50,6 @@ impl BusinessState {
                 danmaku_service: media.danmaku_service.clone(),
                 subtitle_service: media.subtitle_service.clone(),
                 blogger_service: blogger_service.clone(),
-                ws: infra.ws.clone(),
                 video_processor: media.video_processor.clone(),
                 history_service: history_service.clone(),
                 settings_service: infra.settings_service.clone(),

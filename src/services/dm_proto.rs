@@ -66,31 +66,52 @@ pub struct DanmakuElem {
 /// - `hash` = `mid_hash`
 /// - `dmid` = `id_str`（优先）或 `id`
 /// - `text` = `text`
+///
+/// 测试兼容入口：解码失败按空段返回。生产路径请改用 try_parse_danmaku_bytes。
+#[cfg(test)]
 pub fn parse_danmaku_bytes(bytes: &[u8]) -> Vec<Value> {
+    try_parse_danmaku_bytes(bytes).unwrap_or_default()
+}
+
+/// 解码成功返回弹幕列表（空分段为 `Some(vec![])`，即「无弹幕」）；
+/// 解码失败返回 None——调用方应计入失败分段，而不是误当成成功空段。
+pub fn try_parse_danmaku_bytes(bytes: &[u8]) -> Option<Vec<Value>> {
     match DanmakuSeg::decode(bytes) {
-        Ok(seg) => seg
-            .elems
-            .into_iter()
-            .map(|e| {
-                let dmid = if !e.id_str.is_empty() {
-                    e.id_str.clone()
-                } else {
-                    e.id.to_string()
-                };
-                json!({
-                    "time": (e.progress as f64) / 1000.0,
-                    "type": e.mode,
-                    "size": e.fontsize,
-                    "color": e.color,
-                    "timestamp": e.ctime,
-                    "pool": e.pool,
-                    "hash": e.mid_hash,
-                    "dmid": dmid,
-                    "text": e.text,
+        Ok(seg) => Some(
+            seg.elems
+                .into_iter()
+                .map(|e| {
+                    let dmid = if !e.id_str.is_empty() {
+                        e.id_str.clone()
+                    } else {
+                        e.id.to_string()
+                    };
+                    json!({
+                        "time": (e.progress as f64) / 1000.0,
+                        "type": e.mode,
+                        "size": e.fontsize,
+                        "color": e.color,
+                        "timestamp": e.ctime,
+                        "pool": e.pool,
+                        "hash": e.mid_hash,
+                        "dmid": dmid,
+                        "text": e.text,
+                    })
                 })
-            })
-            .collect(),
-        Err(_) => Vec::new(),
+                .collect(),
+        ),
+        Err(error) => {
+            // 解码失败此前静默返回空数组，调用方会把损坏分段误当成
+            // 「成功空段」计入成功数，导致问题被完全吞掉。
+            // 留 warn 日志（含首字节，便于区分风控 HTML/网关错误页），按未解析处理。
+            tracing::warn!(
+                len = bytes.len(),
+                head = ?bytes.first().map(|b| format!("{b:02x}")),
+                error = %error,
+                "弹幕 protobuf 分段解码失败"
+            );
+            None
+        }
     }
 }
 
@@ -130,5 +151,60 @@ mod tests {
         assert_eq!(list[0]["time"].as_f64().unwrap(), 1.5);
         assert_eq!(list[0]["dmid"].as_str().unwrap(), "abc");
         assert_eq!(list[0]["color"].as_i64().unwrap(), 0xFFFFFF);
+    }
+
+    mod proptest_suite {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// 任意字节流（随机包头/压缩正文/截断包）解析不得 panic，
+            /// 失败时返回空数组而不是错误。
+            #[test]
+            fn parse_danmaku_bytes_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..=2048)) {
+                let list = parse_danmaku_bytes(&bytes);
+                for item in &list {
+                    prop_assert!(item.is_object());
+                    prop_assert!(item.get("time").and_then(Value::as_f64).is_some());
+                }
+            }
+
+            /// 合法编码的消息必须无损往返：条数、文本、时间戳逐条一致。
+            #[test]
+            fn encode_decode_roundtrip_preserves_elems(
+                texts in proptest::collection::vec(".{0,32}", 0..=20),
+                progresses in proptest::collection::vec(any::<i64>(), 0..=20),
+                modes in proptest::collection::vec(any::<i32>(), 0..=20),
+            ) {
+                let n = texts.len().min(progresses.len()).min(modes.len());
+                let elems = (0..n)
+                    .map(|i| DanmakuElem {
+                        id: 0,
+                        progress: progresses[i],
+                        mode: modes[i],
+                        fontsize: 25,
+                        color: 0xFFFFFF,
+                        mid_hash: String::new(),
+                        text: texts[i].clone(),
+                        ctime: 1_700_000_000,
+                        weight: 0,
+                        action: String::new(),
+                        pool: 0,
+                        id_str: String::new(),
+                    })
+                    .collect();
+                let mut buf = Vec::new();
+                DanmakuSeg { elems }.encode(&mut buf).expect("encode");
+                let list = parse_danmaku_bytes(&buf);
+                prop_assert_eq!(list.len(), n);
+                for (i, item) in list.iter().enumerate() {
+                    prop_assert_eq!(item["text"].as_str().unwrap_or_default(), &texts[i]);
+                    prop_assert_eq!(
+                        item["time"].as_f64().unwrap_or_default(),
+                        progresses[i] as f64 / 1000.0
+                    );
+                }
+            }
+        }
     }
 }

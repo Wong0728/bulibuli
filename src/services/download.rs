@@ -28,6 +28,7 @@ mod post_process;
 mod queue;
 mod status;
 mod storage;
+mod video_retry;
 
 use crate::config::{AppConfig, AppPaths};
 use crate::services::{
@@ -128,6 +129,12 @@ pub struct DownloadManager {
     aria2_recover_failed_at: Arc<Mutex<Option<Instant>>>,
     /// 新任务入队通知：monitor_loop 空闲退避期间据此立即唤醒，避免空闲时频繁查库
     queue_notify: Arc<tokio::sync::Notify>,
+    /// add_task 串行化锁：键为 `{bvid}#{cid}:{task_type}`。防止并发重复请求
+    /// 同时穿过"无存量任务"检查、创建出两行任务或对同一产物双重派发。
+    add_task_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    /// 最近完成的任务（键同上）→ 完成时刻。完成后的短窗口内重复入队请求
+    /// 直接幂等返回"产物已存在"，避免整段重下只为 SHA-256 比对。
+    recent_completions: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 pub struct DownloadManagerDependencies {

@@ -1,11 +1,12 @@
 //! 本地文件扫描：轻量侧车状态检测与按 BV 号聚合全部下载产物。
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::services::file_safety::{strip_verbatim_prefix, validate_uid};
 
-use super::{FileEntry, HistoryService, SidecarStatus};
+use super::{FileEntry, HistoryService, SidecarProbe, SidecarStatus};
 
 impl HistoryService {
     /// 检测当前视频目录中的侧车文件存在性。
@@ -17,48 +18,55 @@ impl HistoryService {
         uid: Option<&str>,
         video_path: Option<&str>,
     ) -> SidecarStatus {
-        let base = video_path
-            .and_then(|path| Path::new(path).parent())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| uid_download_dir(&self.paths.download_dir, uid));
-
-        let video = if let Some(path) = video_path {
-            Path::new(path).exists()
-        } else {
-            self.has_any_extension(&base, bvid, &["m4s", "mp4", "flv"])
-                .await
+        let probe = SidecarProbe {
+            bvid,
+            uid,
+            video_path,
         };
-        let danmaku = self
-            .has_any_extension(&base, &format!("{bvid}_danmaku"), &["xml", "json", "txt"])
-            .await;
-        let comments = tokio::fs::try_exists(base.join(format!("{bvid}_comments.html")))
+        self.sidecar_status_batch(std::slice::from_ref(&probe))
             .await
-            .unwrap_or(false)
-            || tokio::fs::try_exists(base.join(format!("{bvid}_comments.txt")))
-                .await
-                .unwrap_or(false);
-        let subtitle = self
-            .has_any_extension(&base, bvid, &["srt", "ass", "vtt"])
-            .await;
-
-        SidecarStatus {
-            video,
-            danmaku,
-            comments,
-            subtitle,
-        }
+            .into_iter()
+            .next()
+            .expect("单元素批量必返回一个结果")
     }
 
-    async fn has_any_extension(&self, dir: &Path, stem: &str, exts: &[&str]) -> bool {
-        for ext in exts {
-            if tokio::fs::try_exists(dir.join(format!("{stem}.{ext}")))
-                .await
-                .unwrap_or(false)
-            {
-                return true;
+    /// 批量侧车探测：看板整页行先按目录聚合，每个唯一目录只 `read_dir` 一次，
+    /// 替代旧版每行最多 8 次逐文件存在性探测（N+1 扇出导致列表页线性劣化）。
+    /// 返回顺序与输入顺序一致。
+    pub async fn sidecar_status_batch(&self, probes: &[SidecarProbe<'_>]) -> Vec<SidecarStatus> {
+        let bases = probes
+            .iter()
+            .map(|probe| self.sidecar_base(probe))
+            .collect::<Vec<_>>();
+        let mut dir_names: HashMap<PathBuf, HashSet<String>> = bases
+            .iter()
+            .cloned()
+            .map(|base| (base, HashSet::new()))
+            .collect();
+        for dir in dir_names.keys().cloned().collect::<Vec<_>>() {
+            let names = dir_names.get_mut(&dir).expect("键来自 keys()，必存在");
+            let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+                continue;
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Some(name) = entry.file_name().to_str() {
+                    names.insert(name.to_string());
+                }
             }
         }
-        false
+        bases
+            .iter()
+            .zip(probes)
+            .map(|(base, probe)| sidecar_from_names(probe, &dir_names[base]))
+            .collect()
+    }
+
+    fn sidecar_base(&self, probe: &SidecarProbe<'_>) -> PathBuf {
+        probe
+            .video_path
+            .and_then(|path| Path::new(path).parent())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| uid_download_dir(&self.paths.download_dir, probe.uid))
     }
 
     /// 把绝对路径转成相对 `data/downloads/` 的路径。
@@ -243,6 +251,28 @@ impl HistoryService {
             version,
             modified_at,
         })
+    }
+}
+
+/// 从目录文件名集合推导侧车存在性，与逐文件 `try_exists` 语义一致。
+fn sidecar_from_names(probe: &SidecarProbe<'_>, names: &HashSet<String>) -> SidecarStatus {
+    let has_any = |stem: &str, exts: &[&str]| {
+        exts.iter()
+            .any(|ext| names.contains(&format!("{stem}.{ext}")))
+    };
+    let video = match probe.video_path {
+        Some(path) => Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| names.contains(name)),
+        None => has_any(probe.bvid, &["m4s", "mp4", "flv"]),
+    };
+    SidecarStatus {
+        video,
+        danmaku: has_any(&format!("{}_danmaku", probe.bvid), &["xml", "json", "txt"]),
+        comments: names.contains(&format!("{}_comments.html", probe.bvid))
+            || names.contains(&format!("{}_comments.txt", probe.bvid)),
+        subtitle: has_any(probe.bvid, &["srt", "ass", "vtt"]),
     }
 }
 

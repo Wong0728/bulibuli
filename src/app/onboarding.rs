@@ -1,4 +1,4 @@
-//! 启动流程 Onboarding：首次启动打印 Setup URL 并自动打开浏览器，后续启动显示状态摘要。
+//! 启动流程 Onboarding：首次启动输出 Setup URL 提示（进 TUI 日志缓冲）并自动打开浏览器。
 //!
 //! 终端与用户的交互仅限于：看到 URL → 打开浏览器 → 完事。
 //! 所有配置走网页 Setup 向导，终端不再有任何交互式向导步骤。
@@ -150,7 +150,8 @@ impl StartupState {
     }
 */
 
-/// 运行 onboarding。首次启动打印 Setup URL 并自动打开浏览器，后续启动显示状态摘要并自动打开浏览器。
+/// 运行 onboarding。首次启动输出 Setup URL 提示（经 console_line 进 TUI 日志缓冲）并自动打开浏览器；
+/// 后续启动仅自动打开浏览器，状态摘要由 main.rs 在端口绑定后统一输出。
 ///
 /// 扫码登录已迁到 Web 端处理。
 /// `setup_port` 和 `main_port` 由调用方在服务器启动后传入，确保显示和打开浏览器的端口准确。
@@ -166,34 +167,22 @@ pub async fn run(
     }
 
     if !state.onboarding_completed {
-        // 首次启动：打印 Setup URL + 自动打开浏览器
+        // 首次启动：提示 Setup URL + 自动打开浏览器
         print_first_launch(setup_port);
         open_browser_safe(&format!("http://127.0.0.1:{setup_port}"));
     }
-    // 后续启动：Banner 和浏览器打开由 main.rs 在端口绑定成功后执行，
+    // 后续启动：摘要和浏览器打开由 main.rs 在端口绑定成功后执行，
     // 确保浏览器打开时服务器已就绪。
 
     Ok(state)
 }
 
-/// 首次启动终端输出：打印 Setup URL + 提示。
+/// 首次启动终端输出：Setup URL 提示。经 console_line 进日志缓冲，TUI 接管后首屏可见；
+/// 无界面时退化为直写 stdout。
 fn print_first_launch(port: u16) {
-    use crate::app::term_style;
     let setup_url = format!("http://127.0.0.1:{port}");
-    println!("═══════════════════════════════════════════════════════");
-    println!("  补哩补哩 bulibuli v{}", env!("CARGO_PKG_VERSION"));
-    println!();
-    println!("  请在浏览器中完成初始设置：");
-    println!("  → {}", term_style::url(&setup_url));
-    println!();
-    println!("  {}", term_style::dim("正在自动打开浏览器..."));
-    println!(
-        "  {}",
-        term_style::dim("如果未能自动打开，请手动复制上面的地址到浏览器")
-    );
-    println!();
-    println!("  {}", term_style::dim("Ctrl+C 停止服务"));
-    println!("═══════════════════════════════════════════════════════");
+    crate::app::tui::console_line(format!("请在浏览器中完成初始设置：{setup_url}"));
+    crate::app::tui::console_line("如果未能自动打开，请手动复制上面的地址到浏览器".to_string());
 }
 
 /// 自动打开浏览器；无图形桌面或打开失败时静默降级（终端仍显示 URL）。
@@ -207,6 +196,10 @@ pub fn open_browser_safe(url: &str) {
 }
 
 fn browser_available() -> bool {
+    // 测试/E2E 环境守卫：设置后禁止自动拉起系统浏览器，避免冒烟测试弹窗。
+    if std::env::var_os("BILI__NO_BROWSER").is_some() {
+        return false;
+    }
     #[cfg(target_os = "linux")]
     {
         std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()

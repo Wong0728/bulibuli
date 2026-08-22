@@ -18,6 +18,7 @@ use anyhow::{anyhow, Context, Result};
 use ffmpeg_session::{
     merge_segments_to_mp4, merge_segments_to_mp4_cancelable, redact_diagnostics, FfmpegSession,
 };
+use futures::StreamExt;
 pub use interactions::ArchivedLiveEvent;
 use interactions::{InteractionPaths, InteractionWriterArgs};
 use sea_orm::{
@@ -48,11 +49,24 @@ const CONSERVATIVE_URL_REFRESH: Duration = Duration::from_secs(15 * 60);
 const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_RECORDING_FILE_SIZE: u64 = 200 * 1024 * 1024 * 1024;
 const MAX_UNEXPECTED_EXIT_RECOVERY_ATTEMPTS: u32 = 3;
+/// 异常退出恢复的退避间隔（按已尝试次数）。
+fn recovery_backoff(attempts: u32) -> Duration {
+    match attempts {
+        1 => Duration::from_secs(2),
+        2 => Duration::from_secs(5),
+        _ => Duration::from_secs(15),
+    }
+}
+/// 恢复成功且稳定录制超过该时长后，重置恢复尝试额度。
+const RECOVERY_ATTEMPTS_RESET_AFTER: Duration = Duration::from_secs(5 * 60);
 const STOP_REASON_MANUAL: &str = "manual_stop";
 const STOP_REASON_OFFLINE_END: &str = "stream_ended_after_offline_confirmation";
 const STOP_REASON_UNRECOVERABLE_EXIT: &str = "ffmpeg_exit_while_live_or_unconfirmed";
 const STOP_REASON_FAILED: &str = "recording_failed";
 const STOP_REASON_COMPLETED: &str = "recording_completed";
+// 正常启动的网络调用上限约 60s（bili_api 超时），两倍余量后仍卡在 Starting 的
+// 只能是遗留条目（如启动任务被异常中止且清理代码未执行到）。
+const STARTING_STALE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// 对外暴露的录制信息。
 #[derive(Clone, Debug, Serialize)]
@@ -141,6 +155,8 @@ enum SessionEntry {
         /// 启动代际：stop()/start_with_options 跨 await 操作 sessions 时，
         /// 只允许移除自己创建的那一代 Starting，防止误删用户随后发起的新会话。
         generation: u64,
+        /// 启动开始时刻：超过 STARTING_STALE_TIMEOUT 仍未完成的视为遗留条目。
+        created_at: Instant,
     },
     Active(RecordingSessionHandle),
     Stopping {
@@ -151,6 +167,15 @@ enum SessionEntry {
 
 /// 全局启动代际计数器（单调递增）。
 static START_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 并发额度只统计真正占用录制资源的会话：Starting/Active 计入，
+/// Stopping（后台合并收尾中）不再占额度，避免用户收到"已达上限"但实际没有在录。
+fn active_session_count(sessions: &HashMap<i64, SessionEntry>) -> usize {
+    sessions
+        .values()
+        .filter(|entry| !matches!(entry, SessionEntry::Stopping { .. }))
+        .count()
+}
 
 #[derive(Clone)]
 struct RecordingSessionHandle {
@@ -206,10 +231,15 @@ impl LiveRecorder {
             return Err(anyhow!("直播间号必须为正整数"));
         }
         let max_concurrent = self.inner.settings_service.current().live.max_concurrent;
-        if self.inner.sessions.lock().await.len() >= max_concurrent {
-            return Err(anyhow!(
-                "已达到直播录制并发上限 ({max_concurrent} 路)，可在系统设置中调整"
-            ));
+        {
+            // 锁只保护并发计数检查：守卫若活到函数末尾，下方网络调用期间会一直
+            // 占锁（status/dashboard 全部被堵），且与后面的二次 lock() 自死锁。
+            let sessions = self.inner.sessions.lock().await;
+            if active_session_count(&sessions) >= max_concurrent {
+                return Err(anyhow!(
+                    "已达到直播录制并发上限 ({max_concurrent} 路)，可在系统设置中调整"
+                ));
+            }
         }
         let cookies = self.inner.settings_service.cookie_header().await?;
         let init = self
@@ -265,11 +295,25 @@ impl LiveRecorder {
         }));
         {
             let mut sessions = self.inner.sessions.lock().await;
-            if sessions.len() >= max_concurrent {
+            if active_session_count(&sessions) >= max_concurrent {
                 return Err(anyhow!("recording concurrency limit reached"));
             }
-            if sessions.contains_key(&room_id) {
-                return Err(anyhow!("直播间 {room_id} 已在录制中或正在启动"));
+            match sessions.get(&room_id) {
+                // 遗留的 Starting 条目（启动任务被异常中止且清理未执行到）：
+                // 超时后清除，避免该房间永久报"已在录制中或正在启动"。
+                Some(SessionEntry::Starting { created_at, .. })
+                    if created_at.elapsed() >= STARTING_STALE_TIMEOUT =>
+                {
+                    warn!(
+                        room_id,
+                        "直播启动超过 120 秒未完成，清除遗留 Starting 条目后重试"
+                    );
+                    sessions.remove(&room_id);
+                }
+                Some(_) => {
+                    return Err(anyhow!("直播间 {room_id} 已在录制中或正在启动"));
+                }
+                None => {}
             }
             let generation =
                 START_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -279,6 +323,7 @@ impl LiveRecorder {
                     snapshot: startup_snapshot,
                     cancellation: CancellationToken::new(),
                     generation,
+                    created_at: Instant::now(),
                 },
             );
         }
@@ -351,8 +396,12 @@ impl LiveRecorder {
             .ok_or_else(|| anyhow!("流地址列表为空"))?;
         let stream_url = selected_stream.url.clone();
 
-        let (ffmpeg_path, _) = self.inner.video_processor.detect_ffmpeg("auto", None).await;
-        let ffmpeg_path = ffmpeg_path.ok_or_else(|| anyhow!("未找到 FFmpeg，无法录制"))?;
+        let ffmpeg_path = self
+            .inner
+            .video_processor
+            .detect_ffmpeg_for_live()
+            .await
+            .context("直播录制需要支持网络流的完整版 FFmpeg")?;
 
         let live_dir = self
             .inner
@@ -360,8 +409,12 @@ impl LiveRecorder {
             .download_dir
             .join("live")
             .join(room_id.to_string());
-        let available = fs2::available_space(&self.inner.paths.download_dir)
-            .context("检查直播录制磁盘空间失败")?;
+        // spawn_blocking：fs2 是同步系统调用，Windows 网络盘可能阻塞 runtime 线程
+        let download_dir = self.inner.paths.download_dir.clone();
+        let available = tokio::task::spawn_blocking(move || fs2::available_space(&download_dir))
+            .await
+            .context("磁盘空间检查任务失败")
+            .and_then(|result| result.context("检查直播录制磁盘空间失败"))?;
         let live_cfg = self.inner.settings_service.current().live.clone();
         let min_free_bytes = live_cfg.min_free_space_gib * 1024 * 1024 * 1024;
         if available < min_free_bytes {
@@ -632,7 +685,15 @@ impl LiveRecorder {
                     updated_at: Set(chrono::Utc::now().to_rfc3339()),
                     ..Default::default()
                 };
-                let _ = failed.update(&self.inner.db).await;
+                let _ = failed
+                    .update(&self.inner.db)
+                    .await
+                    .inspect_err(|update_error| {
+                        warn!(
+                            recording_id = recording.id,
+                            "FFmpeg 启动失败后更新录制记录失败: {update_error}"
+                        );
+                    });
                 return Err(error);
             }
         };
@@ -740,6 +801,7 @@ impl LiveRecorder {
             last_url_refresh: Instant::now(),
             last_checkpoint: Instant::now(),
             restart_attempts: 0,
+            next_recovery_at: None,
             stop_reason: None,
             is_recoverable: false,
             unexpected_exit_detail: None,
@@ -752,7 +814,17 @@ impl LiveRecorder {
             .lock()
             .await
             .insert(room_id, SessionEntry::Active(handle));
-        tokio::spawn(async move { worker.run().await });
+        // 带 panic 记录与兜底清理：worker panic 时无人移除 Active 条目，
+        // 该房间会永久报"已在录制中"并占用 max_concurrent 额度直至重启。
+        // 条目存在期间同房间无法发起新会话，panic 后移除的必是本会话条目。
+        let panic_sessions = self.inner.sessions.clone();
+        crate::services::spawn_util::spawn_logged_with_panic(
+            "live_recorder_worker",
+            async move { worker.run().await },
+            move || async move {
+                panic_sessions.lock().await.remove(&room_id);
+            },
+        );
         info!(room_id, "直播录制已开始");
         Ok(initial_info)
     }
@@ -767,6 +839,7 @@ impl LiveRecorder {
                     snapshot,
                     cancellation,
                     generation,
+                    ..
                 }) => {
                     cancellation.cancel();
                     Some((snapshot.clone(), *generation))
@@ -1094,8 +1167,12 @@ impl LiveRecorder {
         if segments.is_empty() {
             return Err(anyhow!("no recoverable recording segments found"));
         }
-        let (ffmpeg_path, _) = self.inner.video_processor.detect_ffmpeg("auto", None).await;
-        let ffmpeg_path = ffmpeg_path.ok_or_else(|| anyhow!("FFmpeg not found"))?;
+        let ffmpeg_path = self
+            .inner
+            .video_processor
+            .detect_ffmpeg_for_live()
+            .await
+            .context("直播分段合并需要支持网络流的完整版 FFmpeg")?;
         if let Some(job) = self.find_active_merge_job(recording_id).await? {
             return Ok(job);
         }
@@ -1272,14 +1349,16 @@ impl LiveRecorder {
                 .join(recording.room_id.to_string());
             let segments =
                 find_recording_segments(&directory, recording.output_path.as_deref()).await;
-            let (ffmpeg_path, _) = self.inner.video_processor.detect_ffmpeg("auto", None).await;
-            let Some(ffmpeg_path) = ffmpeg_path else {
-                job.status = "failed".to_owned();
-                job.progress = 100;
-                job.error = Some("FFmpeg not found after restart".to_owned());
-                job.updated_at = chrono::Utc::now().to_rfc3339();
-                persist_merge_job(&self.inner.db, &job).await?;
-                continue;
+            let ffmpeg_path = match self.inner.video_processor.detect_ffmpeg_for_live().await {
+                Ok(path) => path,
+                Err(error) => {
+                    job.status = "failed".to_owned();
+                    job.progress = 100;
+                    job.error = Some(error.to_string());
+                    job.updated_at = chrono::Utc::now().to_rfc3339();
+                    persist_merge_job(&self.inner.db, &job).await?;
+                    continue;
+                }
             };
             if segments.is_empty() {
                 job.status = "failed".to_owned();
@@ -1366,11 +1445,15 @@ impl LiveRecorder {
                 })
                 .collect::<Vec<_>>()
         };
-        for room_id in room_ids {
-            if let Err(error) = self.stop(room_id).await {
-                warn!(room_id, "关闭程序时停止直播录制失败: {error}");
-            }
-        }
+        // 有界并行关停：逐房间串行时多房间关停总时长线性累加（单房间可达 ~35s）。
+        // stop() 不跨 await 持有 sessions 锁且各房间相互独立，可安全并行。
+        futures::stream::iter(room_ids)
+            .for_each_concurrent(4, |room_id| async move {
+                if let Err(error) = self.stop(room_id).await {
+                    warn!(room_id, "关闭程序时停止直播录制失败: {error}");
+                }
+            })
+            .await;
     }
 }
 
@@ -1408,6 +1491,9 @@ struct RecordingWorker {
     last_url_refresh: Instant,
     last_checkpoint: Instant,
     restart_attempts: u32,
+    /// 下一次异常退出恢复的最早时刻：连续秒退时按退避拉开重试间隔，
+    /// 避免恢复额度在数秒内被烧完。
+    next_recovery_at: Option<Instant>,
     stop_reason: Option<&'static str>,
     is_recoverable: bool,
     unexpected_exit_detail: Option<String>,
@@ -1473,7 +1559,12 @@ impl RecordingWorker {
                             let sessions = self.sessions.clone();
                             let room_id = self.room_id;
                             let background_job_id = job_id.clone();
-                            tokio::spawn(async move {
+                            // 带 panic 兜底：收尾任务 panic 时 Stopping 条目无人清理，
+                            // 该房间会永久报"已在录制中"（条目存在期间无法再次录制）。
+                            let panic_sessions = sessions.clone();
+                            crate::services::spawn_util::spawn_logged_with_panic(
+                                "live_recorder_stop_background",
+                                async move {
                                 if let Some(job) = merge_jobs.lock().await.get_mut(&background_job_id) {
                                     job.status = "running".to_owned();
                                     job.progress = 10;
@@ -1506,7 +1597,11 @@ impl RecordingWorker {
                                 }
                                 merge_cancellations.lock().await.remove(&background_job_id);
                                 sessions.lock().await.remove(&room_id);
-                            });
+                            },
+                            move || async move {
+                                panic_sessions.lock().await.remove(&room_id);
+                            },
+                            );
                             let _ = reply.send(job_id);
                             return;
                         }
@@ -1544,7 +1639,14 @@ impl RecordingWorker {
                     }
                 }
                 _ = health_tick.tick() => {
-                    if fs2::available_space(&self.live_dir).unwrap_or(0) < min_free_bytes {
+                    // spawn_blocking：fs2 是同步系统调用，Windows 网络盘可能阻塞 runtime 线程
+                    let live_dir = self.live_dir.clone();
+                    let available = tokio::task::spawn_blocking(move || fs2::available_space(&live_dir))
+                        .await
+                        .ok()
+                        .and_then(|result| result.ok())
+                        .unwrap_or(0);
+                    if available < min_free_bytes {
                         self.mark_failure(format!(
                             "可用磁盘空间低于 {} GiB 安全阈值，已安全停录",
                             live_limits.min_free_space_gib
@@ -1609,6 +1711,15 @@ impl RecordingWorker {
                         }
                     }
                     self.update_snapshot().await;
+                    // 恢复成功且新分段稳定录制足够久后，重置恢复额度与退避：
+                    // 否则长时间直播中累计 3 次瞬时断流就会被永久判死。
+                    if self.restart_attempts > 0
+                        && self.current_ffmpeg.is_some()
+                        && self.last_url_refresh.elapsed() >= RECOVERY_ATTEMPTS_RESET_AFTER
+                    {
+                        self.restart_attempts = 0;
+                        self.next_recovery_at = None;
+                    }
                     if self.last_checkpoint.elapsed() >= CHECKPOINT_INTERVAL {
                         let snapshot = self.snapshot.lock().await.clone();
                         self.persist_recording(&snapshot, false).await;
@@ -1715,6 +1826,11 @@ impl RecordingWorker {
     }
 
     async fn recover_after_unexpected_exit(&mut self) -> bool {
+        if let Some(next) = self.next_recovery_at {
+            if Instant::now() < next {
+                return false;
+            }
+        }
         if self.restart_attempts < MAX_UNEXPECTED_EXIT_RECOVERY_ATTEMPTS {
             self.restart_attempts += 1;
             warn!(
@@ -1722,16 +1838,22 @@ impl RecordingWorker {
                 attempt = self.restart_attempts,
                 "FFmpeg 异常退出，尝试刷新直播流并继续新分段"
             );
+            let backoff = recovery_backoff(self.restart_attempts);
             match self.refresh_segment().await {
                 Ok(()) => {
                     self.unexpected_exit_detail = None;
+                    // 新分段可能同样秒退：退避后再允许下一次恢复。
+                    self.next_recovery_at = Some(Instant::now() + backoff);
                     return false;
                 }
-                Err(error) => warn!(
-                    room_id = self.room_id,
-                    attempt = self.restart_attempts,
-                    "启动恢复分段失败: {error}"
-                ),
+                Err(error) => {
+                    warn!(
+                        room_id = self.room_id,
+                        attempt = self.restart_attempts,
+                        "启动恢复分段失败: {error}"
+                    );
+                    self.next_recovery_at = Some(Instant::now() + backoff);
+                }
             }
         }
 
@@ -1911,12 +2033,34 @@ impl RecordingWorker {
 
         self.set_status(RecordingStatus::Finalizing).await;
         persist_closed_segments(&self.db, self.recording_id, &self.segments).await;
-        let merge_result = match merge_cancellation {
-            Some(cancellation) => {
-                merge_segments_to_mp4_cancelable(&self.ffmpeg_path, &self.segments, cancellation)
-                    .await
+        // 崩溃/秒退可能留下不存在或 0 字节的分段，concat 清单引用它们必然失败；
+        // 只合并真实有效的分段。
+        let mut valid_segments = Vec::with_capacity(self.segments.len());
+        for segment in &self.segments {
+            match tokio::fs::metadata(segment).await {
+                Ok(metadata) if metadata.len() > 0 => valid_segments.push(segment.clone()),
+                _ => {
+                    debug!(
+                        path = %segment.display(),
+                        "跳过无效直播分段（不存在或为空）"
+                    );
+                }
             }
-            None => merge_segments_to_mp4(&self.ffmpeg_path, &self.segments).await,
+        }
+        let merge_result = if valid_segments.is_empty() {
+            Err(anyhow!("没有有效的直播分段可供合并"))
+        } else {
+            match merge_cancellation {
+                Some(cancellation) => {
+                    merge_segments_to_mp4_cancelable(
+                        &self.ffmpeg_path,
+                        &valid_segments,
+                        cancellation,
+                    )
+                    .await
+                }
+                None => merge_segments_to_mp4(&self.ffmpeg_path, &valid_segments).await,
+            }
         };
         let (final_path, merge_error) = match merge_result {
             Ok(path) => {
