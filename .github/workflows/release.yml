@@ -141,7 +141,8 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             git ca-certificates curl xz-utils build-essential pkg-config aria2 \
-            python3 libffi8 zlib1g
+            python3 libfontconfig1 libgnutls30 \
+            libffi8 zlib1g
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.RELEASE_TAG }}

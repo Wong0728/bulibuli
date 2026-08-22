@@ -364,7 +364,14 @@ def _unix_runtime_dependencies(binary, platform_name):
         if output.returncode != 0:
             raise RuntimeError(f"无法分析 Unix 运行时依赖：{output.stderr.strip()}")
         if "not found" in output.stdout:
-            raise RuntimeError(f"Unix 运行时缺少动态库：{binary}")
+            missing = [
+                line.strip().split("=>", 1)[0].strip()
+                for line in output.stdout.splitlines()
+                if "not found" in line
+            ]
+            raise RuntimeError(
+                f"Unix 运行时缺少动态库：{binary}（{', '.join(missing)}）"
+            )
         dependencies = []
         for line in output.stdout.splitlines():
             match = re.search(r"=>\s+(/\S+)|^\s+(/\S+)\s+\(", line)
