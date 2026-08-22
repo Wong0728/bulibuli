@@ -2653,14 +2653,13 @@ fn ensure_control_socket_parent(parent: &Path, data_dir: &Path) -> Result<(), St
     // 落空。归权对他人属主的目录会失败（保留原权限），随后的属主/模式校验仍会
     // 拒绝，防止攻击者预置 /tmp 目录替换 socket 劫持 ctl 命令。
     let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-    let (Ok(metadata), Ok(data_metadata)) = (
-        std::fs::metadata(parent),
-        std::fs::metadata(data_dir),
-    ) else {
+    let (Ok(metadata), Ok(data_metadata)) =
+        (std::fs::metadata(parent), std::fs::metadata(data_dir))
+    else {
         // 元数据不可读时不在这一步下结论，交给后续 bind 报具体错误。
         return Ok(());
     };
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let mode = metadata.permissions().mode();
     if metadata.uid() != data_metadata.uid() || (mode & 0o077) != 0 {
         return Err(format!(
@@ -2691,9 +2690,7 @@ async fn serve_ipc(state: SharedState) -> AppResult<()> {
                 bind_errors.push(format!("{label}: {error}"));
                 continue;
             }
-            if let Err(reason) =
-                ensure_control_socket_parent(parent, &state.infra.paths.data_dir)
-            {
+            if let Err(reason) = ensure_control_socket_parent(parent, &state.infra.paths.data_dir) {
                 bind_errors.push(format!("{label}: {reason}"));
                 continue;
             }

@@ -269,6 +269,10 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
+    # 容器默认 shell 是 sh（dash），步骤里用了 bash 特有的 ${VAR//./-} 替换。
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 120
     env:
       DEPS: /opt/ffdeps
