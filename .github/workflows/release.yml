@@ -131,6 +131,9 @@ jobs:
     needs: [quality, linux-runtime]
     timeout-minutes: 45
     env:
+      # 容器以 root 运行但默认 HOME=/github/home，与 euid 的 home（/root）
+      # 不一致会被 rustup 拒绝；统一为 /root。
+      HOME: /root
       BULIBULI_RUNTIME_DIR: ${{ github.workspace }}/ffmpeg-linux
     steps:
       - name: Install container build prerequisites
