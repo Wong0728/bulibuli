@@ -276,7 +276,9 @@ jobs:
     timeout-minutes: 120
     env:
       DEPS: /opt/ffdeps
-      PKG_CONFIG_PATH: /opt/ffdeps/lib/pkgconfig
+      # meson 在 Ubuntu 多架构系统上把 .pc 装到 lib/<triplet>/pkgconfig，
+      # 两条路径都要给 pkg-config。
+      PKG_CONFIG_PATH: /opt/ffdeps/lib/pkgconfig:/opt/ffdeps/lib/x86_64-linux-gnu/pkgconfig
     steps:
       - name: Install build tools
         run: |
@@ -352,7 +354,6 @@ jobs:
           echo "${LIBASS_SHA256}  libass-${LIBASS_VER}.tar.xz" | sha256sum -c -
           tar xf "libass-${LIBASS_VER}.tar.xz"
           cd "libass-${LIBASS_VER}"
-          PKG_CONFIG_PATH="/opt/ffdeps/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig" \
           ./configure \
             --prefix="$DEPS" \
             --enable-static --disable-shared
