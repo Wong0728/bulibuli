@@ -70,11 +70,15 @@ download_text() {
 }
 
 resolve_latest_version() {
-    local tag
-    tag="$(download_text "https://github.com/${REPO}/releases/latest/download/latest.json" 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
-    if ! [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-        # 回退只选正式版（ vX.Y.Z，无预发布后缀），避免装到 alpha。
-        tag="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
+    # /releases/latest 只指向最新正式版；纯预发布仓库会 302 到 HTML 列表页，
+    # 因此直接走 API。GitHub 按创建时间倒序返回，第一个即最新 Release（含预发布）。
+    # 默认跟随最新 Release；BULIBULI_STABLE_ONLY=1 时只认正式版，避免装到 alpha。
+    local tags tag
+    tags="$(download_text "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+    if [ "${BULIBULI_STABLE_ONLY:-0}" = "1" ]; then
+        tag="$(printf '%s\n' "${tags}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
+    else
+        tag="$(printf '%s\n' "${tags}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$' | head -n 1 || true)"
     fi
     [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || \
         die "无法读取 Release 发布清单；请用 BULIBULI_VERSION=vX.Y.Z 固定版本重试"
@@ -226,22 +230,33 @@ install_system_deps_if_possible() {
     [ ${#missing[@]} -gt 0 ] || return 0
     local -a sudo_cmd=()
     [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1 && sudo_cmd=(sudo)
+    # 包管理器输出（含 sudo 的 "no new privileges" 等原始报错）不直接透给用户；
+    # 失败时统一给出可操作的中文提示，由调用方回退 portable 包。
     if command -v apt-get >/dev/null 2>&1; then
-        if ! "${sudo_cmd[@]}" apt-get update || ! "${sudo_cmd[@]}" apt-get install -y "${missing[@]}"; then return 1; fi
+        if ! "${sudo_cmd[@]}" apt-get update >/dev/null 2>&1 || \
+           ! "${sudo_cmd[@]}" apt-get install -y "${missing[@]}" >/dev/null 2>&1; then
+            warn_pkg_install
+            return 1
+        fi
     elif command -v dnf >/dev/null 2>&1; then
-        if ! "${sudo_cmd[@]}" dnf install -y "${missing[@]}"; then return 1; fi
+        "${sudo_cmd[@]}" dnf install -y "${missing[@]}" >/dev/null 2>&1 || { warn_pkg_install; return 1; }
     elif command -v yum >/dev/null 2>&1; then
-        if ! "${sudo_cmd[@]}" yum install -y "${missing[@]}"; then return 1; fi
+        "${sudo_cmd[@]}" yum install -y "${missing[@]}" >/dev/null 2>&1 || { warn_pkg_install; return 1; }
     elif command -v pacman >/dev/null 2>&1; then
-        if ! "${sudo_cmd[@]}" pacman -Sy --noconfirm "${missing[@]}"; then return 1; fi
+        "${sudo_cmd[@]}" pacman -Sy --noconfirm "${missing[@]}" >/dev/null 2>&1 || { warn_pkg_install; return 1; }
     elif command -v zypper >/dev/null 2>&1; then
-        if ! "${sudo_cmd[@]}" zypper install -y "${missing[@]}"; then return 1; fi
+        "${sudo_cmd[@]}" zypper install -y "${missing[@]}" >/dev/null 2>&1 || { warn_pkg_install; return 1; }
     elif command -v apk >/dev/null 2>&1; then
-        if ! "${sudo_cmd[@]}" apk add "${missing[@]}"; then return 1; fi
+        "${sudo_cmd[@]}" apk add "${missing[@]}" >/dev/null 2>&1 || { warn_pkg_install; return 1; }
     else
+        warn_pkg_install
         return 1
     fi
     runtime_available
+}
+
+warn_pkg_install() {
+    warn "无法自动安装系统依赖（${1:-缺少 sudo/root 权限或软件源不可用}）；将改用完整 portable 包"
 }
 
 choose_remote_variant() {

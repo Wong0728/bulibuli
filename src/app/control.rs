@@ -2647,6 +2647,31 @@ async fn unix_socket_is_alive(path: &Path) -> bool {
 }
 
 #[cfg(unix)]
+fn ensure_control_socket_parent(parent: &Path, data_dir: &Path) -> Result<(), String> {
+    // 控制通道只允许当前用户访问。先归权再校验：create_dir_all 受 umask 影响
+    // （常见得到 0755），若先校验会被自己刚创建的目录拒绝，导致 XDG 候选必然
+    // 落空。归权对他人属主的目录会失败（保留原权限），随后的属主/模式校验仍会
+    // 拒绝，防止攻击者预置 /tmp 目录替换 socket 劫持 ctl 命令。
+    let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+    let (Ok(metadata), Ok(data_metadata)) = (
+        std::fs::metadata(parent),
+        std::fs::metadata(data_dir),
+    ) else {
+        // 元数据不可读时不在这一步下结论，交给后续 bind 报具体错误。
+        return Ok(());
+    };
+    use std::os::unix::fs::MetadataExt;
+    let mode = metadata.permissions().mode();
+    if metadata.uid() != data_metadata.uid() || (mode & 0o077) != 0 {
+        return Err(format!(
+            "目录属主/权限异常（uid={}, mode={mode:o}），拒绝使用",
+            metadata.uid()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 async fn serve_ipc(state: SharedState) -> AppResult<()> {
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 
@@ -2666,26 +2691,12 @@ async fn serve_ipc(state: SharedState) -> AppResult<()> {
                 bind_errors.push(format!("{label}: {error}"));
                 continue;
             }
-            // 控制通道只允许当前用户访问。运行时目录通常已经是 0700，
-            // 这里对我们创建的后备目录也明确设置权限。
-            // /tmp 兜底目录可能被其他用户预置（create_dir_all 对已存在目录静默成功）：
-            // 目录属主与数据目录属主（即本进程用户）不一致，或组/其他位仍有权限时
-            // 拒绝使用，防止攻击者替换 socket 劫持 ctl 命令。
-            if let (Ok(metadata), Ok(data_metadata)) = (
-                std::fs::metadata(parent),
-                std::fs::metadata(&state.infra.paths.data_dir),
-            ) {
-                use std::os::unix::fs::MetadataExt;
-                let mode = metadata.permissions().mode();
-                if metadata.uid() != data_metadata.uid() || (mode & 0o077) != 0 {
-                    bind_errors.push(format!(
-                        "{label}: 目录属主/权限异常（uid={}, mode={mode:o}），拒绝使用",
-                        metadata.uid()
-                    ));
-                    continue;
-                }
+            if let Err(reason) =
+                ensure_control_socket_parent(parent, &state.infra.paths.data_dir)
+            {
+                bind_errors.push(format!("{label}: {reason}"));
+                continue;
             }
-            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
         }
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_socket() => {
@@ -2894,6 +2905,35 @@ mod tests {
             .find(|spec| spec.name.starts_with("pair "))
             .expect("pair 应在 COMMAND_REGISTRY 中");
         assert!(!pair.desc.contains("授权"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_control_socket_parent_reclaims_umask_mode() {
+        // 回归：create_dir_all 受 umask 影响常得 0755，旧逻辑"先校验后归权"
+        // 会拒绝自己刚创建的目录，导致 XDG 候选必然失败。归权必须先于校验。
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!(
+            "bulibuli-test-parent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let parent = base.join("bulibuli");
+        let data_dir = base.join("data");
+        std::fs::create_dir_all(&parent).expect("创建候选目录");
+        std::fs::create_dir_all(&data_dir).expect("创建数据目录");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755))
+            .expect("设置 0755 模拟 umask 产物");
+        ensure_control_socket_parent(&parent, &data_dir).expect("自建 0755 目录应被归权放行");
+        let mode = std::fs::metadata(&parent)
+            .expect("读取元数据")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700, "候选目录应已收敛为 0700");
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[cfg(unix)]

@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.0-alpha.10
+
+- Linux 兼容性修复：Release 构建迁移到 ubuntu:22.04 容器（产物 glibc ≤ 2.35，修复在 Ubuntu 22.04 LTS / Debian 12 / RHEL 9 等主流发行版上因 `GLIBC_2.39 not found` 完全无法运行的问题）；README 新增 Quick Start 与最低系统要求。
+- 安装器修复（Linux/Termux）：版本解析改为直接走 Releases API 并默认跟随最新 Release（含预发布）——此前纯 alpha 阶段"只认正式版"的过滤会导致一键安装直接失败；`BULIBULI_STABLE_ONLY=1` 可恢复旧行为；系统依赖自动安装失败不再透出 sudo 原始报错，统一给出中文提示后回退 portable 包。
+- 打包修复：`build.py` 不再对共享 `lib/` 目录里上一轮生成的 `.sha256` 重复写校验和，消除 `.sha256.sha256`/`.sha256.sha256.sha256` 嵌套文件。
+- 控制通道修复（Unix）：候选目录先归权（0700）再校验属主/模式——此前 umask 产生的 0755 目录会被自己拒绝，导致容器等环境下 ctl 命令不可用；新增回归单测。
+- Linux 包体积优化：FFmpeg/ffprobe 换为 Actions 自编译精简构建（ubuntu:22.04 容器内原生编译，glibc 2.35 基线，能力集与 Windows 版一致），替代发行版完整 FFmpeg 及其递归拖入的全部动态库；`build.py` 支持 `BULIBULI_RUNTIME_DIR` 预置自建运行时。
+- 使用体验：首次设备配对码改为醒目横幅输出并提示 `bulibuli ctl pair` 可重新生成（README 同步更正"只能重启重新生成"的过时说明）；setup server 日志说明其用途与生命周期；aria2 启动竞态期的 RPC 重试日志降为 debug（重试耗尽才 WARN）。
+
 ## v2.0.0-alpha.9
 
 - 运行时替换：Windows 包内 FFmpeg/ffprobe 换为本仓库 Actions 自编译的精简构建（FFmpeg n8.1.2，GPL-2.0+，含弹幕烧录所需 libass/libx264 全能力，替换原 gyan.dev 5.1.6 通用构建）；NOTICE 与 resources 清单同步更正许可声明，x264 固定 commit、依赖 tarball 增加 SHA-256 校验。

@@ -1,6 +1,6 @@
 # 运行时资源
 
-Windows 的 `aria2c.exe` 和 `ffmpeg.exe` 作为已审计资源存放在仓库中。完整 Release 构建会复制对应平台的 `aria2c`、`ffmpeg` 及必要的非系统动态库到发布目录，并为每个文件写入独立 `.sha256` 文件；若 CI runner 有 `ffprobe`，也会作为可选探测工具随包提供。Termux 仍使用 `pkg` 安装。Linux 的 `core` 命令包不包含这些媒体运行时，交给本机环境提供。
+Windows 的 `aria2c.exe` 和 `ffmpeg.exe` 作为已审计资源存放在仓库中。完整 Release 构建会复制对应平台的 `aria2c`、`ffmpeg` 及必要的非系统动态库到发布目录，并为每个文件写入独立 `.sha256` 文件；macOS 若 CI runner 有 `ffprobe` 也会随包提供，Linux 则使用自编译的精简 `ffmpeg`/`ffprobe`（见下文）。Termux 仍使用 `pkg` 安装。Linux/macOS 的 `core` 命令包不包含这些媒体运行时，交给本机环境提供。
 `geo/` 子目录下的 GeoIP 数据库为跨平台数据文件，所有平台共用。`geo/GeoLite2-Country.mmdb` 在所有平台下都会被程序自动发现并使用。
 
 ## 清单
@@ -10,7 +10,7 @@ Windows 的 `aria2c.exe` 和 `ffmpeg.exe` 作为已审计资源存放在仓库�
 | `aria2c.exe` | aria2 1.37.0 | 多线程下载引擎（RPC 模式） | https://github.com/aria2/aria2/releases |
 | `ffmpeg.exe` | ffmpeg n8.1.2（本项目 Actions 自编译精简版） | 直播录制（http/FLV）/ 音视频合并 / remux / 弹幕字幕烧录 | `.github/workflows/build-ffmpeg.yml`（源码 https://github.com/FFmpeg/FFmpeg/tree/n8.1.2 ） |
 | `ffprobe.exe` | ffmpeg n8.1.2（与 `ffmpeg.exe` 同次构建） | 媒体流校验与时长探测；缺失时由 FFmpeg 回退 | 同上 |
-| `aria2c` / `ffmpeg` | 按 Release 平台构建 | Linux/macOS 便携包运行时 | https://aria2.github.io/ / https://ffmpeg.org/ |
+| `aria2c` / `ffmpeg` | aria2 1.37.0（系统包）/ ffmpeg n8.1.2（本项目 Actions 自编译精简版，glibc 2.35 基线） | Linux/macOS 便携包运行时 | https://github.com/aria2/aria2/releases / `.github/workflows/build-ffmpeg.yml`（linux job） |
 | `geo/GeoLite2-Country.mmdb` | dbip-country-lite 2026-07 | GeoIP 国家库（用于 `geo cn on` 大陆 IP 配对限制） | https://db-ip.com/db/download/ip-to-country-lite （CC BY 4.0） |
 
 ## 内置 FFmpeg 构建说明
@@ -57,6 +57,23 @@ sha256sum resources/geo/GeoLite2-Country.mmdb
 ```
 
 源码仓库没有 `resources/aria2c`、`resources/ffmpeg` 和 `resources/ffprobe` 这三个 Unix 文件；前两个只在完整 Release 归档内生成，`ffprobe` 是否随 CI 产物提供取决于 runner，`core` 归档不包含媒体运行时。
+
+## Linux / macOS 运行时说明
+
+Unix 便携包的 `resources/` 布局（Release 归档内，源码仓库不含这些文件）：
+
+- `aria2c`、`ffmpeg`：极小的 shell 包装脚本，负责设置库搜索路径（`LD_LIBRARY_PATH` /
+  `DYLD_LIBRARY_PATH`）后启动同目录的真正二进制；`chmod +x` 需要覆盖它们。
+- `aria2c.bin`、`ffmpeg.bin`、`ffprobe.bin`：真正的可执行文件。
+- `lib/`：随包携带的非系统动态库（构建时由 `ldd`/`otool` 递归收集），
+  每个文件旁有同名 `.sha256` 校验文件。
+- Linux 的 `ffmpeg.bin`/`ffprobe.bin` 来自 `.github/workflows/build-ffmpeg.yml`
+  的 linux job：在 ubuntu:22.04 容器内编译（glibc 2.35 兼容基线），媒体依赖
+  （x264/libass 等）静态链接，TLS 用 GnuTLS、字体用 Fontconfig 走系统动态库。
+  能力集与 Windows 版一致，体积远小于发行版完整 FFmpeg；
+  构建参数记录在归档内 `resources/BUILD_INFO.txt`。
+- Linux 的 `aria2c` 来自 CI runner 的系统包管理器（apt），其非系统动态库同样
+  被收集进 `lib/`。
 
 ## 更新与安全说明
 

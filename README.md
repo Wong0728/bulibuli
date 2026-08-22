@@ -12,6 +12,22 @@
 
 **前端架构**：主界面是唯一的 Vue 3 + Vite + Pinia + Vue Router 工程（位于 `web/`，构建产物落到 `static/app/`）；根路由 `/` 直接提供该界面。新版构建步骤见「从源码开发」一节。
 
+## 快速开始
+
+1. 从 [Releases](https://github.com/Wong0728/bulibuli/releases) 下载对应平台的 `portable` 包和同名 `.sha256`，校验后解压到任意有写权限的目录。
+2. 运行程序：Windows 执行 `bulibuli.exe`；Linux/macOS 执行 `./bulibuli`（首次请先 `chmod +x bulibuli resources/aria2c resources/ffmpeg`）。
+3. 打开终端打印的本地地址（默认 `http://127.0.0.1:5000`），输入终端横幅中的**首次设备配对码**完成配对。配对码 10 分钟有效且只能用一次；过期或丢失可执行 `bulibuli ctl pair` 重新生成，无需重启。
+4. 在网页中按需扫码登录 B 站，然后添加要监控的视频或直播间。
+
+## 最低系统要求
+
+| 平台 | 要求 |
+| --- | --- |
+| Windows x86_64 | Windows 10 / Server 2016 及更新 |
+| Linux x86_64 | **glibc ≥ 2.35**（Ubuntu 22.04 LTS、Debian 12、RHEL/Rocky/Alma 9 及更新的发行版）；更低版本的发行版无法运行 portable 包 |
+| macOS | 以 Release 页说明为准（CI 使用 macos-14 / macos-15 构建机，未显式降低部署目标） |
+| Termux Android arm64 | Termux 应用环境，aria2/FFmpeg 由 `pkg` 提供 |
+
 ## 从 Releases 安装
 
 打开 [GitHub Releases](https://github.com/Wong0728/bulibuli/releases)，下载与你的系统和 CPU 架构对应的 `portable` 归档，并下载同名 `.sha256` 文件。先校验 SHA-256，再解压到一个有写权限的目录。
@@ -119,7 +135,7 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termu
 ## 首次设置与常用操作
 
 1. 启动程序并打开终端打印的本地 URL。
-2. 首次设备配对码仅在终端打印（请确保终端可见；如以 nohup/systemd 等方式运行则需重启程序重新生成）。
+2. 首次设备配对码以醒目横幅在终端打印（请确保终端可见；以 nohup/systemd/Docker 方式运行看不到输出时，可执行 `bulibuli ctl pair` 重新生成，无需重启）。
 3. 在网页中完成设备配对和安全设置，再按需扫码登录 B 站。
 4. 完整包优先使用包内 aria2c 和 FFmpeg；轻量 `core` 包没有包内运行时时，按环境变量再到系统 `PATH` 查找，媒体探测会继续寻找 ffprobe 或回退 FFmpeg。
 

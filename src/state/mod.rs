@@ -75,11 +75,20 @@ impl AppState {
         // 2. B 站 API
         let (bili, initial_pair_code) = BiliState::build(&infra, secret_store).await?;
         if let Some(code) = &initial_pair_code {
-            crate::app::tui::console_line(format!(
-                "首次设备配对码：{}-{}（10 分钟内有效，仅可使用一次）",
-                &code[..4],
-                &code[4..]
-            ));
+            // 醒目横幅：配对码是首次使用的唯一入口，混在普通日志里容易被
+            // nohup/systemd/Docker 用户忽略；同时给出 ctl 重新生成方式。
+            let pair_line = format!("首次设备配对码：{}-{}", &code[..4], &code[4..]);
+            for line in [
+                "",
+                "==============================================",
+                pair_line.as_str(),
+                "10 分钟内有效，仅可使用一次。",
+                "过期或丢失可执行 `bulibuli ctl pair` 重新生成。",
+                "==============================================",
+                "",
+            ] {
+                crate::app::tui::console_line(line.to_string());
+            }
         }
 
         // 3. 媒体处理

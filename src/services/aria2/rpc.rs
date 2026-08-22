@@ -118,11 +118,18 @@ impl Aria2Manager {
                     if matches!(e, Aria2Error::GidNotFound(_)) {
                         return Err(anyhow!(e));
                     }
-                    warn!(
-                        "Aria2 RPC 调用失败 (attempt {}/{}): {e}",
-                        attempt + 1,
-                        max_retries
-                    );
+                    // 启动竞态下首次调用常失败一次并自愈（aria2 尚未监听），
+                    // 中间次重试只记 debug，避免用户把可自愈的 WARN 当作故障；
+                    // 重试耗尽才值得警告。
+                    if attempt == max_retries - 1 {
+                        warn!("Aria2 RPC 调用失败（重试耗尽，共 {max_retries} 次）: {e}");
+                    } else {
+                        tracing::debug!(
+                            "Aria2 RPC 调用失败 (attempt {}/{}), 将重试: {e}",
+                            attempt + 1,
+                            max_retries
+                        );
+                    }
                     last_error = Some(e);
                     if attempt < max_retries - 1 {
                         let delay = BASE_RETRY_DELAY_MS * 2_u64.pow(attempt);

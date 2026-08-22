@@ -70,7 +70,9 @@ pub async fn start_setup_server(state: SharedState) -> anyhow::Result<u16> {
         .actual_setup_port
         .store(actual_port, Ordering::Relaxed);
 
-    info!("setup server listening on http://127.0.0.1:{actual_port}");
+    info!(
+        "setup server listening on http://127.0.0.1:{actual_port}（首次配置向导专用端口；完成初始化后自动关闭，日常使用主端口的网页管理界面即可）"
+    );
 
     let app = build_setup_router(state.clone());
     let cancellation = SETUP_SHUTDOWN.get_or_init(CancellationToken::new).clone();

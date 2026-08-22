@@ -456,7 +456,10 @@ def bundle_unix_runtime(source, name, resources_dst, platform_name):
         )
     wrapper.write_text(wrapper_text, encoding="utf-8", newline="\n")
     wrapper.chmod(wrapper.stat().st_mode | 0o111)
-    for path in [wrapper, actual, *library_dir.iterdir()]:
+    # 只对本体与共享库写校验和；跳过上一轮（aria2c/ffmpeg/ffprobe 共享 lib/
+    # 目录）已生成的 .sha256，否则会递归产出 .sha256.sha256 嵌套文件。
+    libraries = [path for path in library_dir.iterdir() if not path.name.endswith(".sha256")]
+    for path in [wrapper, actual, *libraries]:
         write_file_checksum(path)
     return wrapper
 
@@ -521,6 +524,17 @@ def make_reproducible_gztar(archive_path, root_dir, base_dir, source_date_epoch)
                     tar.add(path, arcname=arcname, recursive=False, filter=normalize)
 
 
+def resolve_unix_runtime_source(name):
+    """定位 Unix 运行时来源：优先 BULIBULI_RUNTIME_DIR（CI 预置自建精简
+    FFmpeg/FFprobe），否则回退系统 PATH。"""
+    override_dir = os.environ.get("BULIBULI_RUNTIME_DIR", "")
+    if override_dir:
+        candidate = Path(override_dir) / name
+        if candidate.is_file():
+            return candidate
+    return Path(shutil.which(name) or "")
+
+
 def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     """组装完整 portable 或不含媒体运行时的 core 归档。"""
     print(f"[5/5] 组装 {variant} 包目录 ({platform_name})...")
@@ -579,7 +593,7 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
                     copied_resources.append(f"{name} (+ sha256)")
             else:
                 for name in runtime_names:
-                    source = Path(shutil.which(name) or "")
+                    source = resolve_unix_runtime_source(name)
                     if not source.is_file():
                         if name == "ffprobe":
                             continue
@@ -589,6 +603,10 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
                         )
                     bundle_unix_runtime(source, name, resources_dst, platform_name)
                     copied_resources.append(f"{name} (+ bundled libraries and sha256)")
+                    build_info = source.parent / "BUILD_INFO.txt"
+                    if name == "ffmpeg" and build_info.is_file():
+                        shutil.copy2(build_info, resources_dst / "BUILD_INFO.txt")
+                        copied_resources.append("resources/BUILD_INFO.txt")
         for name in PORTABLE_RESOURCE_DIRS:
             source = resources_src / name
             if source.is_dir():
