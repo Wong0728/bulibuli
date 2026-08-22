@@ -389,7 +389,7 @@ jobs:
           --enable-ffmpeg
           --enable-ffprobe
           --enable-gpl
-          --enable-protocol=file,pipe,tcp,tls,http,https
+          --enable-protocol=file,pipe,tcp,tls,http,https,udp
           --enable-demuxer=flv,concat,mov,matroska,mpegts,mp3,aac,ac3,eac3,flac
           --enable-muxer=flv,mp4,ipod,matroska
           --enable-parser=aac,ac3,flac,h264,hevc,mpegaudio,vp9,opus,av1,vorbis
