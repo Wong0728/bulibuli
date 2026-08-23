@@ -103,7 +103,11 @@ if manifest.get("schema_version") != 1 or manifest.get("platform") != "linux":
     raise SystemExit(1)
 if not (root / "bulibuli").is_file() or not (root / "static" / "app" / "index.html").is_file():
     raise SystemExit(1)
-arch = "x86_64" if pathlib.Path("/bin/sh").exists() and __import__("platform").machine().lower() in {"x86_64", "amd64"} else None
+machine = __import__("platform").machine().lower() if pathlib.Path("/bin/sh").exists() else ""
+arch = "x86_64" if machine in {"x86_64", "amd64"} else None
+if machine and not arch:
+    # 非 x86_64 架构显式拒绝：本包仅含 x86_64 二进制，静默跳过校验会放过错架构包。
+    raise SystemExit(1)
 if arch and manifest.get("architecture") != arch:
     raise SystemExit(1)
 for entry in manifest.get("files", []):

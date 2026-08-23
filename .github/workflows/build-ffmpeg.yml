@@ -423,6 +423,18 @@ jobs:
           ldd ffmpeg | tee /tmp/ldd.txt
           test "$(wc -l < /tmp/ldd.txt)" -lt 30
 
+      # 导出动态依赖清单：打包容器按此校验依赖可解析，避免"缺库但报错不说库名"
+      - name: Write dynamic dependency manifest
+        working-directory: ffmpeg-src
+        run: |
+          {
+            echo "== ffmpeg =="
+            ldd ffmpeg
+            echo "== ffprobe =="
+            ldd ffprobe
+            test -z "$(ldd ffmpeg ffprobe | grep 'not found')"
+          } > LDD_MANIFEST.txt
+          cat LDD_MANIFEST.txt
       - name: Write build info
         working-directory: ffmpeg-src
         run: |
@@ -450,4 +462,5 @@ jobs:
             ffmpeg-src/ffmpeg
             ffmpeg-src/ffprobe
             ffmpeg-src/BUILD_INFO.txt
+            ffmpeg-src/LDD_MANIFEST.txt
           if-no-files-found: error

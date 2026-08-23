@@ -211,6 +211,8 @@ impl DownloadManager {
         let mut idle_rounds: u32 = 0;
         // aria2 不可用计数器，需在循环外部声明才能正确累积
         let mut aria2_fail_count: u32 = 0;
+        // aria2 本次失联起点：宽限窗口内不批量置 failed（覆盖重启抖动）
+        let mut aria2_unavailable_since: Option<Instant> = None;
         let mut status_failures: HashMap<i32, u8> = HashMap::new();
         let mut disk_full_notified = false;
         // 磁盘满时被自动暂停的任务 ID：恢复后据此自动续传。
@@ -356,8 +358,13 @@ impl DownloadManager {
             let aria2_available = self.aria2.is_available().await;
             if !aria2_available {
                 aria2_fail_count += 1;
-                // 连续 3 次（约 6 秒）aria2 不可用，将所有下载中任务标记为失败
-                if aria2_fail_count >= 3 {
+                let unavailable_for = aria2_unavailable_since
+                    .get_or_insert_with(Instant::now)
+                    .elapsed();
+                // 连续 3 次（约 6 秒）且超过宽限窗口（30 秒，覆盖一次典型
+                // 重启耗时）aria2 仍不可用，才将所有下载中任务标记为失败。
+                const ARIA2_FAILURE_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+                if aria2_fail_count >= 3 && unavailable_for >= ARIA2_FAILURE_GRACE {
                     warn!("Aria2 持续不可用，将 {} 个下载任务标记为失败", tasks.len());
                     for task in &tasks {
                         let mut model: download_task::ActiveModel = task.clone().into();
@@ -391,6 +398,7 @@ impl DownloadManager {
                 continue;
             }
             aria2_fail_count = 0;
+            aria2_unavailable_since = None;
 
             // paused 任务对账（低频，30s 一次）：暂停 RPC 失败可能留下
             // "DB 状态为 paused 但 aria2 里仍在下载/已完成"的孤儿 gid。

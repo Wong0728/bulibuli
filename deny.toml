@@ -3,10 +3,7 @@ version = 2
 # These are transitive upstream issues with no safe replacement in the current
 # dependency graph; keep the exception explicit and revisit on dependency updates.
 ignore = [
-    "RUSTSEC-2024-0436", # paste is pulled by ratatui and has no safe upgrade.
     "RUSTSEC-2026-0173", # proc-macro-error2 is pulled by SeaORM macros.
-    "RUSTSEC-2026-0190", # anyhow is retained by prost-derive on this graph.
-    "RUSTSEC-2026-0235", # rust_decimal declares rkyv only as an optional edge.
 ]
 
 [bans]

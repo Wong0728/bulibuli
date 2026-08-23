@@ -5,6 +5,7 @@ use sea_orm::{
     sea_query::Expr, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait,
 };
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -31,19 +32,26 @@ pub struct ProgressWriter {
     sender: mpsc::Sender<Command>,
     cancellation: CancellationToken,
     handle: Arc<std::sync::Mutex<Option<JoinHandle<()>>>>,
+    /// writer 任务是否存活；死亡后 submit 侧丢弃快照并降级，防止 map 无界增长。
+    alive: Arc<AtomicBool>,
 }
 
 impl ProgressWriter {
     pub fn start(db: DatabaseConnection, cancellation: CancellationToken) -> Self {
         let (sender, receiver) = mpsc::channel(256);
         let pending = Arc::new(Mutex::new(HashMap::new()));
+        let alive = Arc::new(AtomicBool::new(true));
         let writer = Self {
             pending: pending.clone(),
             sender,
             cancellation: cancellation.clone(),
             handle: Arc::new(std::sync::Mutex::new(None)),
+            alive: alive.clone(),
         };
-        let task = tokio::spawn(run_writer(db, pending, receiver, cancellation));
+        let task = tokio::spawn(async move {
+            run_writer(db, pending, receiver, cancellation).await;
+            alive.store(false, Ordering::Release);
+        });
         *writer
             .handle
             .lock()
@@ -52,6 +60,12 @@ impl ProgressWriter {
     }
 
     pub async fn submit(&self, key: TaskKey, snapshot: ProgressSnapshot) {
+        if !self.alive.load(Ordering::Acquire) {
+            // writer 已死亡（panic 或提前退出）：进度不再落库，直接丢弃快照，
+            // 避免 pending map 无界增长。任务状态由下载侧的其他更新路径兜底。
+            self.pending.lock().await.clear();
+            return;
+        }
         self.pending.lock().await.insert(key, snapshot);
     }
 

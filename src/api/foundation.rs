@@ -24,6 +24,8 @@ struct FoundationStatus {
     access_mode: &'static str,
     setup_access: &'static str,
     restart_required: bool,
+    /// TLS 校验被关闭时的用户可见警告；正常配置为 None。
+    tls_warning: Option<&'static str>,
 }
 
 async fn status(
@@ -65,5 +67,7 @@ async fn status(
             "local_only"
         },
         restart_required: active.mode != configured.mode,
+        tls_warning: (!state.infra.config.tls_verify)
+            .then_some("匿名兼容请求已关闭 TLS 证书验证，存在中间人风险；带登录态请求仍严格校验"),
     }))
 }

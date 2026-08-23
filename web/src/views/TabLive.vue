@@ -197,12 +197,27 @@ async function burnHistoryDanmaku(recording: any) {
   }
 }
 
-/** 对齐 live.js trackBurnTask：每 3s 查询一次，最长 30 分钟；完成/失败/超时都有 toast。 */
+/** 对齐 live.js trackBurnTask：每 3s 查询一次，最长 30 分钟；完成/失败/超时都有 toast。
+ * 定时器句柄 + generation 记录在本模块，组件停用/卸载时停止轮询，避免泄漏。 */
+let burnPollTimer: number | null = null;
+let burnPollGeneration = 0;
+
+function stopBurnTaskTracking() {
+  burnPollGeneration += 1;
+  if (burnPollTimer !== null) {
+    window.clearTimeout(burnPollTimer);
+    burnPollTimer = null;
+  }
+}
+
 function trackBurnTask(taskId: string) {
+  const generation = ++burnPollGeneration;
   const startedAt = Date.now();
   const poll = async () => {
+    if (generation !== burnPollGeneration) return;
     try {
       const response: any = await downloadApi.burnStatus(taskId);
+      if (generation !== burnPollGeneration) return;
       const status = response?.status;
       if (status === 'completed') {
         toast.success('弹幕烧录完成，已生成弹幕版视频');
@@ -212,13 +227,13 @@ function trackBurnTask(taskId: string) {
       } else if (Date.now() - startedAt > 30 * 60 * 1000) {
         toast.warn('弹幕烧录超时，请到录制目录确认结果');
       } else {
-        window.setTimeout(poll, 3000);
+        burnPollTimer = window.setTimeout(poll, 3000);
       }
     } catch (error) {
       console.error('[live] 查询烧录任务状态失败：', error);
       // 网络异常同样受 30 分钟上限约束，避免后端不可达时无限轮询
       if (Date.now() - startedAt > 30 * 60 * 1000) toast.warn('弹幕烧录超时，请到录制目录确认结果');
-      else window.setTimeout(poll, 3000);
+      else burnPollTimer = window.setTimeout(poll, 3000);
     }
   };
   void poll();
@@ -428,6 +443,7 @@ onUnmounted(() => {
   stopDashboardPolling();
   stopEventPolling();
   stopTick();
+  stopBurnTaskTracking();
   if (visibilityHandler) {
     document.removeEventListener('visibilitychange', visibilityHandler);
     visibilityHandler = null;

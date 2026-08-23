@@ -86,8 +86,9 @@ fn download_client() -> Result<reqwest::Client> {
 /// 流式下载到目标文件：先写 `<dest>.part` 临时文件，全部落盘后原子 rename，
 /// 避免全量读入内存，也避免中断留下半截"成品"文件。返回响应体 SHA-256。
 /// 每个分块读取有 60s 超时，防止连接僵死导致下载永久挂起。
+/// 写盘走 tokio::fs 异步接口，避免阻塞运行时 worker 线程。
 async fn download_to_file(client: &reqwest::Client, url: &str, dest: &Path) -> Result<String> {
-    use std::io::Write;
+    use tokio::io::AsyncWriteExt;
     let response = client
         .get(url)
         .send()
@@ -96,7 +97,8 @@ async fn download_to_file(client: &reqwest::Client, url: &str, dest: &Path) -> R
         .error_for_status()
         .context("更新包请求失败")?;
     let temp = dest.with_extension("part");
-    let mut file = std::fs::File::create(&temp)
+    let mut file = tokio::fs::File::create(&temp)
+        .await
         .with_context(|| format!("创建临时下载文件失败: {}", temp.display()))?;
     let mut hasher = Sha256::new();
     let mut stream = response.bytes_stream();
@@ -109,13 +111,33 @@ async fn download_to_file(client: &reqwest::Client, url: &str, dest: &Path) -> R
     {
         let chunk = chunk.context("读取更新包数据失败")?;
         hasher.update(&chunk);
-        file.write_all(&chunk).context("写入更新包数据失败")?;
+        file.write_all(&chunk).await.context("写入更新包数据失败")?;
     }
-    file.sync_all().context("刷盘更新包数据失败")?;
+    file.sync_all().await.context("刷盘更新包数据失败")?;
     drop(file);
-    std::fs::rename(&temp, dest)
+    tokio::fs::rename(&temp, dest)
+        .await
         .with_context(|| format!("重命名更新包失败: {} → {}", temp.display(), dest.display()))?;
     Ok(hex::encode(hasher.finalize()))
+}
+
+/// latest.json 中 `download_url` 的信任域白名单：
+/// 仅允许 GitHub Release 资产域名，防止清单被篡改后把客户端引向任意下载源。
+fn validate_download_url(raw: &str) -> Result<()> {
+    let host = url::Url::parse(raw)
+        .ok()
+        .filter(|parsed| parsed.scheme() == "https")
+        .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()));
+    let allowed = matches!(
+        host.as_deref(),
+        Some("github.com")
+            | Some("objects.githubusercontent.com")
+            | Some("release-assets.githubusercontent.com")
+    );
+    if !allowed {
+        bail!("更新清单 download_url 不在受信任的 GitHub Release 域内: {raw}");
+    }
+    Ok(())
 }
 
 /// 拉取最新版本号与资产清单：遍历 release 列表，取第一个含 latest.json 的
@@ -286,6 +308,7 @@ pub async fn download_and_stage(
 ) -> Result<PathBuf> {
     validate_remote_component(version.trim_start_matches('v'))?;
     validate_remote_component(&asset.name)?;
+    validate_download_url(&asset.download_url)?;
     let client = download_client()?;
     let stage = staged_dir(paths, version);
     if stage.exists() {
@@ -639,7 +662,11 @@ fn spawn_windows_deferred_swap(paths: &AppPaths, staged: &Path) -> Result<()> {
            try {{ Rename-Item -LiteralPath $exe -NewName 'bulibuli.old.exe' -Force -ErrorAction Stop; $renamed=$true; break }} catch {{ Start-Sleep -Seconds 1 }}\n\
          }}\n\
          if(-not $renamed){{ exit 0 }}\n\
-         Move-Item -LiteralPath (Join-Path $staged 'bulibuli.exe') -Destination $exe -Force\n\
+         try {{ Move-Item -LiteralPath (Join-Path $staged 'bulibuli.exe') -Destination $exe -Force -ErrorAction Stop }} catch {{\n\
+           # 新 exe 就位失败时把旧 exe 改回原名，避免程序卡在 .old 上无法启动。\n\
+           Move-Item -LiteralPath $old -Destination $exe -Force\n\
+           exit 1\n\
+         }}\n\
          foreach($dir in @('static','resources')){{\n\
            $src=Join-Path $staged $dir\n\
            if(Test-Path -LiteralPath $src){{\n\

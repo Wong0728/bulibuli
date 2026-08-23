@@ -109,7 +109,10 @@ fn build_setup_router(state: SharedState) -> Router {
     // 而不是 307 重定向到主端口——首次启动时主端口尚未开始 serve，
     // 重定向只会把用户引向一个暂时无响应的地址。
     Router::new()
-        .route_service("/", ServeFile::new(static_root.join("app").join("index.html")))
+        .route_service(
+            "/",
+            ServeFile::new(static_root.join("app").join("index.html")),
+        )
         .route_service(
             "/favicon.ico",
             ServeFile::new(static_root.join("bulibuli.ico")),

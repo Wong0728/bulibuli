@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v2.0.0-alpha.11
 
 - 首次启动修复：后台服务（monitor/download_manager 等）改为在绑定主端口之前完成启动，消除"端口已监听但 HTTP 尚未 accept"导致首次启动 5000 端口无响应、重启后才正常的竞态窗口。
 - 配对页修复：`/api/auth/state` 轮询失败（含触发限流 429）时前端自动放慢到 15 秒退避、恢复后回到 5 秒，不再与探测限流互相续费造成死锁；配对页提示补充"执行 `bulibuli ctl pair` 可查看/重新生成配对码"。
@@ -9,6 +9,10 @@
 - `/api/download/add` 的 `title` 改为可选字段：缺省时自动通过视频信息接口补全标题，直接 `POST {"bvid": ...}` 不再报 missing field title。
 - ctl 权限边界：默认（AI Skill 关闭）额外放行只读诊断命令 `sys status`，与 `--help` 推荐的新手命令保持一致。
 - 体验修正：无图形桌面环境（无头服务器）启动时不再输出"正在自动打开浏览器..."，改为提示手动访问管理地址；配对后未登录 B 站账号的横幅文案改为明确的"下一步必做"引导。
+- 稳定性加固（发版前审查修复轮）：aria2 失联判定加 30 秒宽限窗口（覆盖应用重启抖动，不再把下载中任务批量误标 failed）；进度落库 writer 任务死亡后 submit 侧丢弃快照并降级，防止内存无界增长；更新器写盘改走 tokio::fs 异步接口，Windows 更新替换失败时回滚旧 exe 文名；更新清单 `download_url` 增加信任域白名单（仅 GitHub Release 资产域）；关闭 TLS 校验时健康接口返回用户可见风险警告。
+- 打包安全加固：`build.py` 组包前强制校验 `resources/` 哈希（被替换的运行时二进制拒绝入包）、打包前清扫 dist/ 旧产物、Windows 运行时不回退 PATH 中的同名二进制；Linux 安装器内嵌校验显式拒绝非 x86_64 架构包。
+- 依赖卫生：升级 vite 5→6 及若干依赖后移除 deny.toml 中已失效的 RUSTSEC 豁免（paste/anyhow/rust_decimal-rkyv 三条）。
+- 发版流程改进：Release workflow 支持 `workflow_dispatch` dry-run（`checkout_ref` 指定分支、`publish=false` 不建 Release），打 tag 前先在 main 上干跑验证，避免 tag 反复重移；自建 Linux FFmpeg 导出 ldd 动态依赖清单，打包容器按清单复检缺失库并点名具体库名。
 - 说明：Linux portable 包体积自 alpha.9 起明显下降（约 110MB → 41MB）属预期——aria2c/FFmpeg 改为动态链接 + wrapper 启动，仅复制非系统共享库，功能不受影响。
 
 ## v2.0.0-alpha.10

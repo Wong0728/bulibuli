@@ -265,6 +265,16 @@ def stage_test_runtime(exe_path):
         if source.is_dir():
             shutil.copytree(source, resources_dst / name, dirs_exist_ok=True)
             copied.append(f"{name}/")
+    # AI Skill 依赖 <app_root>/docs/skill.md，测试模式同样需要。
+    docs_src = ROOT / "docs"
+    if docs_src.is_dir():
+        shutil.copytree(
+            docs_src,
+            exe_path.parent / "docs",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        copied.append("docs/")
     if copied:
         print(f"  已复制测试运行时: resources/ ({', '.join(copied)})")
 
@@ -558,6 +568,19 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     stem = package_stem(platform_name, target, variant)
     package_dir = dist_dir / stem
 
+    # 打包前强制校验内置资源哈希（与 --check 门禁同源），防止被替换的
+    # runtime 二进制进入发布归档。
+    if not check_resource_hashes():
+        raise RuntimeError("resources/ 哈希校验失败，拒绝打包")
+
+    # 清扫 dist/ 内非当前版本的残留归档与校验文件，避免旧版产物混入发布目录。
+    for stale in dist_dir.glob("*"):
+        if stale == package_dir:
+            continue
+        if stale.suffix in {".zip", ".gz", ".sha256"} or stale.name.endswith(".tar.gz"):
+            print(f"  清理旧产物: {stale.name}")
+            stale.unlink()
+
     if package_dir.exists():
         shutil.rmtree(package_dir)
     package_dir.mkdir(parents=True)
@@ -611,8 +634,7 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
             if platform_name == "windows":
                 for name in runtime_names:
                     source = resources_src / name
-                    if not source.is_file():
-                        source = Path(shutil.which(name) or "")
+                    # 不回退 PATH 中的同名二进制：来源不可信且无法对照已知哈希。
                     if not source.is_file():
                         raise RuntimeError(f"Windows Release 缺少可运行时：{name}")
                     destination = resources_dst / name

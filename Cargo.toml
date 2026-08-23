@@ -1,6 +1,6 @@
 [package]
 name = "bulibuli"
-version = "2.0.0-alpha.10"
+version = "2.0.0-alpha.11"
 edition = "2021"
 authors = ["Wong0728"]
 description = "补哩补哩（bulibuli）——下架之前，先下为敬。"

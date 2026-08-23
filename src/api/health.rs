@@ -34,7 +34,10 @@ async fn health_check(State(state): State<SharedState>) -> Json<ApiResponse<serd
     let mode = settings.ffmpeg.mode.clone();
     let custom_path = (!settings.ffmpeg.custom_path.trim().is_empty())
         .then(|| settings.ffmpeg.custom_path.clone());
-    let cached = ffmpeg_cache().lock().unwrap().clone();
+    let cached = ffmpeg_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let ffmpeg = match cached.filter(|(at, cache_mode, cache_path, _)| {
         at.elapsed() < FFMPEG_CACHE_TTL && cache_mode == &mode && cache_path == &custom_path
     }) {

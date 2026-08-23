@@ -30,6 +30,13 @@ npm run test:smoke
 
 For a release-affecting change, build the local platform package with `python build.py --portable` and confirm that the archive contains the executable, `static/`, `resources/aria2c*`, `resources/ffmpeg*`, any bundled Unix `resources/lib/` files, and the matching checksums. `ffprobe` is optional because the program falls back to FFmpeg for probing. Linux CI also builds a `core` archive without media runtimes for the dependency-aware installer. Do not push a tag unless the release assets are ready.
 
+## Release checklist
+
+1. `cargo fmt --all -- --check`（CI 第一关就会拦，但本地先跑可以省一整轮等待）。
+2. 若改动了任何 `#[cfg(unix)]` 代码：本机是 Windows 时无法编译到这些代码。没有 WSL/交叉 C 工具链时 `cargo check --target x86_64-unknown-linux-gnu` 会因依赖的 cc build script 失败，此时依赖 CI quality gates 的 ubuntu `rust` job 兜底——务必走下述 dry-run 流程，不要直接打 tag。
+3. **发版 dry-run**：提交并推送 main 后，用 `workflow_dispatch` 触发 Release workflow，`checkout_ref` 填 main、`publish=false`。全绿且 artifact 齐全后，再在同一 commit 上打 tag 正式发布。不要删 tag 重打；一个 tag 只对应一个 commit。
+4. Linux 包的最低 glibc = Release 构建容器版本（当前 ubuntu:22.04，glibc ≤ 2.35）。升级容器镜像前要意识到这会同步抬高所有用户的兼容基线。
+
 ## Commit and review expectations
 
 Use a short imperative subject, explain behavior changes and migration impact, and include manual reproduction steps for user-visible changes. Never include secrets or copied upstream binaries without updating `NOTICE.md` and `resources/README.md`.
