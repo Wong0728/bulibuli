@@ -574,8 +574,10 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
         raise RuntimeError("resources/ 哈希校验失败，拒绝打包")
 
     # 清扫 dist/ 内非当前版本的残留归档与校验文件，避免旧版产物混入发布目录。
+    # 只删不含当前版本号的文件：同一 runner 上会连续组装多个 variant
+    # （如 Windows 的 portable + core），先打的包不能被后一次清理误删。
     for stale in dist_dir.glob("*"):
-        if stale == package_dir:
+        if f"-v{APP_VERSION}" in stale.name:
             continue
         if stale.suffix in {".zip", ".gz", ".sha256"} or stale.name.endswith(".tar.gz"):
             print(f"  清理旧产物: {stale.name}")
