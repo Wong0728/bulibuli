@@ -5,7 +5,7 @@ function envelope(data = {}, message = 'ok') {
 }
 
 async function mockVueApi(page) {
-  const state = { paired: false, calls: [], liveSource: true, recording: false, historyEntry: true };
+  const state = { paired: false, cookies: false, calls: [], liveSource: true, recording: false, historyEntry: true };
   await page.route('**/socket.io/**', route => route.abort());
   await page.route('**/api/**', async route => {
     const request = route.request();
@@ -24,7 +24,9 @@ async function mockVueApi(page) {
     } else if (path === '/api/auth/pair') {
       state.paired = true;
       data = { paired: true };
-    } else if (path === '/api/cookies/status') data = { configured: false, valid: false };
+    } else if (path === '/api/cookies/status') data = state.cookies
+      ? { configured: true, has_cookies: true, valid: true, uname: 'Vue 测试用户', mid: 123 }
+      : { configured: false, has_cookies: false, valid: false };
     else if (path === '/api/setup/status') data = { completed: true, mode: 'local', configured_mode: 'local' };
     else if (path === '/api/settings') data = {};
     else if (path === '/api/settings/ffmpeg-path') data = { available: true, path: '' };
@@ -72,6 +74,13 @@ test('Vue pairing enters the main app and uses aligned request contracts', async
   await page.locator('#pair-code').fill('ABCD-EFGH');
   await expect(page.locator('#pair-code')).toHaveValue('ABCD-EFGH');
   await page.getByRole('button', { name: '确认配对' }).click();
+  // B 站强制登录门：未登录 B 站时先拦截，不允许直接进主界面。
+  await expect(page.getByRole('heading', { name: '请先登录 B 站账号' })).toBeVisible();
+  expect(state.calls.some(call => call.path === '/api/settings')).toBeFalsy();
+
+  // 模拟扫码登录成功（Cookie 生效），重新加载后放行进入主界面。
+  state.cookies = true;
+  await page.reload();
   await expect(page.locator('#main-content')).toBeVisible();
 
   // 未激活的页面不能在后台初始化或轮询。

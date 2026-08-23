@@ -177,7 +177,16 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
         .clone()
         .start_cleanup_task(state.infra.cancellation.clone());
 
-    // 先绑定端口再启动 TUI/浏览器，确保浏览器打开时服务器已就绪。
+    // 后台服务必须在绑定主端口之前完成启动：一旦端口进入内核监听队列，
+    // 连接会立即成功但请求要等到 axum::serve 开始 accept 才有响应；
+    // 若 monitor/download_manager 启动耗时，用户会看到"端口在听但 curl 无响应"的假死窗口。
+    state.media.download_manager.start_monitor().await;
+    state.business.monitor_service.start().await;
+    state.business.refresh_service.start().await;
+    state.business.live_monitor.start().await;
+    state.bili.verify_service.start().await;
+
+    // 服务就绪后再绑定端口并立即 serve，确保浏览器打开时服务器已可响应。
     // 失败原因已包含在错误链里，交由 main 的 eprintln 打印一次（避免双份输出）。
     let (listener, actual_port) = app::server::bind_main_listener(&state).await?;
 
@@ -190,7 +199,15 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     app::tui::console_line(bili_text);
     let main_url = app::server::main_url(&state);
     app::tui::console_line(format!("网页管理: {main_url}"));
-    app::tui::console_line("正在自动打开浏览器...".to_string());
+    if app::onboarding::browser_available() {
+        app::tui::console_line("正在自动打开浏览器...".to_string());
+    } else {
+        // 无桌面环境（如无头服务器）：明确告知需手动访问，而非输出一句无效的"正在打开"。
+        app::tui::console_line(
+            "未检测到图形桌面环境，跳过自动打开浏览器；请在本地电脑浏览器中访问上面的地址"
+                .to_string(),
+        );
+    }
     app::onboarding::open_browser_safe(&main_url);
 
     let mut tui_handle = None;
@@ -198,12 +215,6 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
         Some(handle) => tui_handle = Some(handle),
         None => app::control::start_stdin_loop(state.clone()),
     }
-
-    state.media.download_manager.start_monitor().await;
-    state.business.monitor_service.start().await;
-    state.business.refresh_service.start().await;
-    state.business.live_monitor.start().await;
-    state.bili.verify_service.start().await;
 
     let server_result = app::server::serve(state.clone(), listener, actual_port).await;
     state.infra.cancellation.cancel();
@@ -234,7 +245,7 @@ fn handle_early_cli(args: &[String]) -> Option<anyhow::Result<()>> {
         }
         Some("--help") | Some("-h") => {
             println!(
-                "补哩补哩 bulibuli {}\n\n用法:\n  bulibuli                 启动服务\n  bulibuli open            打开浏览器到网页管理界面后退出\n  bulibuli --version       输出版本并退出\n  bulibuli --help          显示帮助并退出\n  bulibuli ctl <command>   执行高级控制命令\n\n常用控制命令（需服务已运行）:\n  bulibuli ctl sys status\n  bulibuli ctl sys ffmpeg-test\n  bulibuli ctl sys aria2-restart\n  bulibuli ctl dl status\n\n提示：ctl 命令默认仅放行 status/help/quit/ai/pair，先执行 `bulibuli ctl ai on` 启用 AI Skill 模式后，AI 可执行与人工相同的全部命令（含 mode/access/geo/trust）。",
+                "补哩补哩 bulibuli {}\n\n用法:\n  bulibuli                 启动服务\n  bulibuli open            打开浏览器到网页管理界面后退出\n  bulibuli --version       输出版本并退出\n  bulibuli --help          显示帮助并退出\n  bulibuli ctl <command>   执行高级控制命令\n\n常用控制命令（需服务已运行）:\n  bulibuli ctl sys status\n  bulibuli ctl sys ffmpeg-test\n  bulibuli ctl sys aria2-restart\n  bulibuli ctl dl status\n\n提示：ctl 命令默认仅放行 status/help/quit/ai/pair/sys status，先执行 `bulibuli ctl ai on` 启用 AI Skill 模式后，AI 可执行与人工相同的全部命令（含 mode/access/geo/trust）。",
                 env!("CARGO_PKG_VERSION")
             );
             Some(Ok(()))

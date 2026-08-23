@@ -498,13 +498,17 @@ pub(crate) async fn execute_from(
         return Ok(help());
     };
     // AI Skill 模式门控：仅在 AI IPC 来源时生效，人工终端（TUI/stdin）无条件放行。
-    // 未启用时仅放行 status / help / quit / ai（用于重新启用）。
+    // 未启用时仅放行 status / help / quit / ai（用于重新启用）/ pair，
+    // 以及只读诊断 `sys status`（--help 推荐新用户首先执行的命令）。
+    let sys_status_probe =
+        command == "sys" && args.get(1).map(String::as_str) == Some("status");
     if matches!(origin, CommandOrigin::AiCtl)
         && !state.infra.ai_skill_enabled.load(Ordering::Relaxed)
         && !matches!(command, "status" | "help" | "quit" | "ai" | "pair")
+        && !sys_status_probe
     {
         return Err(AppError::AiSkillDisabled(format!(
-            "AI Skill 模式未启用，ctl 仅放行 status/help/quit/ai/pair；当前命令 `{command}` 被拒绝。使用 `ai on` 启用"
+            "AI Skill 模式未启用，ctl 仅放行 status/help/quit/ai/pair/sys status；当前命令 `{command}` 被拒绝。使用 `ai on` 启用"
         )));
     }
     match command {

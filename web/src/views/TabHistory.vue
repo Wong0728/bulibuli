@@ -144,7 +144,7 @@ function showVideo(bvid: string, historyId?: number) {
 function formatSize(bytes?: number): string {
   const value = Number(bytes);
   if (!Number.isFinite(value) || value <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
   const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
   return `${parseFloat((value / Math.pow(1024, index)).toFixed(2))} ${units[index]}`;
 }
@@ -609,9 +609,9 @@ function describeFailure(failure?: { message?: string; kind?: string; fallback_r
                       <i class="fa-solid" :class="item.icon"></i>{{ sidecarOk(e, item.key) ? '✓' : '—' }}
                     </span>
                   </div>
-                  <div v-if="e.local_path || e.relative_path" class="board-card-path" :title="e.local_path || '路径已隐藏'">
+                  <div v-if="e.local_path || e.relative_path" class="board-card-path" :title="e.local_path || e.relative_path">
                     <i class="fa-solid fa-file-video"></i>
-                    <span>{{ e.local_path || '路径已隐藏' }}</span>
+                    <span>{{ e.local_path || e.relative_path }}</span>
                     <button v-if="e.local_path" class="btn btn-sm btn-ghost" title="复制路径" @click.stop="copyPath(e.local_path!)"><i class="fa-solid fa-copy"></i></button>
                     <button v-if="e.can_open_directory && e.relative_path" class="btn btn-sm btn-ghost" title="打开文件所在目录" @click.stop="openDirectory(e)"><i class="fa-solid fa-folder-open"></i></button>
                   </div>

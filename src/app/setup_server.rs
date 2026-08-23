@@ -13,13 +13,14 @@ use axum::{
     extract::State,
     http::{header, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Redirect, Response},
-    routing::get,
+    response::{IntoResponse, Response},
     Router,
 };
+use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use tokio_util::sync::CancellationToken;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
 /// setup server 的关停句柄；onboarding 完成时取消以触发 graceful shutdown。
@@ -102,10 +103,25 @@ pub fn shutdown_setup_server() {
 
 fn build_setup_router(state: SharedState) -> Router {
     let setup_api = crate::api::setup::router();
+    let static_root = state.infra.paths.static_dir();
 
+    // 直接在 Setup 端口上提供完整页面与向导所需的 API（health / auth / setup），
+    // 而不是 307 重定向到主端口——首次启动时主端口尚未开始 serve，
+    // 重定向只会把用户引向一个暂时无响应的地址。
     Router::new()
-        .route("/", get(serve_setup_page))
+        .route_service("/", ServeFile::new(static_root.join("app").join("index.html")))
+        .route_service(
+            "/favicon.ico",
+            ServeFile::new(static_root.join("bulibuli.ico")),
+        )
+        .nest_service("/app", ServeDir::new(static_root.join("app")))
+        .merge(crate::api::auth::router())
+        .merge(crate::api::health::router())
         .merge(setup_api)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            inject_setup_session,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             add_setup_security,
@@ -113,8 +129,25 @@ fn build_setup_router(state: SharedState) -> Router {
         .with_state(state)
 }
 
-async fn serve_setup_page(State(state): State<SharedState>) -> Response {
-    Redirect::temporary(&crate::app::server::main_url(&state)).into_response()
+/// Setup 端口没有主服务的请求安全中间件，这里补一个轻量会话注入：
+/// 认证 Cookie 有效则挂上 `Option<SessionAuth>`，让 /api/auth/csrf 等
+/// 依赖该 Extension 的 handler 正常工作；setup 端口仅回环可访问，对端恒为本机。
+async fn inject_setup_session(
+    State(state): State<SharedState>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    let ip: IpAddr = "127.0.0.1".parse().expect("static loopback ip");
+    let token = crate::api::auth::session_cookie(request.headers()).unwrap_or_default();
+    let session = state
+        .bili
+        .auth
+        .authenticate(&token, ip)
+        .await
+        .ok()
+        .flatten();
+    request.extensions_mut().insert(session);
+    next.run(request).await
 }
 
 async fn add_setup_security(

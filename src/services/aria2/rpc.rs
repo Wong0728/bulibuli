@@ -120,8 +120,9 @@ impl Aria2Manager {
                     }
                     // 启动竞态下首次调用常失败一次并自愈（aria2 尚未监听），
                     // 中间次重试只记 debug，避免用户把可自愈的 WARN 当作故障；
-                    // 重试耗尽才值得警告。
-                    if attempt == max_retries - 1 {
+                    // 重试耗尽才值得警告。embedded 模式只探测 1 次（启动轮询
+                    // 会自行多次重试），单次失败属预期，同样记 debug 而非 warn。
+                    if attempt == max_retries - 1 && max_retries > 1 {
                         warn!("Aria2 RPC 调用失败（重试耗尽，共 {max_retries} 次）: {e}");
                     } else {
                         tracing::debug!(

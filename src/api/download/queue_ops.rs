@@ -145,7 +145,9 @@ pub(super) async fn set_priority(
 #[derive(Deserialize)]
 pub(super) struct AddDownloadRequest {
     bvid: String,
-    title: String,
+    /// 可选：缺省或为空时自动通过 get_video_info 取标题（与 /api/download/start 同口径）。
+    #[serde(default)]
+    title: Option<String>,
     url: String,
     quality: Option<i32>,
     #[serde(rename = "type")]
@@ -159,8 +161,9 @@ pub(super) async fn add_download(
     use tracing::info;
 
     let bvid = req.bvid.trim();
-    let title = req.title.trim();
     let url = req.url.trim();
+    let provided_title = req.title.unwrap_or_default();
+    let title = provided_title.trim();
 
     info!(
         "[API] /api/download/add 请求: bvid={}, title={}, type={:?}, quality={:?}",
@@ -176,6 +179,25 @@ pub(super) async fn add_download(
     }
     crate::services::bili_url_policy::validate(url).await?;
     let cookies = state.infra.settings_service.cookie_header().await?;
+    // 未提供标题时自动补全：直接 POST {"bvid": ...} 不再因 missing field title 失败。
+    let title = if title.is_empty() {
+        let info = state
+            .bili
+            .bili_api
+            .get_video_info(bvid, &cookies)
+            .await
+            .map_err(|e| {
+                error!("/api/download/add 获取视频信息失败 bvid={bvid}: {e}");
+                AppError::from(e)
+            })?;
+        if info.title.is_empty() {
+            bvid.to_string()
+        } else {
+            info.title.clone()
+        }
+    } else {
+        title.to_string()
+    };
     let default_quality = state.infra.settings_service.current().query.video_quality;
     let quality = req.quality.unwrap_or(default_quality);
     let task_type = req.task_type.unwrap_or_else(|| "video".to_string());
@@ -183,7 +205,7 @@ pub(super) async fn add_download(
         .media
         .download_manager
         .add_task(
-            bvid, title, url, &cookies, quality, &task_type, None, "manual", None, None,
+            bvid, &title, url, &cookies, quality, &task_type, None, "manual", None, None,
         )
         .await
         .map_err(|e| {

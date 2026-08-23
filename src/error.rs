@@ -285,7 +285,10 @@ impl AppError {
             Self::Unauthorized(message) => (StatusCode::UNAUTHORIZED, 401, message.clone()),
             Self::RiskControl(message) => (StatusCode::FORBIDDEN, 403, message.clone()),
             Self::AiSkillDisabled(message) => (StatusCode::FORBIDDEN, 403, message.clone()),
-            Self::BiliNotLoggedIn(message) => (StatusCode::UNAUTHORIZED, 401, message.clone()),
+            // B 站未登录必须与设备会话失效（Unauthorized，code 401）区分开：
+            // envelope code 复用 B 站原始业务码 -101，前端据此走"登录已过期"
+            // 而非"设备会话已失效，请重新配对"。
+            Self::BiliNotLoggedIn(message) => (StatusCode::UNAUTHORIZED, -101, message.clone()),
             Self::ExternalProcess(message) => {
                 // aria2/FFmpeg 诊断可能含 RPC endpoint、URL 签名或本地路径：
                 // 脱敏后回传（保留 filter 不支持等有价值的非敏感诊断），全文进日志。

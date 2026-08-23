@@ -132,6 +132,19 @@ export const useAppStore = defineStore('app', () => {
   // --- 401/403 全局处理（对齐老框架 core.js apiRequest 的 handlers） ---
   setApiErrorHandlers({
     onUnauthorized: async (error, url) => {
+      // B 站凭证问题（后端 BiliNotLoggedIn：HTTP 401 + envelope code -101，见 src/error.rs）：
+      // 走"登录已过期"模态框 + 一键扫码，绝不能清设备会话状态或切回配对——
+      // 这只是 B 站账号未登录/过期，bulibuli 设备配对仍然有效。
+      if (error.code === -101) {
+        if (url === '/api/auth/state') return;
+        authExpired.value = true;
+        void authStore().refreshCookieStatus();
+        await showSystemModal('登录已过期', error.message || '登录凭证已失效，请重新登录。', () => {
+          cookieLoginVisible.value = true;
+        });
+        authExpired.value = false;
+        return;
+      }
       // 设备会话 401：不再整页 reload（会丢掉用户正在编辑的内容）。
       // 清本地会话状态并切回配对流程，由 App.vue 监听 sessionInvalid 完成切换。
       if (error.status === 401) {
@@ -147,7 +160,8 @@ export const useAppStore = defineStore('app', () => {
         toast.warn('设备会话已失效，请重新配对', 0);
         return;
       }
-      // B 站凭证过期（envelope code -101，HTTP 非 401）：登录过期模态框 + 一键扫码。
+      // B 站凭证过期（envelope code -101 以上的分支已处理；此处兜底其余业务码）：
+      // 登录过期模态框 + 一键扫码。
       if (url === '/api/auth/state') return;
       authExpired.value = true;
       void authStore().refreshCookieStatus();

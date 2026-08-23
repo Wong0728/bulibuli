@@ -6,7 +6,7 @@ mod cookies;
 mod cover;
 pub(crate) mod download;
 mod foundation;
-mod health;
+pub(crate) mod health;
 mod history;
 pub(crate) mod live;
 mod logs;

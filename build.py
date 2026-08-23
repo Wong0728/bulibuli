@@ -578,6 +578,18 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
         if document.is_file():
             shutil.copy2(document, package_dir / document_name)
 
+    # docs/ 目录必须随包分发：/api/foundation/status 与 /api/setup/status
+    # 返回的 ai_skill_path 指向 <app_root>/docs/skill.md，缺失会让 AI Skill 失效。
+    docs_src = ROOT / "docs"
+    if docs_src.is_dir():
+        docs_dst = package_dir / "docs"
+        shutil.copytree(
+            docs_src,
+            docs_dst,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        print("  已复制: docs/")
+
     resources_src = ROOT / "resources"
     if resources_src.exists():
         resources_dst = package_dir / "resources"

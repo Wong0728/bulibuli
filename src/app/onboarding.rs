@@ -195,7 +195,8 @@ pub fn open_browser_safe(url: &str) {
     }
 }
 
-fn browser_available() -> bool {
+/// 是否具备自动拉起浏览器的条件（桌面环境 / 未被测试守卫禁用）。
+pub(crate) fn browser_available() -> bool {
     // 测试/E2E 环境守卫：设置后禁止自动拉起系统浏览器，避免冒烟测试弹窗。
     if std::env::var_os("BILI__NO_BROWSER").is_some() {
         return false;

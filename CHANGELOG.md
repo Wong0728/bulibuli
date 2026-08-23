@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- 首次启动修复：后台服务（monitor/download_manager 等）改为在绑定主端口之前完成启动，消除"端口已监听但 HTTP 尚未 accept"导致首次启动 5000 端口无响应、重启后才正常的竞态窗口。
+- 配对页修复：`/api/auth/state` 轮询失败（含触发限流 429）时前端自动放慢到 15 秒退避、恢复后回到 5 秒，不再与探测限流互相续费造成死锁；配对页提示补充"执行 `bulibuli ctl pair` 可查看/重新生成配对码"。
+- Setup 端口（5001）修复：向导端口不再 307 重定向到主端口，改为直接提供向导页面与所需 API（静态页面 / health / auth / setup），首次启动主端口尚未就绪时向导依然可用。
+- 打包修复：portable/core 包随包分发 `docs/` 目录——`/api/foundation/status` 与 `/api/setup/status` 返回的 `ai_skill_path` 指向 `<app_root>/docs/skill.md`，此前缺失导致 AI Skill 路径失效。
+- `/api/download/add` 的 `title` 改为可选字段：缺省时自动通过视频信息接口补全标题，直接 `POST {"bvid": ...}` 不再报 missing field title。
+- ctl 权限边界：默认（AI Skill 关闭）额外放行只读诊断命令 `sys status`，与 `--help` 推荐的新手命令保持一致。
+- 体验修正：无图形桌面环境（无头服务器）启动时不再输出"正在自动打开浏览器..."，改为提示手动访问管理地址；配对后未登录 B 站账号的横幅文案改为明确的"下一步必做"引导。
+- 说明：Linux portable 包体积自 alpha.9 起明显下降（约 110MB → 41MB）属预期——aria2c/FFmpeg 改为动态链接 + wrapper 启动，仅复制非系统共享库，功能不受影响。
+
 ## v2.0.0-alpha.10
 
 - Linux 兼容性修复：Release 构建迁移到 ubuntu:22.04 容器（产物 glibc ≤ 2.35，修复在 Ubuntu 22.04 LTS / Debian 12 / RHEL 9 等主流发行版上因 `GLIBC_2.39 not found` 完全无法运行的问题）；README 新增 Quick Start 与最低系统要求。

@@ -16,7 +16,7 @@ import VideoDrawer from './components/VideoDrawer.vue';
 import ConfirmDialogList from './components/ConfirmDialogList.vue';
 import CookieLoginModals from './components/CookieLoginModals.vue';
 import ToastList from './components/ToastList.vue';
-import { video as videoApi } from './api';
+import { video as videoApi, setup as setupApi } from './api';
 import { useToastStore } from './stores/toast';
 
 const app = useAppStore();
@@ -44,8 +44,8 @@ const cookieWarningText = computed(() => {
     case 'unreachable': return '暂时无法连接 B 站，保留当前 Cookie，请稍后重试。';
     case 'malformed': return 'B 站返回的数据暂时无法识别，请稍后重试。';
     default: return auth.cookieStatus.has_cookies
-      ? '当前 B 站登录已失效，请重新登录，部分功能受限（仅能获取低清晰度视频）。'
-      : '未登录 B 站账号，部分功能受限（仅能获取低清晰度视频）。';
+      ? 'B 站登录已失效：请立即重新登录，否则仅能下载低清晰度视频。'
+      : '未登录 B 站账号：博主搜索不可用，仅能下载低清晰度视频。点击右上角登录。';
   }
 });
 const cookieLoginPrompt = computed(() => {
@@ -76,8 +76,8 @@ function onServerStatusClick() {
   }
 }
 
-/** 先完成设备认证，再进入配置向导或主界面。 */
-const phase = ref<'loading' | 'pair' | 'setup' | 'unavailable' | 'main'>('loading');
+/** 先完成设备认证，再进入配置向导 / B 站登录门 / 主界面。 */
+const phase = ref<'loading' | 'pair' | 'setup' | 'bili-login' | 'unavailable' | 'main'>('loading');
 const tabComponents = {
   search: TabSearch,
   manual: TabManual,
@@ -89,6 +89,21 @@ const tabComponents = {
 const activeTabComponent = computed(() => tabComponents[app.currentTab]);
 
 let enteringApp: Promise<void> | null = null;
+
+/** 进入主界面前的统一入口检查（bootstrap / 配对成功 / 向导完成共用）：
+ *  1. Setup 向导未完成 → setup；
+ *  2. B 站未登录（无 Cookie）→ bili-login 登录门，扫码成功后自动进入主界面。 */
+async function resolveEntryPhase(): Promise<'main' | 'setup' | 'bili-login'> {
+  try {
+    const setupStatus = await setupApi.status();
+    if (setupStatus && !setupStatus.completed) return 'setup';
+  } catch {
+    // Setup 接口失败不阻塞主流程（对齐 bootstrap 的容错）。
+  }
+  await auth.refreshCookieStatus();
+  if (!auth.cookieStatus.has_cookies) return 'bili-login';
+  return 'main';
+}
 
 function enterAuthenticatedApp() {
   if (enteringApp) return enteringApp;
@@ -107,7 +122,8 @@ function enterAuthenticatedApp() {
       phase.value = 'setup';
       return;
     }
-    phase.value = 'main';
+    phase.value = await resolveEntryPhase();
+    if (phase.value !== 'main') return;
     void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
   })().finally(() => {
     enteringApp = null;
@@ -123,9 +139,12 @@ function onPaired() {
   if (!auth.isAuthenticated) return;
   // 新会话必须立刻持有 CSRF token，否则进入主界面后的首个写请求就会 403。
   void auth.refreshCsrfToken();
-  phase.value = 'main';
   app.activateSession();
-  void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
+  void resolveEntryPhase().then((next) => {
+    phase.value = next;
+    if (next !== 'main') return;
+    void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
+  });
 }
 // 设备会话 401 失效：切回配对流程（不整页 reload，保留用户现场）。
 watch(() => app.sessionInvalid, (invalid) => {
@@ -134,11 +153,23 @@ watch(() => app.sessionInvalid, (invalid) => {
   phase.value = 'pair';
 });
 function onSetupDone() {
-  // Setup 向导完成，进入主界面
+  // Setup 向导完成后同样过登录门检查
+  void resolveEntryPhase().then(async (next) => {
+    phase.value = next;
+    if (next !== 'main') return;
+    app.activateSession();
+    await auth.refreshCsrfToken();
+    void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
+  });
+}
+// 登录门：扫码成功后 refreshCookieStatus 会把 isCookieValid 置真，自动进主界面。
+watch(() => auth.isCookieValid, (valid) => {
+  if (!valid || phase.value !== 'bili-login') return;
   phase.value = 'main';
   app.activateSession();
+  void auth.refreshCsrfToken();
   void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
-}
+});
 function retryConnection() { void enterAuthenticatedApp(); }
 
 function imageError(event: Event) {
@@ -248,6 +279,14 @@ watch(() => auth.isAuthenticated, (authenticated) => {
 
   <PairView v-else-if="phase === 'pair'" @paired="onPaired" />
 
+  <!-- B 站登录门：未登录 B 站不允许进入主界面，扫码成功后自动放行。 -->
+  <div v-else-if="phase === 'bili-login'" class="app-unavailable" role="alert">
+    <i class="fa-brands fa-bilibili" aria-hidden="true"></i>
+    <h1>请先登录 B 站账号</h1>
+    <p>博主搜索、视频下载等功能需要登录 B 站后才能使用。</p>
+    <button id="bili-login-gate-btn" class="btn btn-primary" @click="app.openCookieLogin()">扫码登录 B 站</button>
+  </div>
+
   <div v-else-if="phase === 'main'" class="container" :class="{ 'session-viewer': isViewer, 'session-operator': auth.state.role === 'operator', 'network-degraded': app.networkControlsLocked }"
        @click.capture="onContainerClickCapture" @beforeinput.capture="guardViewerMutation" @change.capture="guardViewerMutation">
     <header class="header">
@@ -314,10 +353,12 @@ watch(() => auth.isAuthenticated, (authenticated) => {
     </main>
 
     <VideoDrawer />
-    <CookieLoginModals />
     <ConfirmDialogList />
-    <ToastList />
   </div>
+
+  <!-- 扫码登录弹窗与 toast 挂根层级：配对/向导/登录门阶段也需要（扫码成功自动进主界面）。 -->
+  <CookieLoginModals />
+  <ToastList />
 </template>
 
 <style scoped>

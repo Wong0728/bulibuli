@@ -681,7 +681,7 @@ function formatSize(bytes?: number): string {
   // 对齐老框架 utils.js::formatFileSize：log 取单位 + toFixed(2) 后 parseFloat 去尾零（1.75 MB 而非 1.8 MB）。
   const value = Number(bytes);
   if (!Number.isFinite(value) || value <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
   const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
   return `${parseFloat((value / Math.pow(1024, index)).toFixed(2))} ${units[index]}`;
 }
@@ -913,9 +913,9 @@ onUnmounted(stopBurnPolling);
             <span class="drawer-info-sub">{{ video.pay_note }}</span>
           </div>
 
-          <div v-if="filePath || relativePath" class="drawer-file-path" :title="filePath || '路径已隐藏'">
+          <div v-if="filePath || relativePath" class="drawer-file-path" :title="filePath || relativePath">
             <i class="fa-solid fa-file-video"></i>
-            <span>{{ filePath || '路径已隐藏' }}</span>
+            <span>{{ filePath || relativePath }}</span>
             <button v-if="filePath" class="btn btn-sm btn-ghost" title="复制路径" @click="copyToClipboard(filePath)"><i class="fa-solid fa-copy"></i></button>
             <button v-if="canOpenDirectory && relativePath" class="btn btn-sm btn-ghost" title="打开文件所在目录" @click="openDirectoryTop"><i class="fa-solid fa-folder-open"></i></button>
           </div>

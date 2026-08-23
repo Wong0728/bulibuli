@@ -31,7 +31,8 @@ const remaining = computed(() => expiresAt.value == null ? 0 : Math.max(0, expir
 const hint = computed(() => {
   if (paired.value) return '正在进入管理界面…';
   if (error.value) return error.value;
-  if (!pairingOpen.value || remaining.value <= 0) return '配对未开放，请在服务端终端输入 pair';
+  if (!pairingOpen.value || remaining.value <= 0)
+    return '配对未开放：在服务端终端输入 pair 打开配对；找不到配对码时执行 bulibuli ctl pair 可查看/重新生成';
   const m = String(Math.floor(remaining.value / 60)).padStart(2, '0');
   const s = String(remaining.value % 60).padStart(2, '0');
   if (remaining.value <= 60) return `配对码即将过期（剩 ${m}:${s}），请尽快输入`;
@@ -96,11 +97,36 @@ async function loadState() {
       clockOffset.value = state.server_time - Math.floor(Date.now() / 1000);
     }
     error.value = '';
+    restoreFastPolling();
   } catch (e: any) {
     error.value = e?.message || '无法连接服务器，正在重试…';
+    slowDownPolling();
   } finally {
     polling.value = false;
   }
+}
+
+/** 轮询退避：请求失败（如触发限流 429）时放慢到 15s，避免失败请求持续
+ * 打满服务端探测限流窗口；恢复成功后回到 5s 常规节奏。 */
+const FAST_POLL_MS = 5000;
+const SLOW_POLL_MS = 15000;
+let pollIntervalMs = FAST_POLL_MS;
+
+function restartPollTimer() {
+  if (timer) clearInterval(timer);
+  timer = window.setInterval(() => void loadState(), pollIntervalMs);
+}
+
+function slowDownPolling() {
+  if (pollIntervalMs === SLOW_POLL_MS) return;
+  pollIntervalMs = SLOW_POLL_MS;
+  restartPollTimer();
+}
+
+function restoreFastPolling() {
+  if (pollIntervalMs === FAST_POLL_MS) return;
+  pollIntervalMs = FAST_POLL_MS;
+  restartPollTimer();
 }
 
 async function submit() {
@@ -110,7 +136,7 @@ async function submit() {
     return;
   }
   if (!pairingOpen.value || remaining.value <= 0) {
-    error.value = '当前未开放设备配对，请在服务端终端输入 pair';
+    error.value = '当前未开放设备配对：在服务端终端输入 pair，或执行 bulibuli ctl pair 重新生成配对码';
     return;
   }
   loading.value = true;
@@ -128,7 +154,7 @@ async function submit() {
 
 onMounted(() => {
   void loadState();
-  timer = window.setInterval(() => void loadState(), 5000);
+  restartPollTimer();
   clock = window.setInterval(() => { now.value = Math.floor(Date.now() / 1000); }, 1000);
 });
 onUnmounted(() => {

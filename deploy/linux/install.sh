@@ -567,9 +567,29 @@ show_status() {
     "${SYSTEMCTL[@]}" status "${SERVICE_NAME}" --no-pager || true
 }
 
+print_help() {
+    cat <<'EOF'
+补哩补哩 bulibuli Linux 安装脚本
+
+用法: ./install.sh [命令]
+
+命令:
+  install    下载并安装程序（默认命令，不带参数时执行）
+  run        前台运行服务（Ctrl+C 退出）
+  service    注册 systemd 服务并开机自启
+  unservice  停止并移除 systemd 服务
+  status     查看 systemd 服务状态
+  --help/-h  显示本帮助
+
+环境变量:
+  BULIBULI_DATA_DIR / BILI__DATA_DIR  自定义数据目录（root 安装默认 /var/lib/bulibuli）
+EOF
+}
+
 main() {
     local action="${1:-install}"
     case "${action}" in
+        -h|--help|help) print_help; return ;;
         unservice) remove_service; return ;;
         status) show_status; return ;;
     esac
@@ -610,7 +630,7 @@ main() {
             install_service
             ;;
         *)
-            die "未知命令：${action}（可用：install / run / service / unservice / status）"
+            die "未知命令：${action}（可用：install / run / service / unservice / status；--help 查看帮助）"
             ;;
     esac
 }

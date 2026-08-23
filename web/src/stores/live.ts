@@ -109,7 +109,7 @@ export function formatMediaTime(ms = 0): string {
 }
 
 export function formatFileSize(bytes = 0): string {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
   if (!bytes) return '0 B';
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 4);
   return `${(bytes / 1024 ** i).toFixed(1)} ${units[i]}`;
