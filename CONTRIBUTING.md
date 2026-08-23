@@ -32,6 +32,8 @@ For a release-affecting change, build the local platform package with `python bu
 
 ## Release checklist
 
+完整历史踩坑记录见 [docs/dev/RELEASE_RETROSPECTIVES.md](docs/dev/RELEASE_RETROSPECTIVES.md)，发版前应通读最新一篇。
+
 1. `cargo fmt --all -- --check`（CI 第一关就会拦，但本地先跑可以省一整轮等待）。
 2. 若改动了任何 `#[cfg(unix)]` 代码：本机是 Windows 时无法编译到这些代码。没有 WSL/交叉 C 工具链时 `cargo check --target x86_64-unknown-linux-gnu` 会因依赖的 cc build script 失败，此时依赖 CI quality gates 的 ubuntu `rust` job 兜底——务必走下述 dry-run 流程，不要直接打 tag。
 3. **发版 dry-run**：提交并推送 main 后，用 `workflow_dispatch` 触发 Release workflow，`checkout_ref` 填 main、`publish=false`。全绿且 artifact 齐全后，再在同一 commit 上打 tag 正式发布。不要删 tag 重打；一个 tag 只对应一个 commit。
