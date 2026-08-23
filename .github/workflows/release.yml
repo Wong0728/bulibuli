@@ -139,6 +139,10 @@ jobs:
       image: ubuntu:22.04
     needs: [quality, linux-runtime]
     timeout-minutes: 45
+    # 容器默认 shell 是 sh（dash），不认 bash 特有的 set -o pipefail / ${VAR//} 替换
+    defaults:
+      run:
+        shell: bash
     env:
       # 容器以 root 运行但默认 HOME=/github/home，与 euid 的 home（/root）
       # 不一致会被 rustup 拒绝；统一为 /root。
