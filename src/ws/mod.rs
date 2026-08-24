@@ -4,6 +4,8 @@ use anyhow::Result;
 use socketioxide::{extract::SocketRef, SocketIo};
 use std::sync::Arc;
 use tokio::sync::{broadcast, OnceCell};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 #[derive(Clone)]
@@ -129,14 +131,20 @@ impl WebSocketManager {
 /// “操作未提交前不广播”的设计原则）。敏感操作（Cookie 保存等）走 `record_silent`，
 /// 不经此通道，事件流不暴露隐私信息。
 ///
-/// 在 `main.rs` 启动时 spawn 一次即可；任务随 `cancellation` 取消退出。
+/// 在 `main.rs` 启动时 spawn 一次即可；任务随 `cancellation` 取消退出，
+/// 返回句柄供数据库关闭前等待。
 pub fn start_audit_event_bridge(
     ws: Arc<WebSocketManager>,
     mut rx: broadcast::Receiver<AuditEvent>,
-) {
+    cancellation: CancellationToken,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            match rx.recv().await {
+            let received = tokio::select! {
+                _ = cancellation.cancelled() => break,
+                result = rx.recv() => result,
+            };
+            match received {
                 Ok(event) => {
                     let payload = match serde_json::to_value(&event) {
                         Ok(value) => value,
@@ -158,7 +166,7 @@ pub fn start_audit_event_bridge(
                 }
             }
         }
-    });
+    })
 }
 
 #[cfg(test)]
@@ -219,7 +227,8 @@ mod tests {
         drop(layer);
 
         let (tx, rx) = tokio::sync::broadcast::channel::<AuditEvent>(8);
-        start_audit_event_bridge(manager.clone(), rx);
+        let cancellation = CancellationToken::new();
+        let handle = start_audit_event_bridge(manager.clone(), rx, cancellation.clone());
         let event = AuditEvent {
             at: "2026-08-21T00:00:00Z".to_string(),
             source: "test",
@@ -237,6 +246,9 @@ mod tests {
         tx.send(event).expect("send audit event");
         // 关闭通道后桥接任务应正常退出（Closed 分支），不 panic、不悬挂进程。
         drop(tx);
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("bridge shutdown")
+            .expect("bridge join");
     }
 }

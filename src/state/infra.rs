@@ -73,8 +73,10 @@ impl InfraState {
             started_at: Instant::now(),
             audit_log,
             conflict_guard,
-            actual_main_port: Arc::new(AtomicU16::new(config.port)),
-            actual_setup_port: Arc::new(AtomicU16::new(config.port + 1)),
+            // 只有主 listener 成功绑定后才发布真实端口；0 表示尚未就绪。
+            actual_main_port: Arc::new(AtomicU16::new(0)),
+            // 只有 setup listener 成功绑定后才写入真实端口；0 表示当前未监听。
+            actual_setup_port: Arc::new(AtomicU16::new(0)),
         };
         Ok((state, secret_store))
     }

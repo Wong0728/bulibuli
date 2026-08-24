@@ -15,6 +15,7 @@ mod ws;
 use crate::config::load_config;
 use crate::db::init_database;
 use crate::state::AppState;
+use tokio::task::JoinHandle;
 use tracing::{error, info};
 
 #[tokio::main]
@@ -117,49 +118,74 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     // BiliApi 就绪后：同步 B 站登录 UID 到 startup_state.json。
     app::onboarding::sync_bili_uid(&state, &state.infra.paths).await;
 
-    app::control::start_server(state.clone());
+    let control_handle =
+        app::control::start_server(state.clone(), state.infra.cancellation.clone());
 
     // 更新策略启动检查：manual 仅记录最新版本，auto 额外下载暂存，off 不发任何请求。
-    {
+    let startup_update_handle = {
         let state = state.clone();
+        let cancellation = state.infra.cancellation.clone();
         tokio::spawn(async move {
-            if let Err(error) = services::update::startup_check(&state).await {
-                tracing::warn!(%error, "启动更新检查失败");
+            tokio::select! {
+                _ = cancellation.cancelled() => {}
+                result = services::update::startup_check(&state) => {
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "启动更新检查失败");
+                    }
+                }
             }
-        });
-    }
+        })
+    };
 
     // 启动 Setup 独立端口服务（始终 localhost，供首次设置向导和重新配置使用）
     // 必须先于 onboarding 启动，这样 onboarding 打开浏览器时服务器已就绪。
-    let actual_setup_port = match app::setup_server::start_setup_server(state.clone()).await {
-        Ok(port) if port != 0 => {
-            info!("setup server started on port {port}");
-            port
-        }
-        // 0 = 未启动：onboarding 已完成（默认模式）或 BILI__SETUP_PORT_ENABLED=false。
-        Ok(_) => {
-            info!("setup server 未启动");
-            0
-        }
-        Err(e) => {
-            // 不再回退到"假端口"（port+1 上并无服务监听，浏览器会指向连接拒绝地址）。
-            // 需要该端口却绑定失败时明确报错退出，让用户看到真实原因。
-            return Err(anyhow::anyhow!(
-                "Setup 端口绑定失败（首次配置向导依赖该端口，请检查端口 {} 是否被占用）: {e}",
-                config_port + 1
-            ));
-        }
-    };
+    let (actual_setup_port, setup_handle) =
+        match app::setup_server::start_setup_server(state.clone()).await {
+            Ok((port, handle)) if port != 0 => {
+                info!("setup server started on port {port}");
+                (port, handle)
+            }
+            // 0 = 未启动：onboarding 已完成（默认模式）或 BILI__SETUP_PORT_ENABLED=false。
+            Ok((_, handle)) => {
+                info!("setup server 未启动");
+                (0, handle)
+            }
+            Err(e) => {
+                // 不再回退到"假端口"（port+1 上并无服务监听，浏览器会指向连接拒绝地址）。
+                // 需要该端口却绑定失败时明确报错退出，让用户看到真实原因。
+                state.infra.cancellation.cancel();
+                wait_background_task("IPC server", Some(control_handle)).await;
+                wait_background_task("startup update check", Some(startup_update_handle)).await;
+                state.infra.db.clone().close().await?;
+                return Err(anyhow::anyhow!(
+                    "Setup 端口绑定失败（首次配置向导依赖该端口，请检查端口 {} 是否被占用）: {e}",
+                    config_port + 1
+                ));
+            }
+        };
 
     // Onboarding：首次启动打印 Setup URL + 自动打开浏览器；后续启动显示状态摘要 + 自动打开浏览器。
     // 此时 setup server 已就绪，浏览器打开后可立即访问。
-    let startup_state = app::onboarding::run(
+    let startup_state = match app::onboarding::run(
         &state.infra.paths,
         interactive,
         actual_setup_port,
         config_port,
     )
-    .await?;
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            state.infra.cancellation.cancel();
+            app::setup_server::shutdown_setup_server();
+            wait_background_task("Setup server", setup_handle).await;
+            wait_background_task("IPC server", Some(control_handle)).await;
+            wait_background_task("startup update check", Some(startup_update_handle)).await;
+            state.infra.db.clone().close().await?;
+            return Err(error);
+        }
+    };
+    let first_launch = !startup_state.onboarding_completed;
 
     // 同步 AI Skill 状态（onboarding 可能在 Web 向导中修改了此值）
     state.infra.ai_skill_enabled.store(
@@ -168,10 +194,14 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     );
 
     // 审计事件桥接：把审计事件流转发给 WebSocket 客户端，前端可实时感知多端写操作。
-    ws::start_audit_event_bridge(state.infra.ws.clone(), state.infra.audit_log.subscribe());
+    let audit_bridge_handle = ws::start_audit_event_bridge(
+        state.infra.ws.clone(),
+        state.infra.audit_log.subscribe(),
+        state.infra.cancellation.clone(),
+    );
 
     // 审计日志 30 天自动清理：每 24 小时清理一次 30 天前的记录。
-    state
+    let audit_cleanup_handle = state
         .infra
         .audit_log
         .clone()
@@ -188,7 +218,27 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
 
     // 服务就绪后再绑定端口并立即 serve，确保浏览器打开时服务器已可响应。
     // 失败原因已包含在错误链里，交由 main 的 eprintln 打印一次（避免双份输出）。
-    let (listener, actual_port) = app::server::bind_main_listener(&state).await?;
+    let (listener, actual_port) = match app::server::bind_main_listener(&state).await {
+        Ok(bound) => bound,
+        Err(error) => {
+            state.infra.cancellation.cancel();
+            state.media.download_manager.stop_monitor().await;
+            state.business.monitor_service.stop().await;
+            state.business.refresh_service.stop().await;
+            state.business.live_monitor.stop().await;
+            state.bili.verify_service.stop().await;
+            state.media.live_recorder.stop_all().await;
+            let _ = state.media.aria2.stop().await;
+            app::setup_server::shutdown_setup_server();
+            wait_background_task("Setup server", setup_handle).await;
+            wait_background_task("IPC server", Some(control_handle)).await;
+            wait_background_task("startup update check", Some(startup_update_handle)).await;
+            wait_background_task("audit event bridge", Some(audit_bridge_handle)).await;
+            wait_background_task("audit cleanup", Some(audit_cleanup_handle)).await;
+            state.infra.db.clone().close().await?;
+            return Err(error);
+        }
+    };
 
     // 首次/后续启动统一走 TUI：banner 与摘要经 console_line 进日志缓冲，TUI 接管后首屏可见。
     // 状态栏已含 URL/模式/AI，这里只补充状态栏没有的增量信息。
@@ -199,7 +249,11 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     app::tui::console_line(bili_text);
     let main_url = app::server::main_url(&state);
     app::tui::console_line(format!("网页管理: {main_url}"));
-    if app::onboarding::browser_available() {
+    if first_launch {
+        app::tui::console_line(
+            "首次设置窗口已打开；完成设置后将使用主端口网页管理界面".to_string(),
+        );
+    } else if app::onboarding::browser_available() {
         app::tui::console_line("正在自动打开浏览器...".to_string());
     } else {
         // 无桌面环境（如无头服务器）：明确告知需手动访问，而非输出一句无效的"正在打开"。
@@ -208,12 +262,18 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
                 .to_string(),
         );
     }
-    app::onboarding::open_browser_safe(&main_url);
+    if !first_launch {
+        app::onboarding::open_browser_safe(&main_url);
+    }
 
     let mut tui_handle = None;
+    let mut stdin_handle = None;
     match app::tui::start(state.clone()) {
         Some(handle) => tui_handle = Some(handle),
-        None => app::control::start_stdin_loop(state.clone()),
+        None => {
+            stdin_handle =
+                app::control::start_stdin_loop(state.clone(), state.infra.cancellation.clone());
+        }
     }
 
     let server_result = app::server::serve(state.clone(), listener, actual_port).await;
@@ -230,11 +290,27 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     if let Err(error) = state.media.aria2.stop().await {
         error!("stopping aria2 failed: {error}");
     }
+    app::setup_server::shutdown_setup_server();
+    wait_background_task("Setup server", setup_handle).await;
+    wait_background_task("IPC server", Some(control_handle)).await;
+    wait_background_task("stdin loop", stdin_handle).await;
+    wait_background_task("startup update check", Some(startup_update_handle)).await;
+    wait_background_task("audit event bridge", Some(audit_bridge_handle)).await;
+    wait_background_task("audit cleanup", Some(audit_cleanup_handle)).await;
     state.infra.db.clone().close().await?;
     info!("shutdown complete");
     // 清理完成后再传播 serve 的错误：出错路径同样需要停止 aria2/录制并正常关闭数据库。
     server_result?;
     Ok(())
+}
+
+async fn wait_background_task(name: &str, handle: Option<JoinHandle<()>>) {
+    let Some(handle) = handle else { return };
+    match tokio::time::timeout(std::time::Duration::from_secs(10), handle).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => error!(task = name, "后台任务退出异常: {error}"),
+        Err(_) => error!(task = name, "后台任务未在 10 秒内退出"),
+    }
 }
 
 fn handle_early_cli(args: &[String]) -> Option<anyhow::Result<()>> {

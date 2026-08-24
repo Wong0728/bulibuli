@@ -548,8 +548,8 @@ async fn load_runtime_settings(db: &DatabaseConnection) -> AppResult<RuntimeSett
                     // runtime_config 损坏不再阻断启动：记醒目日志后回退默认配置，
                     // 由下方合并路径用默认值重建并持久化，自愈损坏行。
                     tracing::error!(
-                        "runtime_config 解析失败，已回退默认配置: {error}; 原始内容前 256 字节: {}",
-                        value.chars().take(256).collect::<String>()
+                        %error,
+                        "runtime_config 解析失败，已回退默认配置；原始配置内容已省略"
                     );
                 }
             }

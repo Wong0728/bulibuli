@@ -1,8 +1,9 @@
-//! 用户级备份：POST /api/backup（owner-only）。
+//! 用户级备份：POST /api/backup（数据库快照）和 POST /api/backup/full（完整恢复目录）。
 //!
 //! 执行 SQLite `VACUUM INTO` 把当前数据库完整导出到
 //! `data/backups/bulibuli-backup-<timestamp>.db`，并轮转保留最近 5 份。
-//! VACUUM INTO 产出的是紧凑化的一致性快照，适合作为用户手动备份手段。
+//! VACUUM INTO 产出的是紧凑化的一致性数据库快照；完整恢复还需要
+//! `security.toml`、onboarding 状态、密钥材料和下载文件，因此另建完整恢复目录。
 
 use crate::error::{ApiResponse, AppError};
 use crate::state::SharedState;
@@ -17,9 +18,13 @@ use tracing::error;
 /// 备份保留份数（含最新一份）。
 const BACKUP_KEEP: usize = 5;
 const BACKUP_PREFIX: &str = "bulibuli-backup-";
+const FULL_BACKUP_KEEP: usize = 3;
+const FULL_BACKUP_PREFIX: &str = "bulibuli-full-";
 
 pub fn router() -> Router<SharedState> {
-    Router::new().route("/api/backup", post(backup))
+    Router::new()
+        .route("/api/backup", post(backup))
+        .route("/api/backup/full", post(full_backup))
 }
 
 async fn backup(State(state): State<SharedState>) -> Result<Json<ApiResponse<Value>>, AppError> {
@@ -49,11 +54,164 @@ async fn backup(State(state): State<SharedState>) -> Result<Json<ApiResponse<Val
     })?;
     Ok(Json(ApiResponse::with_message(
         json!({
+            "type": "database_snapshot",
             "file": target.file_name().and_then(|n| n.to_str()).unwrap_or_default(),
             "kept": kept,
         }),
-        "备份已创建",
+        "数据库快照已创建（不包含密钥、设置文件和下载目录）",
     )))
+}
+
+/// 创建可用于恢复用户状态的完整 data 快照目录。
+async fn full_backup(
+    State(state): State<SharedState>,
+) -> Result<Json<ApiResponse<Value>>, AppError> {
+    let dir = state.infra.paths.data_dir.join("backups");
+    tokio::fs::create_dir_all(&dir).await?;
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let target = dir.join(format!("{FULL_BACKUP_PREFIX}{timestamp}"));
+    if target.exists() {
+        return Err(AppError::Conflict(
+            "同一秒内已创建过完整恢复备份，请稍后重试".to_string(),
+        ));
+    }
+    let database_target = target.join("database").join("app.db");
+    tokio::fs::create_dir_all(
+        database_target
+            .parent()
+            .expect("database target has parent"),
+    )
+    .await?;
+
+    if let Err(error) = vacuum_into(&state, &database_target).await {
+        let _ = tokio::fs::remove_dir_all(&target).await;
+        error!(%error, "完整恢复备份数据库快照失败");
+        return Err(error);
+    }
+
+    let source = state.infra.paths.data_dir.clone();
+    let copy_target = target.clone();
+    let skipped = match tokio::task::spawn_blocking(move || {
+        copy_data_snapshot(&source, &copy_target)
+    })
+    .await
+    {
+        Ok(Ok(skipped)) => skipped,
+        Ok(Err(error)) => {
+            let _ = tokio::fs::remove_dir_all(&target).await;
+            return Err(AppError::Internal(format!("复制完整恢复备份失败: {error}")));
+        }
+        Err(error) => {
+            let _ = tokio::fs::remove_dir_all(&target).await;
+            return Err(AppError::Internal(format!(
+                "复制完整恢复备份任务失败: {error}"
+            )));
+        }
+    };
+
+    let manifest = json!({
+        "format": "bulibuli-full-data-v1",
+        "database": "database/app.db",
+        "restore_requires_stopped_process": true,
+        "includes": ["database/app.db", "security.toml", "startup_state.json", ".secret-store.key", "downloads", "logs", "other data files"],
+        "skipped": skipped,
+        "note": "数据库是 VACUUM INTO 一致性快照；下载文件按复制时状态保存，恢复前必须停止程序并校验文件。"
+    });
+    tokio::fs::write(
+        target.join("BACKUP-MANIFEST.json"),
+        serde_json::to_vec_pretty(&manifest)
+            .map_err(|error| AppError::Internal(error.to_string()))?,
+    )
+    .await?;
+
+    rotate_full_backups(&dir, FULL_BACKUP_KEEP)
+        .await
+        .map_err(|error| {
+            error!(%error, "完整恢复备份轮转失败");
+            AppError::Internal(format!("完整恢复备份轮转失败: {error}"))
+        })?;
+    let relative = target
+        .strip_prefix(&state.infra.paths.data_dir)
+        .unwrap_or(&target)
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(Json(ApiResponse::with_message(
+        json!({
+            "type": "full_data_snapshot",
+            "directory": relative,
+            "skipped": manifest["skipped"].clone(),
+        }),
+        "完整恢复备份已创建；恢复前必须停止程序，并同时恢复密钥材料",
+    )))
+}
+
+async fn vacuum_into(state: &SharedState, target: &Path) -> Result<(), AppError> {
+    let sql = format!(
+        "VACUUM INTO '{}'",
+        target.display().to_string().replace('\'', "''")
+    );
+    state
+        .infra
+        .db
+        .execute_unprepared(&sql)
+        .await
+        .map(|_| ())
+        .map_err(|error| AppError::Internal(format!("创建数据库快照失败: {error}")))
+}
+
+fn copy_data_snapshot(source: &Path, target: &Path) -> anyhow::Result<Vec<String>> {
+    let mut skipped = Vec::new();
+    copy_data_entries(source, target, &mut skipped)?;
+    Ok(skipped)
+}
+
+fn copy_data_entries(
+    source: &Path,
+    target: &Path,
+    skipped: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy().to_string();
+        if matches!(
+            name.as_str(),
+            "backups" | "database" | "bulibuli.lock" | "actual_port.txt"
+        ) {
+            continue;
+        }
+        let source_path = entry.path();
+        let target_path = target.join(&name);
+        let metadata = std::fs::symlink_metadata(&source_path)?;
+        if metadata.file_type().is_symlink() {
+            skipped.push(name);
+        } else if metadata.is_dir() {
+            std::fs::create_dir_all(&target_path)?;
+            copy_data_entries(&source_path, &target_path, skipped)?;
+        } else if metadata.is_file() {
+            std::fs::copy(&source_path, &target_path)?;
+        }
+    }
+    Ok(())
+}
+
+async fn rotate_full_backups(dir: &Path, keep: usize) -> anyhow::Result<()> {
+    let mut backups = Vec::new();
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with(FULL_BACKUP_PREFIX) || !entry.file_type().await?.is_dir() {
+            continue;
+        }
+        backups.push((entry.metadata().await?.modified()?, name));
+    }
+    backups.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    for (_, name) in backups.into_iter().skip(keep) {
+        if let Err(error) = tokio::fs::remove_dir_all(dir.join(&name)).await {
+            tracing::warn!(%error, backup = %name, "删除过期完整恢复备份失败");
+        }
+    }
+    Ok(())
 }
 
 /// 轮转：只保留目录内最新 `keep` 份 `{BACKUP_PREFIX}*.db`，删除其余。
@@ -171,5 +329,22 @@ mod tests {
                 .exists());
         }
         assert!(dir.join("other.db").exists());
+    }
+
+    #[test]
+    fn full_snapshot_skips_live_and_backup_roots() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let target = tempfile::tempdir().expect("target tempdir");
+        std::fs::write(source.path().join("startup_state.json"), b"{}").expect("state");
+        std::fs::create_dir(source.path().join("database")).expect("database");
+        std::fs::write(source.path().join("database").join("app.db"), b"live").expect("db");
+        std::fs::create_dir(source.path().join("backups")).expect("backups");
+        std::fs::write(source.path().join("backups").join("old.db"), b"old").expect("old");
+        let skipped = copy_data_snapshot(source.path(), target.path()).expect("copy");
+
+        assert!(target.path().join("startup_state.json").is_file());
+        assert!(!target.path().join("database").exists());
+        assert!(!target.path().join("backups").exists());
+        assert!(skipped.is_empty());
     }
 }

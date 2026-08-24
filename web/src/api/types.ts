@@ -338,8 +338,9 @@ export interface SetupApplyResult {
   restart_required?: boolean;
   main_port?: number;
   setup_port?: number;
-  main_url?: string;
-  setup_url?: string;
+  main_url?: string | null;
+  setup_url?: string | null;
+  accessible_urls?: string[];
   [key: string]: unknown;
 }
 
@@ -712,7 +713,7 @@ export interface SetupStatus {
   detected_ips: string[];
   main_port: number;
   setup_port: number;
-  main_url: string;
+  main_url: string | null;
   accessible_urls: string[];
 }
 

@@ -244,7 +244,10 @@ impl AuditLogService {
 
     /// 启动 30 天审计日志清理任务：每 24 小时清理一次 30 天前的记录。
     /// 在 `main.rs` 启动时 spawn 一次；任务随 `cancellation` 取消退出。
-    pub fn start_cleanup_task(self: Arc<Self>, cancellation: tokio_util::sync::CancellationToken) {
+    pub fn start_cleanup_task(
+        self: Arc<Self>,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             // 启动后先等 5 分钟再首次清理，避免与启动峰值重叠
             tokio::select! {
@@ -271,7 +274,7 @@ impl AuditLogService {
                     }
                 }
             }
-        });
+        })
     }
 }
 

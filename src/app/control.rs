@@ -34,6 +34,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::task::{JoinHandle, JoinSet};
+use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -296,23 +298,31 @@ const COMMAND_REGISTRY: &[CommandSpec] = &[
 
 // --- IPC 服务器入口（保留原实现） ---
 
-pub fn start_server(state: SharedState) {
+pub fn start_server(state: SharedState, cancellation: CancellationToken) -> JoinHandle<()> {
     tokio::spawn(async move {
-        if let Err(error) = serve_ipc(state).await {
+        if let Err(error) = serve_ipc(state, cancellation).await {
             tracing::error!(%error, "本机控制通道退出");
         }
-    });
+    })
 }
 
 /// 终端界面未启用时的回退：从 stdin 逐行读命令，错误只回显不中断服务。
-pub fn start_stdin_loop(state: SharedState) {
+pub fn start_stdin_loop(
+    state: SharedState,
+    cancellation: CancellationToken,
+) -> Option<JoinHandle<()>> {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        return;
+        return None;
     }
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, BufReader};
         let mut lines = BufReader::new(tokio::io::stdin()).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        loop {
+            let line = tokio::select! {
+                _ = cancellation.cancelled() => break,
+                result = lines.next_line() => result,
+            };
+            let Ok(Some(line)) = line else { break };
             // `>` 前缀 = 专家模式直输；剥离后走扁平命令路径
             let trimmed = strip_expert_prefix(&line);
             let args = split_command(trimmed);
@@ -321,7 +331,7 @@ pub fn start_stdin_loop(state: SharedState) {
                 Err(error) => eprintln!("控制命令失败：{error}"),
             }
         }
-    });
+    }))
 }
 
 pub async fn run_client(data_dir: &Path, args: &[String]) -> AppResult<String> {
@@ -2674,7 +2684,7 @@ fn ensure_control_socket_parent(parent: &Path, data_dir: &Path) -> Result<(), St
 }
 
 #[cfg(unix)]
-async fn serve_ipc(state: SharedState) -> AppResult<()> {
+async fn serve_ipc(state: SharedState, cancellation: CancellationToken) -> AppResult<()> {
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 
     let mut listener = None;
@@ -2742,20 +2752,29 @@ async fn serve_ipc(state: SharedState) -> AppResult<()> {
             bind_errors.join("; ")
         ))
     })?;
+    let mut clients = JoinSet::new();
     loop {
-        let (stream, _) = listener.accept().await?;
-        let client_state = state.clone();
-        tokio::spawn(async move {
-            if let Err(error) = handle_stream(stream, client_state).await {
-                tracing::warn!(%error, "处理本机控制请求失败");
+        tokio::select! {
+            _ = cancellation.cancelled() => break,
+            accepted = listener.accept() => {
+                let (stream, _) = accepted?;
+                let client_state = state.clone();
+                clients.spawn(async move {
+                    if let Err(error) = handle_stream(stream, client_state).await {
+                        tracing::warn!(%error, "处理本机控制请求失败");
+                    }
+                });
             }
-        });
+        }
     }
+    clients.shutdown().await;
+    Ok(())
 }
 
 #[cfg(windows)]
-async fn serve_ipc(state: SharedState) -> AppResult<()> {
+async fn serve_ipc(state: SharedState, cancellation: CancellationToken) -> AppResult<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
+    let mut clients = JoinSet::new();
     loop {
         let server = {
             let (mut attributes, descriptor) = pipe_security_attributes()?;
@@ -2773,14 +2792,19 @@ async fn serve_ipc(state: SharedState) -> AppResult<()> {
             }
             server
         };
-        server.connect().await?;
+        tokio::select! {
+            _ = cancellation.cancelled() => break,
+            result = server.connect() => result?,
+        }
         let client_state = state.clone();
-        tokio::spawn(async move {
+        clients.spawn(async move {
             if let Err(error) = handle_stream(server, client_state).await {
                 tracing::warn!(%error, "处理本机控制请求失败");
             }
         });
     }
+    clients.shutdown().await;
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -2819,7 +2843,7 @@ fn pipe_security_attributes() -> AppResult<(
 }
 
 #[cfg(not(any(unix, windows)))]
-async fn serve_ipc(_state: SharedState) -> AppResult<()> {
+async fn serve_ipc(_state: SharedState, _cancellation: CancellationToken) -> AppResult<()> {
     Err(AppError::Config("当前平台不支持本机控制通道".to_string()))
 }
 

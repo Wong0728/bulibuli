@@ -89,12 +89,85 @@ pub fn main_url(state: &SharedState) -> String {
     } else {
         actual_port
     };
-    match security.mode {
-        AccessMode::Proxy => security
-            .proxy_domain
+    let candidates =
+        accessible_main_urls_for_mode(&security.mode, security.proxy_domain.as_deref(), port);
+    if security.mode == AccessMode::Lan {
+        candidates
+            .iter()
+            .find(|url| !url.contains("127.0.0.1") && !url.contains("[::1]"))
+            .cloned()
+            .or_else(|| candidates.into_iter().next())
+            .unwrap_or_else(|| format!("http://127.0.0.1:{port}"))
+    } else {
+        candidates
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| format!("http://127.0.0.1:{port}"))
+    }
+}
+
+/// 返回当前实际监听端口对应的用户可访问地址。
+///
+/// 端口尚未绑定时返回空集合，调用方不能把配置端口当成已就绪端口展示。
+pub fn accessible_main_urls(state: &SharedState) -> Vec<String> {
+    let port = state.infra.actual_main_port.load(Ordering::Relaxed);
+    if port == 0 {
+        return Vec::new();
+    }
+    let security = state.bili.security.current();
+    accessible_main_urls_for_mode(&security.mode, security.proxy_domain.as_deref(), port)
+}
+
+fn accessible_main_urls_for_mode(
+    mode: &AccessMode,
+    proxy_domain: Option<&str>,
+    port: u16,
+) -> Vec<String> {
+    match mode {
+        AccessMode::Proxy => proxy_domain
             .map(|domain| format!("https://{domain}"))
-            .unwrap_or_else(|| format!("http://127.0.0.1:{port}")),
-        AccessMode::Local | AccessMode::Lan => format!("http://127.0.0.1:{port}"),
+            .or_else(|| Some(format!("http://127.0.0.1:{port}")))
+            .into_iter()
+            .collect(),
+        AccessMode::Local => vec![format!("http://127.0.0.1:{port}")],
+        AccessMode::Lan => detect_local_ips()
+            .into_iter()
+            .map(|ip| format!("http://{}:{port}", format_host(&ip)))
+            .collect(),
+    }
+}
+
+pub(crate) fn detect_local_ips() -> Vec<String> {
+    let mut ips = vec!["127.0.0.1".to_string()];
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = addr.ip().to_string();
+                if !ips.contains(&ip) {
+                    ips.push(ip);
+                }
+            }
+        }
+    }
+    if let Ok(socket) = std::net::UdpSocket::bind("[::]:0") {
+        if socket.connect("[2001:4860:4860::8888]:80").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = format_host(&addr.ip().to_string());
+                if !ips.contains(&ip) {
+                    ips.push(ip);
+                }
+            }
+        }
+    }
+    ips
+}
+
+fn format_host(ip: &str) -> String {
+    let value = ip.trim_matches(['[', ']']);
+    if value.contains(':') {
+        format!("[{value}]")
+    } else {
+        value.to_string()
     }
 }
 
@@ -535,7 +608,7 @@ fn authorize_session(request: &Request<Body>, session: &SessionAuth) -> Result<(
         || path.starts_with("/api/update/check")
         || path.starts_with("/api/update/apply")
         || path.starts_with("/api/setup/")
-        || path == "/api/backup";
+        || path.starts_with("/api/backup");
     if owner_only && !session.role.is_owner() {
         return Err(Box::new(api_error(
             StatusCode::FORBIDDEN,

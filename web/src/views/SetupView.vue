@@ -12,6 +12,8 @@
 import { ref, onMounted, defineEmits } from 'vue';
 import { useSetupStore, type SetupMode } from '@/stores/setup';
 import { useToastStore } from '@/stores/toast';
+import type { SetupApplyResult } from '@/api/types';
+import { setup as setupApi } from '@/api';
 
 const setup = useSetupStore();
 const toast = useToastStore();
@@ -22,6 +24,7 @@ const accessDefault = ref<'allow' | 'deny'>('deny');
 const proxyDomain = ref('');
 const aiSkillEnabled = ref(true);
 const restartRequired = ref(false);
+const restartUrl = ref<string | null>(null);
 
 onMounted(async () => {
   await setup.loadStatus();
@@ -40,6 +43,10 @@ function next() {
 }
 
 async function finish() {
+  // 先保存 AI Skill，再提交 onboarding 完成标记；apply 成功后只保留一次
+  // finish 交接请求，避免 Setup 端口关闭时还有写请求未发出。
+  const aiSaved = await setup.setAiSkill(aiSkillEnabled.value);
+  if (!aiSaved) { toast.error(setup.error || 'AI Skill 设置保存失败，可稍后重试'); return; }
   const r: any = await setup.applyConfig({
     mode: mode.value,
     // 访问策略只对 LAN 模式有意义；local 模式回环始终放行（后端兜底），
@@ -51,20 +58,38 @@ async function finish() {
   if (!r) { toast.error(setup.error || '保存失败'); return; }
   if (r.restart_required) {
     restartRequired.value = true;
+    restartUrl.value = r.main_url || null;
     toast.warn('配置已保存，需要重启应用后生效');
   } else {
     toast.success('配置已保存');
   }
-  // 顺便把 AI Skill 设置一起同步；失败必须提示，不能让用户误以为已启用。
-  const aiSaved = await setup.setAiSkill(aiSkillEnabled.value);
-  if (!aiSaved) toast.error(setup.error || 'AI Skill 设置保存失败，可稍后在设置页重试');
-  // 重新拉状态
-  await setup.loadStatus();
-  // 通知父组件切换 phase
-  emit('done');
+  if (r.restart_required) return;
+
+  const handoff = await waitForMainEndpoint(r);
+  if (!handoff.main_url) {
+    toast.error('主端口尚未就绪，请稍后重试；Setup 页面仍保持可用');
+    return;
+  }
+  if (!await setup.finishHandoff()) {
+    toast.error(setup.error || 'Setup 端口交接失败，请稍后重试');
+    return;
+  }
+  emit('done', { ...r, main_url: handoff.main_url, accessible_urls: handoff.accessible_urls });
 }
 
-const emit = defineEmits<{ (e: 'done'): void }>();
+async function waitForMainEndpoint(initial: SetupApplyResult) {
+  if (initial.main_url) return { main_url: initial.main_url, accessible_urls: initial.accessible_urls || [] };
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    try {
+      const ports = await setupApi.ports();
+      if (ports?.main_url) return ports;
+    } catch { /* 主端口尚未绑定，继续等待 */ }
+  }
+  return { main_url: null, accessible_urls: [] };
+}
+
+const emit = defineEmits<{ (e: 'done', result: SetupApplyResult): void }>();
 </script>
 
 <template>
@@ -155,7 +180,10 @@ const emit = defineEmits<{ (e: 'done'): void }>();
         </div>
         <div v-if="restartRequired" class="setup-restart-warning">
           <i class="fa-solid fa-triangle-exclamation"></i>
-          <span>已保存，但访问模式变化需要重启应用。重启后会自动跳到主界面。</span>
+          <span>
+            已保存，但访问模式变化需要重启应用。重启后请访问
+            <a v-if="restartUrl" :href="restartUrl">{{ restartUrl }}</a>。
+          </span>
         </div>
         <div class="setup-actions">
           <button class="btn" @click="step = 2">上一步</button>

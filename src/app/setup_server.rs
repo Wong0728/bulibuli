@@ -7,6 +7,7 @@
 //!   （免认证端口不应常驻）；设 `BILI__SETUP_PORT_ENABLED=true` 可强制常驻，
 //!   `=false` 则完全不启动。
 
+use crate::services::auth::ClientInfo;
 use crate::state::SharedState;
 use axum::{
     body::Body,
@@ -16,9 +17,10 @@ use axum::{
     response::{IntoResponse, Response},
     Router,
 };
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
@@ -39,13 +41,15 @@ fn setup_port_enabled_from_env() -> Option<bool> {
 /// 启动 Setup 独立端口服务。
 ///
 /// 始终绑定 127.0.0.1，端口为 `main_port + 1`（带 fallback）。
-/// 返回实际绑定的端口号；被禁用或 onboarding 已完成时返回 0（不启动）。
-pub async fn start_setup_server(state: SharedState) -> anyhow::Result<u16> {
+/// 返回实际绑定的端口号和服务句柄；被禁用或 onboarding 已完成时返回 0 和 None。
+pub async fn start_setup_server(
+    state: SharedState,
+) -> anyhow::Result<(u16, Option<JoinHandle<()>>)> {
     let enabled = setup_port_enabled_from_env();
     if enabled == Some(false) {
         state.infra.actual_setup_port.store(0, Ordering::Relaxed);
         info!("setup server 未启动（BILI__SETUP_PORT_ENABLED=false）");
-        return Ok(0);
+        return Ok((0, None));
     }
     let onboarding_completed =
         crate::app::onboarding::StartupState::load(&state.infra.paths.data_dir)
@@ -54,7 +58,7 @@ pub async fn start_setup_server(state: SharedState) -> anyhow::Result<u16> {
         // 默认模式：免认证端口只在首次配置期间存在，完成后不再监听。
         state.infra.actual_setup_port.store(0, Ordering::Relaxed);
         info!("setup server 未启动（onboarding 已完成；如需重新配置可设 BILI__SETUP_PORT_ENABLED=true 后重启）");
-        return Ok(0);
+        return Ok((0, None));
     }
 
     let main_port = state.infra.config.port;
@@ -79,7 +83,7 @@ pub async fn start_setup_server(state: SharedState) -> anyhow::Result<u16> {
     let cancellation = SETUP_SHUTDOWN.get_or_init(CancellationToken::new).clone();
     let shutdown = cancellation.clone();
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, app.into_make_service())
             .with_graceful_shutdown(async move { shutdown.cancelled().await })
             .await
@@ -90,7 +94,7 @@ pub async fn start_setup_server(state: SharedState) -> anyhow::Result<u16> {
         info!("setup server 已关闭");
     });
 
-    Ok(actual_port)
+    Ok((actual_port, Some(handle)))
 }
 
 /// 关停 setup server（幂等）。onboarding 完成后由 apply 接口调用；
@@ -132,15 +136,15 @@ fn build_setup_router(state: SharedState) -> Router {
         .with_state(state)
 }
 
-/// Setup 端口没有主服务的请求安全中间件，这里补一个轻量会话注入：
-/// 认证 Cookie 有效则挂上 `Option<SessionAuth>`，让 /api/auth/csrf 等
-/// 依赖该 Extension 的 handler 正常工作；setup 端口仅回环可访问，对端恒为本机。
+/// Setup 端口没有主服务的请求安全中间件，这里补齐主服务会注入的请求上下文：
+/// `ClientInfo` 供 /api/auth/state 和 /api/auth/pair 使用，
+/// `Option<SessionAuth>` 供 /api/auth/csrf 等 handler 使用；setup 端口仅回环可访问。
 async fn inject_setup_session(
     State(state): State<SharedState>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let ip: IpAddr = "127.0.0.1".parse().expect("static loopback ip");
+    let ip = inject_setup_client_info(&mut request);
     let token = crate::api::auth::session_cookie(request.headers()).unwrap_or_default();
     let session = state
         .bili
@@ -151,6 +155,16 @@ async fn inject_setup_session(
         .flatten();
     request.extensions_mut().insert(session);
     next.run(request).await
+}
+
+fn inject_setup_client_info(request: &mut Request<Body>) -> IpAddr {
+    let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    request.extensions_mut().insert(ClientInfo {
+        ip,
+        // 与主服务对回环地址的 client_allowed 结果保持一致。
+        explicit_allow: false,
+    });
+    ip
 }
 
 async fn add_setup_security(
@@ -193,10 +207,20 @@ async fn add_setup_security(
                 .into_response();
         }
     }
+    let method = request.method().clone();
     let path = request.uri().path().to_string();
     let mut response = next.run(request).await;
-    // 默认模式：onboarding 完成即关停这个免认证端口，避免其常驻。
-    if path == "/api/setup/apply"
+    if response.status().is_client_error() || response.status().is_server_error() {
+        tracing::warn!(
+            %method,
+            %path,
+            status = response.status().as_u16(),
+            "setup request failed"
+        );
+    }
+    // 只有前端确认已经消费 apply 响应并准备跳转时才关停一次性端口。
+    // 这样 AI Skill 保存、主端口地址读取和跨端口跳转不会与 shutdown 竞态。
+    if path == "/api/setup/finish"
         && response.status().is_success()
         && setup_port_enabled_from_env().is_none()
         && crate::app::onboarding::StartupState::load(&state.infra.paths.data_dir)
@@ -258,7 +282,9 @@ async fn bind_setup_port(start_port: u16) -> anyhow::Result<tokio::net::TcpListe
 
 #[cfg(test)]
 mod tests {
-    use super::origin_authority;
+    use super::{inject_setup_client_info, origin_authority};
+    use crate::services::auth::ClientInfo;
+    use axum::{body::Body, http::Request};
 
     #[test]
     fn setup_origin_keeps_the_port_in_the_comparison() {
@@ -268,5 +294,19 @@ mod tests {
         );
         assert!(origin_authority("https://127.0.0.1:3001").is_none());
         assert!(origin_authority("http://127.0.0.1:3002").is_some());
+    }
+
+    #[test]
+    fn setup_requests_inject_loopback_client_context() {
+        let mut request = Request::new(Body::empty());
+        let ip = inject_setup_client_info(&mut request);
+        let client = request
+            .extensions()
+            .get::<ClientInfo>()
+            .expect("setup client info");
+
+        assert_eq!(client.ip, ip);
+        assert!(client.ip.is_loopback());
+        assert!(!client.explicit_allow);
     }
 }

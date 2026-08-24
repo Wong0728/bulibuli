@@ -277,6 +277,7 @@ export const update = {
  * 后端约定（src/api/setup.rs）：
  *   - GET  /api/setup/status  返回详细 SetupStatus 字段（completed, mode, ...）
  *   - POST /api/setup/apply   body: { mode, access_default?, proxy_domain?, mark_completed? }
+ *   - POST /api/setup/finish  确认前端已消费 apply 响应后关闭一次性 Setup 端口
  *   - POST /api/setup/ai-skill body: { enabled: bool }   ← 字段名是 enabled，不是 content
  *   - GET  /api/setup/detect  返回 { ipv4, ipv6 }
  *   - GET  /api/setup/ports   返回端口 / URL 信息
@@ -285,9 +286,10 @@ export const setup = {
   status: () => get<SetupStatus>('/api/setup/status'),
   apply: (config: { mode: 'local' | 'lan' | 'proxy'; access_default?: 'allow' | 'deny'; proxy_domain?: string; mark_completed?: boolean }) =>
     post<SetupApplyResult>('/api/setup/apply', config),
+  finish: () => post<{ main_url: string | null; accessible_urls: string[] }>('/api/setup/finish'),
   aiSkill: (enabled: boolean) => post<{ ai_skill_enabled: boolean }>('/api/setup/ai-skill', { enabled }),
   detect: () => get<DetectResult>('/api/setup/detect'),
-  ports: () => get<{ main_port: number; setup_port: number; main_url: string; setup_url: string; accessible_urls: string[] }>('/api/setup/ports'),
+  ports: () => get<{ main_port: number; setup_port: number; main_url: string | null; setup_url: string | null; accessible_urls: string[] }>('/api/setup/ports'),
 };
 
 /** ---------- cover (static) ----------

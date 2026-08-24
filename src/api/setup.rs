@@ -19,6 +19,7 @@ pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/api/setup/status", get(get_status))
         .route("/api/setup/apply", post(apply_config))
+        .route("/api/setup/finish", post(finish_setup))
         .route("/api/setup/ai-skill", post(update_ai_skill))
         .route("/api/setup/detect", get(detect_network))
         .route("/api/setup/ports", get(get_ports))
@@ -38,7 +39,7 @@ struct SetupStatus {
     detected_ips: Vec<String>,
     main_port: u16,
     setup_port: u16,
-    main_url: String,
+    main_url: Option<String>,
     accessible_urls: Vec<String>,
 }
 
@@ -144,7 +145,8 @@ async fn apply_config(
         state.bili.security.replace_current(service.current());
     }
 
-    // 标记 onboarding 完成
+    // 标记 onboarding 完成；Setup 端口交接由 /api/setup/finish 明确确认，
+    // 不能在 apply 响应返回前关闭当前页面所在的服务。
     if req.mark_completed.unwrap_or(false) {
         if let Err(error) =
             crate::app::onboarding::StartupState::mark_completed(&state.infra.paths.data_dir)
@@ -171,6 +173,20 @@ async fn apply_config(
             "accessible_urls": endpoints.accessible_urls,
         }),
     }))
+}
+
+/// 前端已消费 apply 响应并准备跳转到主端口后，确认可以关闭一次性 Setup 服务。
+async fn finish_setup(
+    state: axum::extract::State<SharedState>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let endpoints = endpoint_info(&state, &[]);
+    Json(ApiResponse::with_message(
+        json!({
+            "main_url": endpoints.main_url,
+            "accessible_urls": endpoints.accessible_urls,
+        }),
+        "Setup 交接已确认",
+    ))
 }
 
 #[derive(Deserialize)]
@@ -277,47 +293,30 @@ async fn get_ports(state: axum::extract::State<SharedState>) -> Json<ApiResponse
 struct PortsResult {
     main_port: u16,
     setup_port: u16,
-    main_url: String,
-    setup_url: String,
+    main_url: Option<String>,
+    setup_url: Option<String>,
     accessible_urls: Vec<String>,
 }
 
 struct EndpointInfo {
     main_port: u16,
     setup_port: u16,
-    main_url: String,
-    setup_url: String,
+    main_url: Option<String>,
+    setup_url: Option<String>,
     accessible_urls: Vec<String>,
 }
 
-fn endpoint_info(state: &SharedState, ips: &[String]) -> EndpointInfo {
+fn endpoint_info(state: &SharedState, _ips: &[String]) -> EndpointInfo {
     let main_port = state.infra.actual_main_port.load(Ordering::Relaxed);
     let setup_port = state.infra.actual_setup_port.load(Ordering::Relaxed);
-    let main_url = crate::app::server::main_url(state);
-    let setup_url = format!("http://127.0.0.1:{setup_port}");
-    let security = state.bili.security.current();
-    let accessible_urls = match security.mode {
-        AccessMode::Proxy => vec![main_url.clone()],
-        AccessMode::Local => vec![main_url.clone()],
-        AccessMode::Lan => ips
-            .iter()
-            .map(|ip| format!("http://{}:{main_port}", format_host(ip)))
-            .collect(),
-    };
+    let accessible_urls = crate::app::server::accessible_main_urls(state);
+    let main_url = (main_port != 0).then(|| crate::app::server::main_url(state));
+    let setup_url = (setup_port != 0).then(|| format!("http://127.0.0.1:{setup_port}"));
     EndpointInfo {
         main_port,
         setup_port,
         main_url,
         setup_url,
         accessible_urls,
-    }
-}
-
-fn format_host(ip: &str) -> String {
-    let value = ip.trim_matches(['[', ']']);
-    if value.contains(':') {
-        format!("[{value}]")
-    } else {
-        value.to_string()
     }
 }

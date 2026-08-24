@@ -47,6 +47,7 @@ impl DownloadManager {
             video_processor,
             ws,
             monitor_handle: Arc::new(Mutex::new(None)),
+            disk_resume_handle: Arc::new(Mutex::new(None)),
             cancellation: cancellation.clone(),
             settings_service,
             progress_writer: ProgressWriter::start(db.clone(), cancellation.child_token()),
@@ -293,6 +294,13 @@ impl DownloadManager {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => error!("下载监督任务退出异常: {error}"),
                 Err(_) => error!("下载监督任务未在 10 秒内退出"),
+            }
+        }
+        if let Some(handle) = self.disk_resume_handle.lock().await.take() {
+            match tokio::time::timeout(Duration::from_secs(10), handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => error!("磁盘恢复续传任务退出异常: {error}"),
+                Err(_) => error!("磁盘恢复续传任务未在 10 秒内退出"),
             }
         }
     }

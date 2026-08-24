@@ -111,6 +111,7 @@ pub struct DownloadManager {
     video_processor: Arc<VideoProcessor>,
     ws: Arc<WebSocketManager>,
     monitor_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    disk_resume_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     cancellation: CancellationToken,
     settings_service: Arc<SettingsService>,
     progress_writer: ProgressWriter,

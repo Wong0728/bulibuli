@@ -12,6 +12,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { setup as setupApi } from '@/api';
+import type { SetupApplyResult } from '@/api/types';
 
 export type SetupMode = 'local' | 'lan' | 'proxy';
 
@@ -25,7 +26,7 @@ export interface SetupStatus {
   detected_ips: string[];
   main_port: number;
   setup_port: number;
-  main_url: string;
+  main_url: string | null;
   accessible_urls: string[];
 }
 
@@ -53,15 +54,15 @@ export const useSetupStore = defineStore('setup', () => {
     } catch { /* 静默 */ }
   }
 
-  async function applyConfig(cfg: { mode: SetupMode; access_default?: 'allow' | 'deny'; proxy_domain?: string; mark_completed?: boolean }) {
+  async function applyConfig(cfg: { mode: SetupMode; access_default?: 'allow' | 'deny'; proxy_domain?: string; mark_completed?: boolean }): Promise<SetupApplyResult | null> {
     saving.value = true;
     error.value = null;
     try {
       const r: any = await setupApi.apply(cfg);
       if (r) {
-        // 重新拉一次 status
-        await loadStatus();
-        return r;
+        // apply 的响应包含跨端口交接信息；不能在此重新请求 status，
+        // 因为一次性 Setup 服务会在 finish 确认后关闭。
+        return r as SetupApplyResult;
       }
       return null;
     } catch (e: any) {
@@ -69,6 +70,15 @@ export const useSetupStore = defineStore('setup', () => {
       return null;
     } finally {
       saving.value = false;
+    }
+  }
+
+  async function finishHandoff() {
+    try {
+      return await setupApi.finish();
+    } catch (e: any) {
+      error.value = e?.message || 'Setup 端口交接失败';
+      return null;
     }
   }
 
@@ -86,6 +96,6 @@ export const useSetupStore = defineStore('setup', () => {
 
   return {
     status, detected, saving, error,
-    loadStatus, detectNetwork, applyConfig, setAiSkill,
+    loadStatus, detectNetwork, applyConfig, finishHandoff, setAiSkill,
   };
 });

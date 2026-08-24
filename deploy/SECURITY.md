@@ -64,8 +64,10 @@ SQLite 数据库默认不做静态加密，数据目录依赖操作系统的用�
 
 `deploy/linux/install.sh`（以及 Termux 安装器）对下载归档执行的 SHA-256 校验**仅用于防范传输损坏**，不能替代数字签名校验，也不能证明发布资产未被上游供应链污染。如需更强的完整性保证，请从 GitHub Releases 页面核对官方公布的 `.sha256` 文件，并关注后续的签名发布方案。
 
+内置 aria2c 使用 `--stop-with-process` 绑定主进程，Windows 还有 Job Object，Linux 还有父进程死亡信号；正常退出先使用 RPC，超时才强制 kill。macOS、Android/Termux 的强制结束、会话恢复和文件锁释放仍必须在目标设备上实测，不能仅由 Windows/Linux 分支推断。
+
 ### 升级、备份与恢复
 
-升级前停止服务并完整备份 `data/`。迁移失败时保留原数据库、迁移日志和下载目录，先恢复备份再重试，不要手工删除迁移表。回滚必须同时恢复程序版本和数据库备份，避免新旧 schema 混用。
+升级前停止服务并完整备份 `data/`。应用内 `POST /api/backup` 只是 SQLite 数据库快照，不包含密钥、`security.toml`、`startup_state.json` 或下载目录；`POST /api/backup/full` 才生成带清单的完整恢复目录。完整恢复目录包含数据库快照、密钥材料、设置状态、日志和下载文件，必须按 `BACKUP-MANIFEST.json` 恢复，并保护其权限。迁移失败时保留原数据库、迁移日志和下载目录，先恢复备份再重试，不要手工删除迁移表。回滚必须同时恢复程序版本和数据库备份，避免新旧 schema 混用。
 
 服务重启后检查下载队列、直播恢复列表和直播合并任务；`recovery_state` 为 `segments_pending` 或 `output_missing_recoverable` 时，先通过应用提供的恢复/重试入口处理，确认最终文件和数据库状态一致后再清理分段。资源替换必须同步更新 `resources/README.md` 的来源、许可证和 SHA-256，并重新运行构建检查。

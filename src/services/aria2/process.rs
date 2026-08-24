@@ -132,6 +132,9 @@ impl Aria2Manager {
 
         let mut cmd = Command::new(aria2c);
         cmd.arg("--enable-rpc")
+            // aria2 自己监视父进程；配合 Linux pdeathsig、Windows Job Object，
+            // 让 macOS/Termux 等没有同等内核机制的平台也能在父进程消失后退出。
+            .arg(format!("--stop-with-process={}", std::process::id()))
             .arg(format!("--rpc-listen-port={port}"))
             .arg("--rpc-allow-origin-all=false")
             .arg("--rpc-listen-all=false")
@@ -164,8 +167,34 @@ impl Aria2Manager {
                 basic.max_connection_per_server
             ))
             .arg(format!("--min-split-size={}", basic.min_split_size));
-        if !secret.is_empty() {
-            cmd.arg(format!("--rpc-secret={secret}"));
+        let secret_config = if !secret.is_empty() {
+            if secret.contains(['\r', '\n']) {
+                return Err(anyhow!("Aria2 RPC secret 不能包含换行符"));
+            }
+            let secret_config = self.paths.data_dir.join(format!(
+                ".aria2-runtime-{}.conf",
+                uuid::Uuid::new_v4().simple()
+            ));
+            if let Err(error) = std::fs::write(&secret_config, format!("rpc-secret={secret}\n")) {
+                return Err(error).context("写入 Aria2 临时认证配置失败");
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(error) =
+                    std::fs::set_permissions(&secret_config, std::fs::Permissions::from_mode(0o600))
+                {
+                    let _ = std::fs::remove_file(&secret_config);
+                    return Err(error).context("保护 Aria2 临时认证配置失败");
+                }
+            }
+            Some(secret_config)
+        } else {
+            None
+        };
+        // aria2 启动时读取配置，命令行只出现随机配置文件路径，不再暴露 secret。
+        if let Some(path) = &secret_config {
+            cmd.arg(format!("--conf-path={}", path.to_string_lossy()));
         }
         // 全局下载限速（"0" 表示不限速）
         if !basic.max_overall_download_limit.is_empty() && basic.max_overall_download_limit != "0" {
@@ -183,8 +212,28 @@ impl Aria2Manager {
         #[cfg(windows)]
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
-        let child = cmd.spawn().context("启动 aria2c 失败")?;
+        let child = match cmd.spawn().context("启动 aria2c 失败") {
+            Ok(child) => child,
+            Err(error) => {
+                if let Some(path) = &secret_config {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(error);
+            }
+        };
+        if let Some(path) = secret_config {
+            let _ = std::fs::remove_file(path);
+        }
 
+        self.finish_start_aria2c(child, port, log).await
+    }
+
+    async fn finish_start_aria2c(
+        &self,
+        child: tokio::process::Child,
+        port: u16,
+        log: PathBuf,
+    ) -> Result<()> {
         // Windows：把 aria2c 绑到 kill-on-close 的 Job Object。
         // 这样本进程无论正常退出还是被强杀（IDE 停止/任务管理器/关窗口），
         // 系统都会连带结束 aria2c，避免其变孤儿继续占用下载目录/会话文件。

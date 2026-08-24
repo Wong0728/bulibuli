@@ -18,6 +18,7 @@ import CookieLoginModals from './components/CookieLoginModals.vue';
 import ToastList from './components/ToastList.vue';
 import { video as videoApi, setup as setupApi } from './api';
 import { useToastStore } from './stores/toast';
+import type { SetupApplyResult } from './api/types';
 
 const app = useAppStore();
 const auth = useAuthStore();
@@ -152,15 +153,14 @@ watch(() => app.sessionInvalid, (invalid) => {
   app.sessionInvalid = false;
   phase.value = 'pair';
 });
-function onSetupDone() {
-  // Setup 向导完成后同样过登录门检查
-  void resolveEntryPhase().then(async (next) => {
-    phase.value = next;
-    if (next !== 'main') return;
-    app.activateSession();
-    await auth.refreshCsrfToken();
-    void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
-  });
+function onSetupDone(result: SetupApplyResult) {
+  // Setup 端口与主端口可能不同；不能继续用当前页面的相对 URL 请求。
+  if (!result.main_url) {
+    phase.value = 'unavailable';
+    toast.error('主端口地址不可用，请重启应用后重试');
+    return;
+  }
+  window.location.assign(result.main_url);
 }
 // 登录门：扫码成功后 refreshCookieStatus 会把 isCookieValid 置真，自动进主界面。
 watch(() => auth.isCookieValid, (valid) => {

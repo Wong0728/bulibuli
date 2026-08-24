@@ -345,13 +345,20 @@ impl DownloadManager {
                 if !ids.is_empty() {
                     info!("磁盘空间已恢复，自动续传 {} 个任务", ids.len());
                     let manager = self.clone();
-                    tokio::spawn(async move {
+                    let cancellation = self.cancellation.clone();
+                    let handle = tokio::spawn(async move {
                         for id in ids {
-                            if let Err(error) = manager.resume_task(Some(id)).await {
-                                debug!(task_id = id, "磁盘恢复后自动续传未完成: {error}");
+                            tokio::select! {
+                                _ = cancellation.cancelled() => break,
+                                result = manager.resume_task(Some(id)) => {
+                                    if let Err(error) = result {
+                                        debug!(task_id = id, "磁盘恢复后自动续传未完成: {error}");
+                                    }
+                                }
                             }
                         }
                     });
+                    *self.disk_resume_handle.lock().await = Some(handle);
                 }
             }
 

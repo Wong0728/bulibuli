@@ -65,6 +65,7 @@ pub struct MonitorService {
     settings_service: Arc<SettingsService>,
     burn_semaphore: Arc<Semaphore>,
     handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
+    backfill_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     cancellation: CancellationToken,
     settings_cache: Arc<RwLock<Option<(Value, Instant)>>>,
     log_counter: Arc<AtomicU64>,
@@ -104,6 +105,7 @@ impl MonitorService {
             settings_service: deps.settings_service,
             burn_semaphore: deps.burn_semaphore,
             handle: Arc::new(tokio::sync::Mutex::new(None)),
+            backfill_handle: Arc::new(tokio::sync::Mutex::new(None)),
             cancellation: deps.cancellation,
             settings_cache: Arc::new(RwLock::new(None)),
             log_counter: Arc::new(AtomicU64::new(0)),
@@ -126,9 +128,14 @@ impl MonitorService {
 
         // 后台补齐 fans 为空的博主资料。
         let s = self.clone();
-        spawn_logged("monitor_backfill_fans", async move {
-            s.backfill_missing_fans().await;
+        let cancellation = self.cancellation.clone();
+        let backfill_handle = spawn_logged("monitor_backfill_fans", async move {
+            tokio::select! {
+                _ = cancellation.cancelled() => {}
+                _ = s.backfill_missing_fans() => {}
+            }
         });
+        *self.backfill_handle.lock().await = Some(backfill_handle);
     }
 
     pub async fn stop(&self) {
@@ -138,6 +145,13 @@ impl MonitorService {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => error!("监控任务退出异常: {error}"),
                 Err(_) => error!("监控任务未在 10 秒内退出"),
+            }
+        }
+        if let Some(h) = self.backfill_handle.lock().await.take() {
+            match tokio::time::timeout(StdDuration::from_secs(10), h).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => error!("监控补齐任务退出异常: {error}"),
+                Err(_) => error!("监控补齐任务未在 10 秒内退出"),
             }
         }
         info!("监控服务已停止");

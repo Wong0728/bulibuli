@@ -163,10 +163,12 @@ Linux/macOS 将 `bulibuli.exe` 替换为 `./bulibuli`。完整命令清单见 [`
 
 - 默认数据目录：可执行文件旁的 `data/`。
 - 自定义数据目录：环境变量 `BILI__DATA_DIR=/absolute/path`。
-- 数据目录包含 SQLite 数据库、下载目录、`security.toml`、日志、迁移备份和运行状态；升级前请先停止程序并备份整个目录。
+- 配置真相源分层如下：`BILI__*` 环境变量覆盖普通启动配置；`data/security.toml` 保存网络访问模式和安全策略（模式切换通常需重启）；数据库 `runtime_config` 保存业务设置并在保存后热更新；`startup_state.json` 只保存 onboarding、AI Skill 和终端模式状态。四者不互相覆盖，恢复或排障时按各自文件/存储处理。
+- 数据目录包含 SQLite 数据库、下载目录、`security.toml`、日志、迁移备份和运行状态；升级前请先停止程序并备份整个目录。设置页/API 的 `/api/backup` 只生成数据库快照，不包含密钥、设置文件或下载目录；需要完整恢复时使用 `/api/backup/full`，它生成带 `BACKUP-MANIFEST.json` 的完整恢复目录。恢复前必须停止程序，并同时恢复数据库、`security.toml`、`startup_state.json`、`.secret-store.key`（或对应系统密钥环/`BILI__MASTER_KEY`）和下载目录。
 - 日志按天滚动。日志、数据库、Cookie、session 和配对码不要上传到 issue 或公开工单。
 - Unix 控制 socket 优先使用 `XDG_RUNTIME_DIR`，深层数据目录不会再触发 Linux socket 路径过长；Windows 使用仅本机可访问的命名管道。
 - 应用内更新：设置页可切换更新策略（仅提示 / 自动下载暂存 / 关闭）并手动"立即检查更新""立即更新"。自动更新只替换程序文件（可执行文件、static、resources），不触碰 `data/`；更新完成后需重启程序生效，Windows 运行中更新会在退出程序后自动完成替换。更新全程先在临时目录完成下载与校验（SHA-256），替换失败时保留原版本可执行文件继续运行（Windows 上可能残留 `bulibuli.old.exe`，可在退出程序后手动删除），不会出现半新半旧的程序文件；下载/校验失败则原样保留当前版本。
+- 内置 aria2c 启动时使用 `--stop-with-process`，Windows 另有 Job Object，Linux 另有父进程死亡信号；正常退出会先走 RPC 优雅关停，超时才强制回收。macOS/Termux 仍应在发布前实测强制结束和恢复场景，不能把静态回收逻辑当成多平台运行证明。
 
 ## 故障排查
 
