@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.0
+
+- Rust v2 正式版：汇总 Alpha 阶段的功能、稳定性、安全与跨平台打包修复，Windows、Linux、macOS 和 Termux 发布包统一经过质量门禁与 SHA-256 校验。
+- 启动与生命周期修复：后台服务在主端口绑定前完成启动，Setup 端口可独立提供首次配置，aria2 失联恢复、任务进度落库、更新替换和 Windows 子进程回收更加可靠。
+- 发布包改进：Windows portable/core 包通过 PowerShell 启动器分离启动层与 Core 程序，所有正式版资产和 `latest.json` 均由 Release 工作流生成并校验。
+
 ## v2.0.0-alpha.11
 
 - 首次启动修复：后台服务（monitor/download_manager 等）改为在绑定主端口之前完成启动，消除"端口已监听但 HTTP 尚未 accept"导致首次启动 5000 端口无响应、重启后才正常的竞态窗口。

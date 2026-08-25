@@ -445,7 +445,7 @@ fn locate_package_root(dest: &Path) -> Result<PathBuf> {
 fn exe_name() -> &'static str {
     #[cfg(windows)]
     {
-        "bulibuli.exe"
+        "bulibuli-core.exe"
     }
     #[cfg(not(windows))]
     {
@@ -618,11 +618,11 @@ pub fn startup_apply_staged(paths: &AppPaths) -> Result<()> {
         }
     }
     // 同理清理上次替换可能残留的旧可执行文件：直接替换路径的 <exe>.old 与
-    // PowerShell 延迟替换路径的 bulibuli.old.exe（Windows 运行中删除失败时
+    // PowerShell 延迟替换路径的 bulibuli-core.old.exe（Windows 运行中删除失败时
     // 会残留，启动时进程尚未被自己锁定之外的方式占用，删除更可能成功）。
     let _ = std::fs::remove_file(paths.app_root.join(format!("{}.old", exe_name())));
     #[cfg(windows)]
-    let _ = std::fs::remove_file(paths.app_root.join("bulibuli.old.exe"));
+    let _ = std::fs::remove_file(paths.app_root.join("bulibuli-core.old.exe"));
     let Some(marker) = read_staged_marker(paths) else {
         return Ok(());
     };
@@ -649,20 +649,20 @@ fn spawn_windows_deferred_swap(paths: &AppPaths, staged: &Path) -> Result<()> {
     let staged_str = staged.to_string_lossy().replace('\'', "''");
     let data_dir = paths.data_dir.to_string_lossy().replace('\'', "''");
     let marker = data_dir.clone() + r"\update-staged.json";
-    // 轮询等待 bulibuli.exe 解锁（程序退出）后替换；10 分钟内未解锁则放弃，
+    // 轮询等待 bulibuli-core.exe 解锁（程序退出）后替换；10 分钟内未解锁则放弃，
     // 标记已由启动钩子消费，暂存包保留给下一次手动 apply 复用。
     let script = format!(
         "$ErrorActionPreference='Stop'\n\
          $app='{app_root}'\n\
          $staged='{staged_str}'\n\
-         $exe=Join-Path $app 'bulibuli.exe'\n\
-         $old=Join-Path $app 'bulibuli.old.exe'\n\
+         $exe=Join-Path $app 'bulibuli-core.exe'\n\
+         $old=Join-Path $app 'bulibuli-core.old.exe'\n\
          $renamed=$false\n\
          for($i=0;$i -lt 600;$i++){{\n\
-           try {{ Rename-Item -LiteralPath $exe -NewName 'bulibuli.old.exe' -Force -ErrorAction Stop; $renamed=$true; break }} catch {{ Start-Sleep -Seconds 1 }}\n\
+           try {{ Rename-Item -LiteralPath $exe -NewName 'bulibuli-core.old.exe' -Force -ErrorAction Stop; $renamed=$true; break }} catch {{ Start-Sleep -Seconds 1 }}\n\
          }}\n\
          if(-not $renamed){{ exit 0 }}\n\
-         try {{ Move-Item -LiteralPath (Join-Path $staged 'bulibuli.exe') -Destination $exe -Force -ErrorAction Stop }} catch {{\n\
+         try {{ Move-Item -LiteralPath (Join-Path $staged 'bulibuli-core.exe') -Destination $exe -Force -ErrorAction Stop }} catch {{\n\
            # 新 exe 就位失败时把旧 exe 改回原名，避免程序卡在 .old 上无法启动。\n\
            Move-Item -LiteralPath $old -Destination $exe -Force\n\
            exit 1\n\
@@ -675,7 +675,19 @@ fn spawn_windows_deferred_swap(paths: &AppPaths, staged: &Path) -> Result<()> {
              Move-Item -LiteralPath $src -Destination $dst -Force\n\
            }}\n\
          }}\n\
-         Get-ChildItem -LiteralPath $staged -Force | Where-Object {{ $_.Name -ne 'data' -and $_.Name -ne 'bulibuli.exe' -and $_.Name -ne 'static' -and $_.Name -ne 'resources' }} | ForEach-Object {{\n\
+         # The launcher can still be locked briefly while it waits for PowerShell/Core.\n\
+         # Retry it separately; leave the staged directory and marker for the next boot\n\
+         # if the outer process does not release the image within the retry window.\n\
+         $launcherSource=Join-Path $staged 'bulibuli.exe'\n\
+         if(Test-Path -LiteralPath $launcherSource){{\n\
+           $launcher=Join-Path $app 'bulibuli.exe'\n\
+           $launcherCopied=$false\n\
+           for($i=0;$i -lt 600;$i++){{\n\
+             try {{ Copy-Item -LiteralPath $launcherSource -Destination $launcher -Force -ErrorAction Stop; $launcherCopied=$true; break }} catch {{ Start-Sleep -Seconds 1 }}\n\
+           }}\n\
+           if(-not $launcherCopied){{ exit 1 }}\n\
+         }}\n\
+         Get-ChildItem -LiteralPath $staged -Force | Where-Object {{ $_.Name -ne 'data' -and $_.Name -ne 'bulibuli.exe' -and $_.Name -ne 'bulibuli-core.exe' -and $_.Name -ne 'static' -and $_.Name -ne 'resources' }} | ForEach-Object {{\n\
            $target=Join-Path $app $_.Name\n\
            if($_.PSIsContainer){{ if(Test-Path -LiteralPath $target){{ Remove-Item -LiteralPath $target -Recurse -Force }}; Move-Item -LiteralPath $_.FullName -Destination $target -Force }}\n\
            else {{ Copy-Item -LiteralPath $_.FullName -Destination $target -Force }}\n\

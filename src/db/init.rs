@@ -77,12 +77,13 @@ async fn migrations_pending(db: &DatabaseConnection) -> Result<bool> {
     let rows = db
         .query_all_raw(Statement::from_string(
             db.get_database_backend(),
-            "SELECT name FROM seaql_migrations".to_string(),
+            // SeaORM migration table uses `version`, not a generic `name` column.
+            "SELECT version FROM seaql_migrations".to_string(),
         ))
         .await?;
     let applied: std::collections::HashSet<String> = rows
         .iter()
-        .filter_map(|row| row.try_get::<String>("", "name").ok())
+        .filter_map(|row| row.try_get::<String>("", "version").ok())
         .collect();
     // 按迁移名比对而非 COUNT(*)：未来迁移列表被 squash 后行数恰好相等时，
     // 计数比较会误判“无待执行迁移”而跳过备份。
@@ -158,4 +159,22 @@ fn prune_migration_backups(database_path: &Path, keep: usize) -> Result<()> {
         std::fs::remove_dir_all(entry.path())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::Database;
+
+    #[tokio::test]
+    async fn migrations_pending_reads_seaorm_version_column() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        run_migrations(&db).await.expect("apply migrations");
+
+        assert!(!migrations_pending(&db)
+            .await
+            .expect("check migration status"));
+    }
 }

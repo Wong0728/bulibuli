@@ -75,6 +75,20 @@ def executable_name(platform_name):
     return f"{APP_SLUG}.exe" if platform_name == "windows" else APP_SLUG
 
 
+def core_package_name(platform_name):
+    return f"{APP_SLUG}-core.exe" if platform_name == "windows" else APP_SLUG
+
+
+def launcher_build_path(target=None):
+    release_dir = ROOT / "target" / (target if target else "") / "release"
+    return release_dir / f"{APP_SLUG}-launcher.exe"
+
+
+def core_build_path(platform_name, target=None):
+    release_dir = ROOT / "target" / (target if target else "") / "release"
+    return release_dir / executable_name(platform_name)
+
+
 def architecture_name(target=None):
     source = (target or host_platform.machine()).lower()
     if "aarch64" in source or "arm64" in source:
@@ -87,8 +101,9 @@ def architecture_name(target=None):
 
 
 def release_binary_path(platform_name, target=None):
-    release_dir = ROOT / "target" / (target if target else "") / "release"
-    return release_dir / executable_name(platform_name)
+    if platform_name == "windows":
+        return launcher_build_path(target)
+    return core_build_path(platform_name, target)
 
 
 def package_stem(platform_name, target=None, variant="portable"):
@@ -174,9 +189,13 @@ def stop_existing_instances(platform_name, target=None):
 
     if platform_name != "windows" or target:
         return
-    exe_name = executable_name(platform_name)
-    expected_path = release_binary_path(platform_name, target).resolve()
-    killed = _kill_processes_by_name(exe_name, expected_path)
+    processes = [
+        (f"{APP_SLUG}-launcher.exe", release_binary_path(platform_name, target)),
+        (executable_name(platform_name), core_build_path(platform_name, target)),
+    ]
+    killed = 0
+    for exe_name, expected in processes:
+        killed += _kill_processes_by_name(exe_name, expected.resolve())
     if killed:
         time.sleep(0.8)
 
@@ -235,6 +254,21 @@ def stage_test_frontend(exe_path):
     return destination / "index.html"
 
 
+def stage_test_windows_launcher(exe_path):
+    """Stage the renamed Core and PowerShell bridge beside the test launcher."""
+    if sys.platform != "win32":
+        return
+    core_source = exe_path.parent / executable_name("windows")
+    core_destination = exe_path.parent / core_package_name("windows")
+    if not core_source.is_file():
+        raise RuntimeError(f"测试模式 Core 程序不存在: {core_source}")
+    shutil.copy2(core_source, core_destination)
+    script_source = ROOT / "deploy" / "windows" / "bulibuli-launch.ps1"
+    if not script_source.is_file():
+        raise RuntimeError(f"Windows 启动脚本不存在: {script_source}")
+    shutil.copy2(script_source, exe_path.parent / script_source.name)
+
+
 def stage_test_runtime(exe_path):
     """Place bundled runtime tools (aria2c/FFmpeg/geo) beside the test binary.
 
@@ -287,10 +321,14 @@ def build_release(platform_name, target=None):
         command.extend(["--target", target])
     run(command, cwd=str(ROOT))
     exe_path = release_binary_path(platform_name, target)
-    if not exe_path.exists():
-        print(f"  [错误] 编译产物不存在: {exe_path}")
+    required = [exe_path, core_build_path(platform_name, target)]
+    missing = [path for path in required if not path.exists()]
+    if missing:
+        print(f"  [错误] 编译产物不存在: {', '.join(str(path) for path in missing)}")
         sys.exit(1)
     print(f"  编译完成: {exe_path}")
+    if platform_name == "windows":
+        print(f"  Core 编译完成: {core_build_path(platform_name, target)}")
     return exe_path
 
 
@@ -499,6 +537,13 @@ def validate_package_tree(package_dir, platform_name, variant):
         package_dir / "static" / "app" / "index.html",
         package_dir / PACKAGE_MANIFEST_NAME,
     ]
+    if platform_name == "windows":
+        required.extend(
+            [
+                package_dir / core_package_name(platform_name),
+                package_dir / "bulibuli-launch.ps1",
+            ]
+        )
     if platform_name in {"linux", "termux"}:
         required.append(package_dir / "install.sh")
     elif platform_name == "windows" and (package_dir / "install.ps1").exists():
@@ -573,13 +618,18 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     if not check_resource_hashes():
         raise RuntimeError("resources/ 哈希校验失败，拒绝打包")
 
-    # 清扫 dist/ 内非当前版本的残留归档与校验文件，避免旧版产物混入发布目录。
+    # 清扫 dist/ 内非当前版本的残留归档、校验文件和包目录，避免旧版产物混入发布目录。
     # 只删不含当前版本号的文件：同一 runner 上会连续组装多个 variant
     # （如 Windows 的 portable + core），先打的包不能被后一次清理误删。
+    current_marker = f"-v{APP_VERSION}"
     for stale in dist_dir.glob("*"):
-        if f"-v{APP_VERSION}" in stale.name:
+        version_tail = stale.name.split(current_marker, 1)[1] if current_marker in stale.name else None
+        if version_tail in {"", ".zip", ".tar.gz", ".sha256"}:
             continue
-        if stale.suffix in {".zip", ".gz", ".sha256"} or stale.name.endswith(".tar.gz"):
+        if stale.is_dir() and stale.name.startswith(f"{APP_SLUG}-"):
+            print(f"  清理旧产物目录: {stale.name}")
+            shutil.rmtree(stale)
+        elif stale.suffix in {".zip", ".gz", ".sha256"} or stale.name.endswith(".tar.gz"):
             print(f"  清理旧产物: {stale.name}")
             stale.unlink()
 
@@ -590,6 +640,18 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     binary_name = executable_name(platform_name)
     shutil.copy2(exe_path, package_dir / binary_name)
     print(f"  已复制: {binary_name}")
+    if platform_name == "windows":
+        core_source = core_build_path(platform_name, target)
+        core_destination = package_dir / core_package_name(platform_name)
+        if not core_source.is_file():
+            raise RuntimeError(f"Windows 包缺少 Core 程序: {core_source}")
+        shutil.copy2(core_source, core_destination)
+        print(f"  已复制: {core_destination.name}")
+        launcher_script = ROOT / "deploy" / "windows" / "bulibuli-launch.ps1"
+        if not launcher_script.is_file():
+            raise RuntimeError(f"Windows 包缺少启动脚本: {launcher_script}")
+        shutil.copy2(launcher_script, package_dir / launcher_script.name)
+        print(f"  已复制: {launcher_script.name}")
 
     for document_name in (
         "README.md",
@@ -735,6 +797,7 @@ def run_test(platform_name, skip_vue=False):
     print("[3/5] 清理残留的旧实例，避免端口被占用...")
     stop_existing_instances(platform_name)
     exe_path = build_release(platform_name)
+    stage_test_windows_launcher(exe_path)
     staged_index = stage_test_frontend(exe_path)
     stage_test_runtime(exe_path)
     if not staged_index.is_file():
@@ -1073,6 +1136,9 @@ def main():
         exe_path = release_binary_path(platform_name, args.target)
         if not exe_path.is_file():
             parser.error(f"--skip-rust-build 要求已有 release 二进制：{exe_path}")
+        core_path = core_build_path(platform_name, args.target)
+        if not core_path.is_file():
+            parser.error(f"--skip-rust-build 要求已有 Core 二进制：{core_path}")
     else:
         exe_path = build_release(platform_name, args.target)
     variant = "portable" if args.portable else "core"

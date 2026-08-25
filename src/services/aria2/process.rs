@@ -215,17 +215,13 @@ impl Aria2Manager {
         let child = match cmd.spawn().context("启动 aria2c 失败") {
             Ok(child) => child,
             Err(error) => {
-                if let Some(path) = &secret_config {
-                    let _ = std::fs::remove_file(path);
-                }
+                remove_runtime_secret_config(secret_config.as_ref());
                 return Err(error);
             }
         };
-        if let Some(path) = secret_config {
-            let _ = std::fs::remove_file(path);
-        }
 
-        self.finish_start_aria2c(child, port, log).await
+        self.finish_start_aria2c(child, port, log, secret_config)
+            .await
     }
 
     async fn finish_start_aria2c(
@@ -233,6 +229,7 @@ impl Aria2Manager {
         child: tokio::process::Child,
         port: u16,
         log: PathBuf,
+        secret_config: Option<PathBuf>,
     ) -> Result<()> {
         // Windows：把 aria2c 绑到 kill-on-close 的 Job Object。
         // 这样本进程无论正常退出还是被强杀（IDE 停止/任务管理器/关窗口），
@@ -263,18 +260,63 @@ impl Aria2Manager {
             inner.started_at = Some(std::time::Instant::now());
         }
 
-        // 轮询 RPC 最多 6 秒；就绪后立即返回。
+        // 启动阶段的 RPC 请求必须有更短的上限：Client 的通用超时为 10 秒，
+        // 若直接等待它，aria2c 启动失败时一次轮询就会把整个启动流程拖住。
         const POLL_INTERVAL: Duration = Duration::from_millis(200);
+        const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
         const MAX_POLL_ATTEMPTS: u32 = 30;
         for attempt in 0..MAX_POLL_ATTEMPTS {
             // 启动探测必须绕过可用性缓存。
-            if self.is_available_uncached().await {
+            if tokio::time::timeout(PROBE_TIMEOUT, self.is_available_uncached())
+                .await
+                .unwrap_or(false)
+            {
+                remove_runtime_secret_config(secret_config.as_ref());
                 let mut inner = self.inner.lock().await;
                 inner.ready = true;
                 inner.last_error = None;
                 inner.available_cache = Some((true, std::time::Instant::now()));
                 info!("Aria2 已就绪 (端口 {port}, 等待 {} 次轮询)", attempt + 1);
                 return Ok(());
+            }
+
+            // 端口占用、参数错误或 aria2c 无法加载配置时，子进程可能会在
+            // 第一次 RPC 超时前就退出。及时回收并报出退出状态，避免只显示
+            // “绑定到 Job Object”后长时间无响应。
+            let exit_status = {
+                let mut inner = self.inner.lock().await;
+                match inner.child.as_mut() {
+                    Some(child) => match child.try_wait() {
+                        Ok(Some(status)) => Some(status.to_string()),
+                        Ok(None) => None,
+                        Err(error) => {
+                            inner.last_error = Some(format!("检查 aria2c 进程状态失败: {error}"));
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            };
+            if let Some(exit_status) = exit_status {
+                let message = format!(
+                    "Aria2 启动失败（aria2c 已退出：{exit_status}），请检查 data/{}",
+                    log.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("aria2.log")
+                );
+                let child = {
+                    let mut inner = self.inner.lock().await;
+                    inner.last_error = Some(message.clone());
+                    inner.ready = false;
+                    inner.child.take()
+                };
+                if let Some(mut child) = child {
+                    if let Err(error) = child.wait().await {
+                        warn!("回收已退出的 Aria2 进程失败: {error}");
+                    }
+                }
+                remove_runtime_secret_config(secret_config.as_ref());
+                return Err(anyhow!(message));
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
@@ -289,6 +331,7 @@ impl Aria2Manager {
         let child = {
             let mut inner = self.inner.lock().await;
             inner.last_error = Some(message.clone());
+            inner.ready = false;
             inner.child.take()
         };
         if let Some(mut child) = child {
@@ -299,6 +342,7 @@ impl Aria2Manager {
                 warn!("等待已终止 Aria2 进程失败: {error}");
             }
         }
+        remove_runtime_secret_config(secret_config.as_ref());
         Err(anyhow!(message))
     }
 
@@ -369,6 +413,16 @@ impl Aria2Manager {
         inner.started_at = None;
         inner.ready = false;
         Ok(())
+    }
+}
+
+fn remove_runtime_secret_config(path: Option<&PathBuf>) {
+    if let Some(path) = path {
+        if let Err(error) = std::fs::remove_file(path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                warn!("清理 Aria2 临时认证配置失败: {error}");
+            }
+        }
     }
 }
 

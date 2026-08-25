@@ -95,8 +95,10 @@ function Read-Package([string]$Path) {
         throw "包平台或架构不匹配：$($manifest.platform)/$($manifest.architecture)，目标 windows/$Architecture"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $root "bulibuli.exe") -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $root "bulibuli-core.exe") -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $root "bulibuli-launch.ps1") -PathType Leaf) -or
         -not (Test-Path -LiteralPath (Join-Path $root "static\app\index.html") -PathType Leaf)) {
-        throw "包缺少 bulibuli.exe 或 static/app/index.html"
+        throw "包缺少 bulibuli.exe、bulibuli-core.exe、bulibuli-launch.ps1 或 static/app/index.html"
     }
     $rootPrefix = ([IO.Path]::GetFullPath($root)).TrimEnd("\") + "\"
     foreach ($entry in @($manifest.files)) {

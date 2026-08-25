@@ -11,7 +11,10 @@
 use crate::app::control;
 use crate::app::onboarding::{StartupState, TerminalMode};
 use crate::state::SharedState;
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
+use ratatui::crossterm::{
+    self,
+    event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind},
+};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -54,7 +57,8 @@ pub struct LogBuffer {
 struct LogInner {
     lines: VecDeque<String>,
     important_lines: VecDeque<String>,
-    pending: String,
+    pending_line: String,
+    pending_utf8: Vec<u8>,
 }
 
 impl LogBuffer {
@@ -63,14 +67,54 @@ impl LogBuffer {
         Self::store_line(&mut inner, line);
     }
 
-    /// 接收 tracing writer 的字节流，按行切分（不完整行暂存）。
-    fn push_chunk(&self, chunk: &str) {
+    /// 接收 tracing writer 的字节流，先按完整 UTF-8 序列解码，再按行切分。
+    ///
+    /// `Write::write` 不保证一次写入一个完整字符；中文的三个 UTF-8 字节
+    /// 可能被分到三次写入，不能对每个字节块单独调用 `from_utf8_lossy`。
+    fn push_chunk(&self, chunk: &[u8]) {
         let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
-        inner.pending.push_str(chunk);
-        while let Some(position) = inner.pending.find('\n') {
-            let line: String = inner.pending.drain(..=position).collect();
+        inner.pending_utf8.extend_from_slice(chunk);
+        let decoded = Self::decode_pending_utf8(&mut inner.pending_utf8);
+        inner.pending_line.push_str(&decoded);
+        while let Some(position) = inner.pending_line.find('\n') {
+            let line: String = inner.pending_line.drain(..=position).collect();
             Self::store_line(&mut inner, line.trim_end_matches(['\r', '\n']).to_string());
         }
+    }
+
+    /// 解码所有完整 UTF-8 字符，保留末尾尚不完整的字节序列。
+    fn decode_pending_utf8(bytes: &mut Vec<u8>) -> String {
+        let mut decoded = String::new();
+        let mut cursor = 0;
+        while cursor < bytes.len() {
+            match std::str::from_utf8(&bytes[cursor..]) {
+                Ok(text) => {
+                    decoded.push_str(text);
+                    cursor = bytes.len();
+                }
+                Err(error) => {
+                    let valid = error.valid_up_to();
+                    if valid > 0 {
+                        decoded.push_str(
+                            std::str::from_utf8(&bytes[cursor..cursor + valid])
+                                .expect("valid UTF-8 prefix"),
+                        );
+                        cursor += valid;
+                    }
+                    match error.error_len() {
+                        Some(length) => {
+                            decoded.push('\u{FFFD}');
+                            cursor = cursor.saturating_add(length);
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+        if cursor > 0 {
+            bytes.drain(..cursor);
+        }
+        decoded
     }
 
     fn store_line(inner: &mut LogInner, line: String) {
@@ -171,7 +215,7 @@ pub struct ConsoleWriter {
 
 impl std::io::Write for ConsoleWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.buffer.push_chunk(&String::from_utf8_lossy(buf));
+        self.buffer.push_chunk(buf);
         if !TUI_ACTIVE.load(Ordering::Relaxed) {
             std::io::stdout().lock().write_all(buf)?;
         }
@@ -241,11 +285,34 @@ pub fn start(state: SharedState) -> Option<TuiHandle> {
         .name("terminal-ui".to_string())
         .spawn(move || {
             TUI_ACTIVE.store(true, Ordering::Relaxed);
-            let result = run(&state, &buffer, &handle, initial_mode, log_dir);
-            TUI_ACTIVE.store(false, Ordering::Relaxed);
-            if let Err(error) = result {
-                tracing::warn!(%error, "终端界面异常退出，日志已回退到标准输出");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run(&state, &buffer, &handle, initial_mode, log_dir)
+            }));
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        raw_os_error = ?error.raw_os_error(),
+                        error_kind = ?error.kind(),
+                        %error,
+                        "终端界面异常退出，正在停止服务以释放实例锁"
+                    );
+                    state.infra.cancellation.cancel();
+                }
+                Err(panic) => {
+                    let message = panic
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                        .unwrap_or("非字符串 panic payload");
+                    tracing::error!(
+                        panic = message,
+                        "终端界面线程 panic，正在停止服务以释放实例锁"
+                    );
+                    state.infra.cancellation.cancel();
+                }
             }
+            TUI_ACTIVE.store(false, Ordering::Relaxed);
         });
     spawned.ok().map(|thread| TuiHandle {
         thread: Some(thread),
@@ -284,6 +351,65 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// Win10 传统控制台可能仍使用系统代码页（例如 936），而 ratatui 输出的是 UTF-8。
+/// 只在 TUI 生命周期内切换到 UTF-8，退出时恢复用户原来的控制台设置。
+struct ConsoleCodePageGuard {
+    previous_output_code_page: Option<u32>,
+}
+
+impl ConsoleCodePageGuard {
+    fn new() -> Self {
+        Self {
+            previous_output_code_page: set_utf8_output_code_page(),
+        }
+    }
+}
+
+impl Drop for ConsoleCodePageGuard {
+    fn drop(&mut self) {
+        restore_output_code_page(self.previous_output_code_page);
+    }
+}
+
+fn set_utf8_output_code_page() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP};
+
+        // A redirected stdout has no console code page; leave it untouched.
+        let previous = unsafe { GetConsoleOutputCP() };
+        if previous == 0 || previous == 65001 {
+            return None;
+        }
+        let changed = unsafe { SetConsoleOutputCP(65001) } != 0;
+        changed.then_some(previous)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+fn restore_output_code_page(previous: Option<u32>) {
+    #[cfg(windows)]
+    if let Some(code_page) = previous {
+        use windows_sys::Win32::System::Console::SetConsoleOutputCP;
+        unsafe {
+            let _ = SetConsoleOutputCP(code_page);
+        }
+    }
+}
+
+fn annotate_io_error(stage: &'static str, error: std::io::Error) -> std::io::Error {
+    let raw = error
+        .raw_os_error()
+        .map_or_else(|| "none".to_string(), |value| value.to_string());
+    std::io::Error::new(
+        error.kind(),
+        format!("TUI {stage}失败: {error} (raw_os_error={raw})"),
+    )
+}
+
 fn run(
     state: &SharedState,
     buffer: &LogBuffer,
@@ -291,7 +417,9 @@ fn run(
     initial_mode: TerminalMode,
     log_dir: PathBuf,
 ) -> std::io::Result<()> {
-    crossterm::terminal::enable_raw_mode()?;
+    let _console_code_page = ConsoleCodePageGuard::new();
+    crossterm::terminal::enable_raw_mode()
+        .map_err(|error| annotate_io_error("启用 raw mode", error))?;
     let _guard = TerminalGuard {
         buffer: buffer.clone(),
         log_dir,
@@ -301,9 +429,11 @@ fn run(
         std::io::stdout(),
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableMouseCapture
-    )?;
+    )
+    .map_err(|error| annotate_io_error("进入备用屏", error))?;
     let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-    let mut terminal = ratatui::Terminal::new(backend)?;
+    let mut terminal = ratatui::Terminal::new(backend)
+        .map_err(|error| annotate_io_error("创建终端后端", error))?;
 
     let mut input = String::new();
     let mut history: Vec<String> = Vec::new();
@@ -313,11 +443,16 @@ fn run(
     let mut current_mode = initial_mode;
 
     while !state.infra.cancellation.is_cancelled() {
-        terminal.draw(|frame| draw(frame, buffer, &input, &mut scroll, current_mode, state))?;
-        if !crossterm::event::poll(Duration::from_millis(150))? {
+        terminal
+            .draw(|frame| draw(frame, buffer, &input, &mut scroll, current_mode, state))
+            .map_err(|error| annotate_io_error("绘制界面", error))?;
+        if !crossterm::event::poll(Duration::from_millis(150))
+            .map_err(|error| annotate_io_error("轮询输入", error))?
+        {
             continue;
         }
-        let event = crossterm::event::read()?;
+        let event =
+            crossterm::event::read().map_err(|error| annotate_io_error("读取输入", error))?;
         if let Event::Mouse(mouse) = &event {
             match mouse.kind {
                 MouseEventKind::ScrollUp => scroll = scroll.saturating_add(3),
@@ -677,5 +812,18 @@ mod tests {
         assert!(summary.contains("warning-5"));
         assert!(summary.contains("warning-204"));
         assert!(summary.contains("完整日志目录: data/logs"));
+    }
+
+    #[test]
+    fn split_utf8_character_is_not_rendered_as_three_replacement_chars() {
+        for split in 1..=3 {
+            let buffer = LogBuffer::default();
+            let bytes = "中\n".as_bytes();
+            for chunk in bytes.chunks(split) {
+                buffer.push_chunk(chunk);
+            }
+            let (lines, _) = buffer.view(0, 1);
+            assert_eq!(lines, vec!["中"]);
+        }
     }
 }

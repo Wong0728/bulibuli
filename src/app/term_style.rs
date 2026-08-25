@@ -4,8 +4,7 @@
 //! 避免日志文件混入转义序列。NO_COLOR 与 Windows 传统控制台兼容由 crossterm 兜底
 //! （Windows 下 Display 路径自动探测/启用 VT，失败时退回 WinAPI 着色）。
 
-// ratatui 与 direct crossterm 可能不是同一版本；使用 ratatui 重新导出的 crossterm
-// 可保证 `--all-features` 下 trait 实现与 import 匹配。
+// 统一使用 ratatui 重新导出的 crossterm，保证样式 trait 与 TUI backend 一致。
 use ratatui::crossterm::style::{Attribute, Color, Stylize};
 use std::io::IsTerminal;
 

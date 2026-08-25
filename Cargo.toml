@@ -1,6 +1,6 @@
 [package]
 name = "bulibuli"
-version = "2.0.0-alpha.11"
+version = "2.0.0"
 edition = "2021"
 authors = ["Wong0728"]
 description = "补哩补哩（bulibuli）——下架之前，先下为敬。"
@@ -14,6 +14,10 @@ rust-version = "1.97.1"
 [[bin]]
 name = "bulibuli"
 path = "src/main.rs"
+
+[[bin]]
+name = "bulibuli-launcher"
+path = "src/launcher.rs"
 
 [dependencies]
 # 异步运行时
@@ -98,14 +102,13 @@ open = "5"
 
 # 终端交互界面（日志分区 + 命令说明 + 命令输入）
 ratatui = "0.30"
-crossterm = "0.28"
 
 # Protobuf（弹幕 seg.so 解析）
 prost = "0.13"
 
 # Windows 专用：用 Job Object 确保父进程退出（含被强杀）时子进程 aria2c 一起被系统结束，避免残留占用下载目录
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [dev-dependencies]
 # 弹幕协议边界测试：随机包头、压缩正文和嵌套包均必须返回错误或结果，不能 panic。
