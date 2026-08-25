@@ -165,7 +165,10 @@ async fn spawn_burn(
     let panic_db = db.clone();
     let panic_tasks = burn_tasks.clone();
     let panic_task_id = task_id_for_spawn.clone();
-    crate::services::spawn_util::spawn_logged_with_panic(
+    let rejected_tasks = burn_tasks.clone();
+    let rejected_db = db.clone();
+    let rejected_task_id = task_id.clone();
+    let accepted = infra.background_tasks.spawn_with_panic(
         "burn_task",
         async move {
             let Ok(_permit) = burn_semaphore.acquire_owned().await else {
@@ -295,6 +298,22 @@ async fn spawn_burn(
             persist_burn_snapshot(&panic_db, &panic_tasks, &panic_task_id).await;
         },
     );
+    if !accepted {
+        let mut tasks = rejected_tasks.lock().await;
+        if let Some(task) = tasks.get_mut(&rejected_task_id) {
+            task.status = "failed".to_string();
+            task.message = "应用正在关闭，烧录任务未启动".to_string();
+            task.updated_at = chrono::Utc::now().timestamp();
+            let snapshot = task.clone();
+            drop(tasks);
+            crate::models::burn::persist_burn_task(&rejected_db, &rejected_task_id, &snapshot)
+                .await
+                .map_err(|error| AppError::Internal(format!("保存烧录失败状态失败: {error}")))?;
+        }
+        return Err(AppError::Internal(
+            "应用正在关闭，无法启动烧录任务".to_string(),
+        ));
+    }
 
     Ok(Json(ApiResponse::with_message(
         json!({ "task_id": task_id }),

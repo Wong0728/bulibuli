@@ -156,6 +156,7 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
                 state.infra.cancellation.cancel();
                 wait_background_task("IPC server", Some(control_handle)).await;
                 wait_background_task("startup update check", Some(startup_update_handle)).await;
+                state.infra.background_tasks.shutdown().await;
                 state.infra.db.clone().close().await?;
                 return Err(anyhow::anyhow!(
                     "Setup 端口绑定失败（首次配置向导依赖该端口，请检查端口 {} 是否被占用）: {e}",
@@ -181,6 +182,7 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
             wait_background_task("Setup server", setup_handle).await;
             wait_background_task("IPC server", Some(control_handle)).await;
             wait_background_task("startup update check", Some(startup_update_handle)).await;
+            state.infra.background_tasks.shutdown().await;
             state.infra.db.clone().close().await?;
             return Err(error);
         }
@@ -235,6 +237,7 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
             wait_background_task("startup update check", Some(startup_update_handle)).await;
             wait_background_task("audit event bridge", Some(audit_bridge_handle)).await;
             wait_background_task("audit cleanup", Some(audit_cleanup_handle)).await;
+            state.infra.background_tasks.shutdown().await;
             state.infra.db.clone().close().await?;
             return Err(error);
         }
@@ -297,6 +300,7 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     wait_background_task("startup update check", Some(startup_update_handle)).await;
     wait_background_task("audit event bridge", Some(audit_bridge_handle)).await;
     wait_background_task("audit cleanup", Some(audit_cleanup_handle)).await;
+    state.infra.background_tasks.shutdown().await;
     state.infra.db.clone().close().await?;
     info!("shutdown complete");
     // 清理完成后再传播 serve 的错误：出错路径同样需要停止 aria2/录制并正常关闭数据库。
@@ -304,13 +308,9 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn wait_background_task(name: &str, handle: Option<JoinHandle<()>>) {
+async fn wait_background_task(name: &'static str, handle: Option<JoinHandle<()>>) {
     let Some(handle) = handle else { return };
-    match tokio::time::timeout(std::time::Duration::from_secs(10), handle).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => error!(task = name, "后台任务退出异常: {error}"),
-        Err(_) => error!(task = name, "后台任务未在 10 秒内退出"),
-    }
+    services::spawn_util::wait_join_handle(name, handle, std::time::Duration::from_secs(10)).await;
 }
 
 fn handle_early_cli(args: &[String]) -> Option<anyhow::Result<()>> {

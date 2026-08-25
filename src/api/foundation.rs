@@ -33,12 +33,7 @@ async fn status(
     Extension(session): Extension<Option<SessionAuth>>,
 ) -> Json<ApiResponse<FoundationStatus>> {
     let active = state.bili.security.current();
-    let configured = crate::services::security_config::SecurityConfigService::load(
-        &state.infra.paths.data_dir,
-        &state.infra.paths.app_root,
-    )
-    .map(|service| service.current())
-    .unwrap_or_else(|_| active.clone());
+    let configured = state.bili.security.configured();
     let access_mode = match active.mode {
         AccessMode::Local => "local",
         AccessMode::Lan => "lan",

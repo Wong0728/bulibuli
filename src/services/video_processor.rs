@@ -6,6 +6,7 @@ mod merge;
 mod remux;
 
 use crate::config::AppPaths;
+use crate::services::spawn_util::TaskRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -57,16 +58,18 @@ pub struct VideoProcessor {
     /// 合并并发闸门：批量重试或集中完成时避免同时拉起 N 个 ffmpeg
     /// （与烧录 Semaphore(2)、下载并发闸门同思路）。
     pub(crate) merge_gate: Arc<Semaphore>,
+    pub(crate) background_tasks: Arc<TaskRegistry>,
 }
 
 impl VideoProcessor {
-    pub fn new(paths: Arc<AppPaths>) -> Self {
+    pub fn new(paths: Arc<AppPaths>, background_tasks: Arc<TaskRegistry>) -> Self {
         Self {
             paths,
             custom_ffmpeg_path: None,
             tasks: Arc::new(Mutex::new(HashMap::new())),
             live_ffmpeg_cache: Arc::new(Mutex::new(None)),
             merge_gate: Arc::new(Semaphore::new(2)),
+            background_tasks,
         }
     }
 }

@@ -20,10 +20,12 @@ impl VideoProcessor {
     ) -> Result<MergeResult> {
         let v_path = video_path.to_path_buf();
         let a_path = audio_path.to_path_buf();
+        let background_tasks = self.background_tasks.clone();
         let cb: Option<MergeCallback> = callback.map(|user_cb| {
+            let background_tasks = background_tasks.clone();
             Box::new(move |result: MergeResult| {
                 if result.success {
-                    tokio::spawn(async move {
+                    let _ = background_tasks.spawn("merge_source_cleanup", async move {
                         Self::cleanup_source_files(&v_path, &a_path).await;
                     });
                 }
@@ -126,6 +128,8 @@ impl VideoProcessor {
                     warn!("终止超时 remux 进程失败: {e}");
                 }
                 child.wait().await.ok();
+                stderr_task.abort();
+                let _ = stderr_task.await;
                 tokio::fs::remove_file(&tmp_output).await.ok();
                 return Err(anyhow!("ffmpeg remux 超时（30 分钟），已终止"));
             }

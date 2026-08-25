@@ -34,7 +34,10 @@ impl MediaState {
     /// 依赖 `InfraState`（config / paths / db / ws / settings_service / cancellation）
     /// 和 `BiliState`（bili_api / cookie_manager）。
     pub(crate) async fn build(infra: &InfraState, bili: &BiliState) -> anyhow::Result<Self> {
-        let video_processor = Arc::new(VideoProcessor::new(infra.paths.clone()));
+        let video_processor = Arc::new(VideoProcessor::new(
+            infra.paths.clone(),
+            infra.background_tasks.clone(),
+        ));
         let danmaku_service = Arc::new(DanmakuService::new(
             infra.paths.clone(),
             bili.bili_api.clone(),
@@ -61,6 +64,7 @@ impl MediaState {
                 ws: infra.ws.clone(),
                 settings_service: infra.settings_service.clone(),
                 cancellation: infra.cancellation.child_token(),
+                background_tasks: infra.background_tasks.clone(),
             })
             .await?,
         );
@@ -71,6 +75,7 @@ impl MediaState {
             paths: infra.paths.clone(),
             settings_service: infra.settings_service.clone(),
             db: infra.db.clone(),
+            background_tasks: infra.background_tasks.clone(),
         }));
         live_recorder.recover_incomplete_records().await?;
         live_recorder.restore_merge_jobs().await?;

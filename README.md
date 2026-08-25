@@ -139,7 +139,7 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termu
 3. 在网页中完成设备配对和安全设置，再按需扫码登录 B 站。
 4. 完整包优先使用包内 aria2c 和 FFmpeg；轻量 `core` 包没有包内运行时时，按环境变量再到系统 `PATH` 查找，媒体探测会继续寻找 ffprobe 或回退 FFmpeg。
 
-常用本机控制命令（需服务已运行；ctl 默认仅放行 `status`/`help`/`quit`/`ai`/`pair`）：
+常用本机控制命令（需服务已运行；AI Skill 未启用时仍放行只读 `sys status`，其他高级命令需先执行 `ai on`）：
 
 ```text
 bulibuli ctl sys status
@@ -163,7 +163,7 @@ Linux/macOS 将 `bulibuli.exe` 替换为 `./bulibuli`。完整命令清单见 [`
 
 - 默认数据目录：可执行文件旁的 `data/`。
 - 自定义数据目录：环境变量 `BILI__DATA_DIR=/absolute/path`。
-- 配置真相源分层如下：`BILI__*` 环境变量覆盖普通启动配置；`data/security.toml` 保存网络访问模式和安全策略（模式切换通常需重启）；数据库 `runtime_config` 保存业务设置并在保存后热更新；`startup_state.json` 只保存 onboarding、AI Skill 和终端模式状态。四者不互相覆盖，恢复或排障时按各自文件/存储处理。
+- 配置真相源和 active/configured 生效契约见 [`docs/user/CONFIGURATION.md`](docs/user/CONFIGURATION.md)：`BILI__*` 环境变量负责启动入口，`data/security.toml` 负责网络与安全，SQLite `runtime_config` 负责可热更新业务设置，`startup_state.json` 负责 onboarding/AI/终端状态。网络模式写入后仍需重启；用 `bulibuli ctl sys status` 同时查看 active/configured/restart_required，不要只看文件是否落盘。
 - 数据目录包含 SQLite 数据库、下载目录、`security.toml`、日志、迁移备份和运行状态；升级前请先停止程序并备份整个目录。设置页/API 的 `/api/backup` 只生成数据库快照，不包含密钥、设置文件或下载目录；需要完整恢复时使用 `/api/backup/full`，它生成带 `BACKUP-MANIFEST.json` 的完整恢复目录。恢复前必须停止程序，并同时恢复数据库、`security.toml`、`startup_state.json`、`.secret-store.key`（或对应系统密钥环/`BILI__MASTER_KEY`）和下载目录。
 - 日志按天滚动。日志、数据库、Cookie、session 和配对码不要上传到 issue 或公开工单。
 - Unix 控制 socket 优先使用 `XDG_RUNTIME_DIR`，深层数据目录不会再触发 Linux socket 路径过长；Windows 使用仅本机可访问的命名管道。

@@ -129,6 +129,7 @@ pub struct LiveRecorderDeps {
     pub paths: Arc<AppPaths>,
     pub settings_service: Arc<SettingsService>,
     pub db: DatabaseConnection,
+    pub background_tasks: Arc<crate::services::spawn_util::TaskRegistry>,
 }
 
 /// 直播录制服务：管理多个并发录制会话。
@@ -146,6 +147,7 @@ struct LiveRecorderInner {
     paths: Arc<AppPaths>,
     settings_service: Arc<SettingsService>,
     db: DatabaseConnection,
+    background_tasks: Arc<crate::services::spawn_util::TaskRegistry>,
 }
 
 enum SessionEntry {
@@ -210,6 +212,7 @@ impl LiveRecorder {
                 paths: deps.paths,
                 settings_service: deps.settings_service,
                 db: deps.db,
+                background_tasks: deps.background_tasks,
             }),
         }
     }
@@ -808,6 +811,7 @@ impl LiveRecorder {
             sessions: self.inner.sessions.clone(),
             merge_jobs: self.inner.merge_jobs.clone(),
             merge_cancellations: self.inner.merge_cancellations.clone(),
+            background_tasks: self.inner.background_tasks.clone(),
         };
         self.inner
             .sessions
@@ -818,13 +822,24 @@ impl LiveRecorder {
         // 该房间会永久报"已在录制中"并占用 max_concurrent 额度直至重启。
         // 条目存在期间同房间无法发起新会话，panic 后移除的必是本会话条目。
         let panic_sessions = self.inner.sessions.clone();
-        crate::services::spawn_util::spawn_logged_with_panic(
+        let accepted = self.inner.background_tasks.spawn_with_panic(
             "live_recorder_worker",
             async move { worker.run().await },
             move || async move {
                 panic_sessions.lock().await.remove(&room_id);
             },
         );
+        if !accepted {
+            self.inner.sessions.lock().await.remove(&room_id);
+            mark_startup_recording(
+                &self.inner.db,
+                recording.id,
+                RecordingStatus::Failed,
+                "应用正在关闭，直播录制 worker 未启动".to_owned(),
+            )
+            .await;
+            return Err(anyhow!("应用正在关闭，无法启动直播录制"));
+        }
         info!(room_id, "直播录制已开始");
         Ok(initial_info)
     }
@@ -1234,14 +1249,31 @@ impl LiveRecorder {
             .await
             .insert(job.id.clone(), cancellation.clone());
         let inner = self.inner.clone();
-        tokio::spawn(run_merge_job(
-            inner,
-            job.id.clone(),
-            job.recording_id,
-            ffmpeg_path,
-            segments,
-            cancellation,
-        ));
+        let task_cancellation = cancellation.clone();
+        let accepted = self.inner.background_tasks.spawn(
+            "live_merge_job",
+            run_merge_job(
+                inner,
+                job.id.clone(),
+                job.recording_id,
+                ffmpeg_path,
+                segments,
+                task_cancellation,
+            ),
+        );
+        if !accepted {
+            cancellation.cancel();
+            self.inner.merge_cancellations.lock().await.remove(&job.id);
+            update_merge_job(
+                &self.inner,
+                &job.id,
+                "failed",
+                100,
+                Some("应用正在关闭，合并任务未启动".to_owned()),
+            )
+            .await;
+            return Err(anyhow!("应用正在关闭，无法启动直播合并任务"));
+        }
         Ok(job)
     }
 
@@ -1382,14 +1414,30 @@ impl LiveRecorder {
                 .lock()
                 .await
                 .insert(job.id.clone(), cancellation.clone());
-            tokio::spawn(run_merge_job(
-                self.inner.clone(),
-                job.id,
-                recording.id,
-                ffmpeg_path,
-                segments,
-                cancellation,
-            ));
+            let task_cancellation = cancellation.clone();
+            let accepted = self.inner.background_tasks.spawn(
+                "live_merge_job",
+                run_merge_job(
+                    self.inner.clone(),
+                    job.id.clone(),
+                    recording.id,
+                    ffmpeg_path,
+                    segments,
+                    task_cancellation,
+                ),
+            );
+            if !accepted {
+                cancellation.cancel();
+                self.inner.merge_cancellations.lock().await.remove(&job.id);
+                update_merge_job(
+                    &self.inner,
+                    &job.id,
+                    "failed",
+                    100,
+                    Some("应用正在关闭，恢复的合并任务未启动".to_owned()),
+                )
+                .await;
+            }
         }
         Ok(())
     }
@@ -1432,6 +1480,17 @@ impl LiveRecorder {
     /// 优雅停止所有活动会话。单个会话失败时，也不能阻止应用关停期间
     /// 清理其余 FFmpeg 子进程。
     pub async fn stop_all(&self) {
+        let merge_cancellations = self
+            .inner
+            .merge_cancellations
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for cancellation in merge_cancellations {
+            cancellation.cancel();
+        }
         let room_ids = {
             let sessions = self.inner.sessions.lock().await;
             sessions
@@ -1439,7 +1498,9 @@ impl LiveRecorder {
                 .filter_map(|(room_id, entry)| {
                     matches!(
                         entry,
-                        SessionEntry::Active(_) | SessionEntry::Starting { .. }
+                        SessionEntry::Active(_)
+                            | SessionEntry::Starting { .. }
+                            | SessionEntry::Stopping { .. }
                     )
                     .then_some(*room_id)
                 })
@@ -1500,6 +1561,7 @@ struct RecordingWorker {
     sessions: Arc<Mutex<HashMap<i64, SessionEntry>>>,
     merge_jobs: Arc<Mutex<HashMap<String, MergeJobInfo>>>,
     merge_cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    background_tasks: Arc<crate::services::spawn_util::TaskRegistry>,
 }
 
 impl RecordingWorker {
@@ -1562,7 +1624,13 @@ impl RecordingWorker {
                             // 带 panic 兜底：收尾任务 panic 时 Stopping 条目无人清理，
                             // 该房间会永久报"已在录制中"（条目存在期间无法再次录制）。
                             let panic_sessions = sessions.clone();
-                            crate::services::spawn_util::spawn_logged_with_panic(
+                            let rejected_db = self.db.clone();
+                            let rejected_merge_jobs = merge_jobs.clone();
+                            let rejected_merge_cancellations = merge_cancellations.clone();
+                            let rejected_sessions = sessions.clone();
+                            let rejected_job_id = background_job_id.clone();
+                            let background_tasks = self.background_tasks.clone();
+                            let accepted = background_tasks.spawn_with_panic(
                                 "live_recorder_stop_background",
                                 async move {
                                 if let Some(job) = merge_jobs.lock().await.get_mut(&background_job_id) {
@@ -1602,6 +1670,27 @@ impl RecordingWorker {
                                 panic_sessions.lock().await.remove(&room_id);
                             },
                             );
+                            if !accepted {
+                                let snapshot = if let Some(job) =
+                                    rejected_merge_jobs.lock().await.get_mut(&rejected_job_id)
+                                {
+                                    job.status = "failed".to_owned();
+                                    job.progress = 100;
+                                    job.error = Some("应用正在关闭，直播收尾任务未启动".to_owned());
+                                    job.updated_at = chrono::Utc::now().to_rfc3339();
+                                    Some(job.clone())
+                                } else {
+                                    None
+                                };
+                                if let Some(job) = snapshot {
+                                    let _ = persist_merge_job(&rejected_db, &job).await;
+                                }
+                                rejected_merge_cancellations
+                                    .lock()
+                                    .await
+                                    .remove(&rejected_job_id);
+                                rejected_sessions.lock().await.remove(&room_id);
+                            }
                             let _ = reply.send(job_id);
                             return;
                         }

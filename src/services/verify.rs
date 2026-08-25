@@ -1,5 +1,6 @@
 use crate::models::history;
 use crate::services::settings::SettingsService;
+use crate::services::spawn_util::wait_join_handle;
 use anyhow::{Context, Result};
 use chrono::Local;
 use futures::{stream, StreamExt};
@@ -63,11 +64,7 @@ impl VerifyService {
     pub async fn stop(&self) {
         self.cancellation.cancel();
         if let Some(h) = self.handle.lock().await.take() {
-            match tokio::time::timeout(StdDuration::from_secs(10), h).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => error!("[verify] worker 退出异常: {error}"),
-                Err(_) => error!("[verify] worker 未在 10 秒内退出"),
-            }
+            wait_join_handle("verify", h, StdDuration::from_secs(10)).await;
         }
         info!("[verify] SHA-256 校验 worker 已停止");
     }

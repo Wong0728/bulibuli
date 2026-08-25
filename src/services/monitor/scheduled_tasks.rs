@@ -150,6 +150,9 @@ impl MonitorService {
                 let hours = (now_ts - h.pub_timestamp.unwrap_or(0)) as f64 / 3600.0;
                 let title = h.title.clone().unwrap_or_else(|| h.bvid.clone());
                 let service = self.clone();
+                let background_tasks = self.background_tasks.clone();
+                let history_id = h.id;
+                let bvid = h.bvid.clone();
                 let cookies = cookies.clone();
                 let dc = dc.clone();
                 let total_points = time_points.len();
@@ -159,14 +162,14 @@ impl MonitorService {
                         .timestamp_opt(h.pub_timestamp.unwrap_or(0) + (hours as i64) * 3600, 0)
                         .single()
                 });
-                crate::services::spawn_util::spawn_logged("scheduled_sidecar", async move {
+                let accepted = background_tasks.spawn("scheduled_sidecar", async move {
                     let Ok(_permit) = service.sidecar_semaphore.clone().acquire_owned().await
                     else {
                         service
                             .scheduled_sidecar_in_progress
                             .lock()
                             .await
-                            .remove(&h.id);
+                            .remove(&history_id);
                         return;
                     };
                     if service.cancellation.is_cancelled() {
@@ -175,7 +178,7 @@ impl MonitorService {
                             .scheduled_sidecar_in_progress
                             .lock()
                             .await
-                            .remove(&h.id);
+                            .remove(&history_id);
                         return;
                     }
                     service
@@ -235,8 +238,18 @@ impl MonitorService {
                         .scheduled_sidecar_in_progress
                         .lock()
                         .await
-                        .remove(&h.id);
+                        .remove(&history_id);
                 });
+                if !accepted {
+                    // shutdown 与登记使用同一把锁；若这里被拒绝，不能留下一个
+                    // 永久占位的 in_progress id。进程正在退出时无需再写 DB，
+                    // 下次启动会按原计划重新扫描。
+                    self.scheduled_sidecar_in_progress
+                        .lock()
+                        .await
+                        .remove(&history_id);
+                    tracing::debug!(bvid = %bvid, "计划侧车任务在 shutdown 后被拒绝");
+                }
             }
         }
         Ok(())
@@ -400,7 +413,8 @@ impl MonitorService {
             let burn_semaphore = self.burn_semaphore.clone();
             let history_service = self.history_service.clone();
             let cancellation = self.cancellation.clone();
-            crate::services::spawn_util::spawn_logged("auto_burn", async move {
+            let background_tasks = self.background_tasks.clone();
+            let accepted = background_tasks.spawn("auto_burn", async move {
                 let Ok(_permit) = burn_semaphore.acquire_owned().await else {
                     let mut guard = in_progress.lock().await;
                     guard.remove(&history_id);
@@ -455,6 +469,12 @@ impl MonitorService {
                 let mut guard = in_progress.lock().await;
                 guard.remove(&history_id);
             });
+            if !accepted {
+                // queued 状态本身可在下次启动时重新扫描；清掉内存占位，避免
+                // 进程未立即退出时后续检查永远跳过该记录。
+                self.auto_burn_in_progress.lock().await.remove(&h.id);
+                tracing::debug!(bvid = %h.bvid, "自动烧录任务在 shutdown 后被拒绝");
+            }
         }
         Ok(())
     }

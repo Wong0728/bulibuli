@@ -134,8 +134,9 @@ impl VideoProcessor {
         let a_path = audio_path.to_path_buf();
         let out_path = output_path.to_path_buf();
         let tid = task_id.clone();
+        let background_tasks = self.background_tasks.clone();
 
-        tokio::spawn(async move {
+        let accepted = background_tasks.spawn("video_merge", async move {
             // 持有合并闸门许可直至 ffmpeg 进程结束（含 panic 路径，随任务 drop 释放）
             let _merge_gate_permit = permit;
             // 包裹 monitor_merge_task：若子任务 panic，确保释放 tasks 映射并记录 error
@@ -167,6 +168,10 @@ impl VideoProcessor {
                 error!("合并任务 [{tid}] 因 panic 终止，幂等键由调用方兜底: {payload}");
             }
         });
+        if !accepted {
+            self.tasks.lock().await.remove(&task_id);
+            return Err(anyhow!("应用正在关闭，音视频合并任务未启动"));
+        }
 
         Ok(MergeResult {
             success: true,
@@ -438,10 +443,8 @@ impl VideoProcessor {
         // 仍保留 5 秒便于前端轮询获取最终状态
         let tasks_clone = tasks.clone();
         let tid = task_id.to_string();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            tasks_clone.lock().await.remove(&tid);
-        });
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        tasks_clone.lock().await.remove(&tid);
     }
 
     /// 合并输出的同目录临时文件路径（atomic_replace 要求与目标同目录）

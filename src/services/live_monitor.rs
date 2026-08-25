@@ -5,6 +5,7 @@ use crate::services::live_source::{
     next_schedule_start, schedule_is_active, CaptureMode, LiveSourceService,
 };
 use crate::services::settings::SettingsService;
+use crate::services::spawn_util::wait_join_handle;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -114,7 +115,7 @@ impl LiveMonitor {
     pub async fn stop(&self) {
         self.inner.cancellation.cancel();
         if let Some(handle) = self.inner.handle.lock().await.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+            wait_join_handle("live_monitor", handle, Duration::from_secs(5)).await;
         }
         info!("直播自动录制监控已停止");
     }

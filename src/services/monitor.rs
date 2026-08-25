@@ -27,9 +27,15 @@ pub(crate) use paywall::pay_reason_to_state;
 use crate::config::AppConfig;
 use crate::models::blogger;
 use crate::services::{
-    bili_api::BiliApi, blogger::BloggerService, danmaku::DanmakuService, download::DownloadManager,
-    history::HistoryService, settings::SettingsService, spawn_util::spawn_logged,
-    subtitle_fetch::SubtitleFetchService, video_processor::VideoProcessor,
+    bili_api::BiliApi,
+    blogger::BloggerService,
+    danmaku::DanmakuService,
+    download::DownloadManager,
+    history::HistoryService,
+    settings::SettingsService,
+    spawn_util::{spawn_logged, wait_join_handle},
+    subtitle_fetch::SubtitleFetchService,
+    video_processor::VideoProcessor,
 };
 use anyhow::Result;
 use chrono::Local;
@@ -67,6 +73,7 @@ pub struct MonitorService {
     handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     backfill_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     cancellation: CancellationToken,
+    background_tasks: Arc<crate::services::spawn_util::TaskRegistry>,
     settings_cache: Arc<RwLock<Option<(Value, Instant)>>>,
     log_counter: Arc<AtomicU64>,
     auto_burn_in_progress: Arc<tokio::sync::Mutex<HashSet<i32>>>,
@@ -88,6 +95,7 @@ pub struct MonitorServiceDependencies {
     pub settings_service: Arc<SettingsService>,
     pub burn_semaphore: Arc<Semaphore>,
     pub cancellation: CancellationToken,
+    pub background_tasks: Arc<crate::services::spawn_util::TaskRegistry>,
 }
 
 impl MonitorService {
@@ -107,6 +115,7 @@ impl MonitorService {
             handle: Arc::new(tokio::sync::Mutex::new(None)),
             backfill_handle: Arc::new(tokio::sync::Mutex::new(None)),
             cancellation: deps.cancellation,
+            background_tasks: deps.background_tasks,
             settings_cache: Arc::new(RwLock::new(None)),
             log_counter: Arc::new(AtomicU64::new(0)),
             auto_burn_in_progress: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
@@ -141,18 +150,10 @@ impl MonitorService {
     pub async fn stop(&self) {
         self.cancellation.cancel();
         if let Some(h) = self.handle.lock().await.take() {
-            match tokio::time::timeout(StdDuration::from_secs(10), h).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => error!("监控任务退出异常: {error}"),
-                Err(_) => error!("监控任务未在 10 秒内退出"),
-            }
+            wait_join_handle("monitor", h, StdDuration::from_secs(10)).await;
         }
         if let Some(h) = self.backfill_handle.lock().await.take() {
-            match tokio::time::timeout(StdDuration::from_secs(10), h).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => error!("监控补齐任务退出异常: {error}"),
-                Err(_) => error!("监控补齐任务未在 10 秒内退出"),
-            }
+            wait_join_handle("monitor_backfill_fans", h, StdDuration::from_secs(10)).await;
         }
         info!("监控服务已停止");
     }

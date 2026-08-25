@@ -5,6 +5,7 @@ use crate::services::audit_log::AuditLogService;
 use crate::services::conflict_guard::ConflictGuardService;
 use crate::services::secret_store::SecretStore;
 use crate::services::settings::SettingsService;
+use crate::services::spawn_util::TaskRegistry;
 use crate::ws::WebSocketManager;
 use anyhow::Context;
 use sea_orm::DatabaseConnection;
@@ -33,6 +34,8 @@ pub struct InfraState {
     pub(crate) actual_main_port: Arc<AtomicU16>,
     /// Setup 服务器实际绑定端口（启动后写入，供 API 查询）。
     pub(crate) actual_setup_port: Arc<AtomicU16>,
+    /// 所有不会由调用方直接 await 的业务任务，统一在关库前等待。
+    pub(crate) background_tasks: Arc<TaskRegistry>,
 }
 
 impl InfraState {
@@ -50,6 +53,7 @@ impl InfraState {
         let paths = Arc::new(paths);
         let ws = Arc::new(WebSocketManager::new());
         let cancellation = tokio_util::sync::CancellationToken::new();
+        let background_tasks = Arc::new(TaskRegistry::default());
 
         let secret_store = Arc::new(
             SecretStore::new(db.clone(), &paths.data_dir).context("初始化 SecretStore 失败")?,
@@ -77,6 +81,7 @@ impl InfraState {
             actual_main_port: Arc::new(AtomicU16::new(0)),
             // 只有 setup listener 成功绑定后才写入真实端口；0 表示当前未监听。
             actual_setup_port: Arc::new(AtomicU16::new(0)),
+            background_tasks,
         };
         Ok((state, secret_store))
     }

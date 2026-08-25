@@ -10,7 +10,8 @@
 //! - `status` / `pair` / `sessions` / `revoke` / `access` / `mode` / `geo` / `trust` / `config` / `quit` / `help`
 //!   —— 旧名 alias 保留，避免破坏存量脚本
 //!
-//! AI 模式门控（P3）：未启用时仅放行 `status` / `help` / `quit` / `ai on` / `pair`。
+//! AI 模式门控（P3）：未启用时放行 `status` / `help` / `quit` / `ai on` / `pair`，
+//! 以及只读诊断 `sys status`。
 //! 门控在 `execute()` 入口检查 `ai_skill_enabled` 标志，拒绝时返回 `AI_SKILL_DISABLED`。
 
 #[path = "control_origin.rs"]
@@ -508,7 +509,7 @@ pub(crate) async fn execute_from(
         return Ok(help());
     };
     // AI Skill 模式门控：仅在 AI IPC 来源时生效，人工终端（TUI/stdin）无条件放行。
-    // 未启用时仅放行 status / help / quit / ai（用于重新启用）/ pair，
+    // 未启用时放行 status / help / quit / ai（用于重新启用）/ pair，
     // 以及只读诊断 `sys status`（--help 推荐新用户首先执行的命令）。
     let sys_status_probe = command == "sys" && args.get(1).map(String::as_str) == Some("status");
     if matches!(origin, CommandOrigin::AiCtl)
@@ -517,7 +518,7 @@ pub(crate) async fn execute_from(
         && !sys_status_probe
     {
         return Err(AppError::AiSkillDisabled(format!(
-            "AI Skill 模式未启用，ctl 仅放行 status/help/quit/ai/pair/sys status；当前命令 `{command}` 被拒绝。使用 `ai on` 启用"
+            "AI Skill 模式未启用，ctl 放行 status/help/quit/ai/pair/sys status；当前命令 `{command}` 被拒绝。使用 `ai on` 启用"
         )));
     }
     match command {
@@ -648,7 +649,7 @@ async fn ai_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
                 "note": if enabled {
                     "AI Skill 模式已启用，AI 助手可执行与人工相同的全部 ctl 命令（含 mode/access/geo/trust/pair）"
                 } else {
-                    "AI Skill 模式已关闭，ctl 仅放行 status/help/quit/ai/pair"
+                    "AI Skill 模式已关闭，ctl 放行 status/help/quit/ai/pair/sys status"
                 },
             }))
         },
@@ -1257,7 +1258,8 @@ async fn sys_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
 }
 
 async fn sys_status_value(state: &SharedState) -> Value {
-    let mode = state.bili.security.current().mode;
+    let active_mode = state.bili.security.current().mode;
+    let configured_mode = state.bili.security.configured().mode;
     let pairing = state.bili.auth.pairing_state().await;
     let sessions = state
         .bili
@@ -1270,7 +1272,11 @@ async fn sys_status_value(state: &SharedState) -> Value {
     let aria2_status = state.media.aria2.status().await;
     let ai_enabled = state.infra.ai_skill_enabled.load(Ordering::Relaxed);
     json!({
-        "mode": mode,
+        // `mode` 保留为当前兼容字段；新调用方应区分 active/configured。
+        "mode": active_mode,
+        "active_mode": active_mode,
+        "configured_mode": configured_mode,
+        "restart_required": active_mode != configured_mode,
         "pairing": pairing,
         "sessions": sessions,
         "ai_skill_enabled": ai_enabled,
@@ -1703,7 +1709,14 @@ async fn access_command(state: &SharedState, args: &[String]) -> AppResult<Value
 
 async fn mode_command(state: &SharedState, args: &[String]) -> AppResult<Value> {
     let Some(mode) = args.get(1).map(String::as_str) else {
-        return Ok(json!({"mode": state.bili.security.current().mode}));
+        let active_mode = state.bili.security.current().mode;
+        let configured_mode = state.bili.security.configured().mode;
+        return Ok(json!({
+            "mode": active_mode,
+            "active_mode": active_mode,
+            "configured_mode": configured_mode,
+            "restart_required": active_mode != configured_mode,
+        }));
     };
     let cmd_str = args.join(" ");
     let args_owned: Vec<String> = args.to_vec();
@@ -1747,17 +1760,25 @@ async fn mode_command(state: &SharedState, args: &[String]) -> AppResult<Value> 
             // lan 模式下默认放行 + 无任何规则时，局域网内任意 IP 均可达（HTTP 明文），
             // 返回警告提醒先配置允许网段或将默认策略改为 deny。
             let current = state.bili.security.current();
+            let configured = state.bili.security.configured();
             if mode_owned == "lan"
-                && current.access_default == AccessAction::Allow
-                && current.access_rules.is_empty()
+                && configured.access_default == AccessAction::Allow
+                && configured.access_rules.is_empty()
             {
                 return Ok(json!({
                     "mode": mode_owned,
-                    "restart_required": true,
+                    "active_mode": current.mode,
+                    "configured_mode": configured.mode,
+                    "restart_required": current.mode != configured.mode,
                     "warning": "lan 模式当前为默认放行且无任何访问规则，建议先执行：access default deny 并 access allow <可信网段>",
                 }));
             }
-            Ok(json!({"mode": mode_owned, "restart_required": true}))
+            Ok(json!({
+                "mode": mode_owned,
+                "active_mode": current.mode,
+                "configured_mode": configured.mode,
+                "restart_required": current.mode != configured.mode,
+            }))
         },
     )
     .await
@@ -2417,7 +2438,7 @@ fn help() -> Value {
     json!({
         "themes": themes,
         "expert_mode_hint": "TUI 输入 `> <command>` 直接执行扁平命令；IPC 客户端 `ctl <command>` 即扁平命令",
-        "ai_mode_note": "未启用 AI Skill 模式时，ctl 仅放行 status/help/quit/ai/pair",
+        "ai_mode_note": "未启用 AI Skill 模式时，ctl 放行 status/help/quit/ai/pair/sys status",
     })
 }
 
@@ -2453,7 +2474,7 @@ fn generate_skill_markdown() -> String {
     out.push_str("## 前置条件\n\n");
     out.push_str("1. **AI Skill 模式已启用**：网页 Setup 向导步骤 3 选启用，或运行 `ai on`。");
     out.push_str(
-        "未启用时仅 `status` / `help` / `quit` / `ai` / `pair` 可用，其他命令返回 `AI_SKILL_DISABLED`。\n",
+        "未启用时放行 `status` / `help` / `quit` / `ai` / `pair` / `sys status`，其他命令返回 `AI_SKILL_DISABLED`。\n",
     );
     out.push_str(
         "启用后 AI 助手拥有与人工相同的全部操作权限（含 `mode` / `access` / `geo` / `trust` / `pair` 等基础配置命令），无需任何临时授权；所有 ctl 命令都要求服务已在运行。\n",

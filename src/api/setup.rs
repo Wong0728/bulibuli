@@ -46,10 +46,7 @@ struct SetupStatus {
 async fn get_status(state: axum::extract::State<SharedState>) -> Json<ApiResponse<SetupStatus>> {
     let startup = crate::app::onboarding::StartupState::load(&state.infra.paths.data_dir);
     let active_security = state.bili.security.current();
-    let configured_security =
-        SecurityConfigService::load(&state.infra.paths.data_dir, &state.infra.paths.app_root)
-            .map(|service| service.current())
-            .unwrap_or_else(|_| active_security.clone());
+    let configured_security = state.bili.security.configured();
     let ips = detect_local_ips();
     let endpoints = endpoint_info(&state, &ips);
     Json(ApiResponse {

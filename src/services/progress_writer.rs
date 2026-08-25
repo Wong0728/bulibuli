@@ -1,6 +1,7 @@
 use crate::domain::TaskKey;
 use crate::error::{AppError, AppResult};
 use crate::models::download_task;
+use crate::services::spawn_util::wait_join_handle;
 use sea_orm::{
     sea_query::Expr, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait,
 };
@@ -97,10 +98,7 @@ impl ProgressWriter {
             .unwrap_or_else(|error| error.into_inner())
             .take();
         if let Some(handle) = handle {
-            time::timeout(Duration::from_secs(5), handle)
-                .await
-                .map_err(|_| AppError::Internal("progress writer shutdown timed out".to_string()))?
-                .map_err(|error| AppError::Internal(error.to_string()))?;
+            wait_join_handle("progress_writer", handle, Duration::from_secs(5)).await;
         }
         Ok(())
     }

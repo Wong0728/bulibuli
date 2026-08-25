@@ -87,6 +87,7 @@ impl DownloadManager {
         let output_for_cb = output.clone();
         let merge_in_progress_for_cb = self.merge_in_progress.clone();
         let merge_in_progress_for_match = self.merge_in_progress.clone();
+        let background_tasks = self.background_tasks.clone();
         let cache_key_for_cb = cache_key.clone();
         let cb_cid = cid;
         let cb_page = video.page;
@@ -101,7 +102,7 @@ impl DownloadManager {
                 let merge_in_progress = merge_in_progress_for_cb.clone();
                 let cache_key_for_cb = cache_key_for_cb.clone();
                 let source = source_for_cb.clone();
-                crate::services::spawn_util::spawn_logged("merge_callback", async move {
+                let _ = background_tasks.spawn("merge_callback", async move {
                     // 合并任务结束，释放幂等标记
                     {
                         let mut guard = match merge_in_progress.lock() {

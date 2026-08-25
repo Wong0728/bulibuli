@@ -114,6 +114,7 @@ pub struct DownloadManager {
     disk_resume_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     cancellation: CancellationToken,
     settings_service: Arc<SettingsService>,
+    background_tasks: Arc<crate::services::spawn_util::TaskRegistry>,
     progress_writer: ProgressWriter,
     state_service: DownloadStateService,
     concurrency_gate: ConcurrencyGate,
@@ -148,6 +149,7 @@ pub struct DownloadManagerDependencies {
     pub ws: Arc<WebSocketManager>,
     pub settings_service: Arc<SettingsService>,
     pub cancellation: CancellationToken,
+    pub background_tasks: Arc<crate::services::spawn_util::TaskRegistry>,
 }
 
 impl DownloadManager {

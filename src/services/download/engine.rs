@@ -190,11 +190,16 @@ impl DownloadManager {
         );
         let manager = self.clone();
         let uid = uid.map(str::to_string);
-        crate::services::spawn_util::spawn_logged("native_transfer", async move {
+        let task_cancel = cancel.clone();
+        let accepted = self.background_tasks.spawn("native_transfer", async move {
             manager
-                .run_native_transfer(task, request, cancel, uid, permit)
+                .run_native_transfer(task, request, task_cancel, uid, permit)
                 .await;
         });
+        if !accepted {
+            self.native_tasks.lock().await.remove(&task_id);
+            return Err(anyhow!("应用正在关闭，原生下载任务未启动"));
+        }
         Ok(())
     }
 

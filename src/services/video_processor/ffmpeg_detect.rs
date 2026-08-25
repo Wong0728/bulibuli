@@ -270,7 +270,10 @@ mod tests {
             database_dir: dir.path().to_path_buf(),
             download_dir: dir.path().to_path_buf(),
         };
-        let processor = VideoProcessor::new(std::sync::Arc::new(paths));
+        let processor = VideoProcessor::new(
+            std::sync::Arc::new(paths),
+            std::sync::Arc::new(crate::services::spawn_util::TaskRegistry::default()),
+        );
         let (path, source) = processor.detect_ffmpeg("auto", custom.to_str()).await;
         assert_eq!(source, "custom");
         assert_eq!(path.as_deref(), Some(custom.as_path()));

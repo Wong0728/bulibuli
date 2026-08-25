@@ -4,6 +4,7 @@ use crate::services::bili_api::models::user::same_image_url;
 use crate::services::bili_api::models::video::VideoInfo;
 use crate::services::bili_api::BiliApi;
 use crate::services::settings::SettingsService;
+use crate::services::spawn_util::wait_join_handle;
 use anyhow::Result;
 use chrono::Local;
 use futures::{stream, StreamExt};
@@ -209,12 +210,10 @@ impl RefreshService {
 }
 
 /// L1 worker 主循环。
-async fn await_worker(name: &str, handle: JoinHandle<()>) {
-    match tokio::time::timeout(StdDuration::from_secs(10), handle).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => error!("[{name}] worker 退出异常: {error}"),
-        Err(_) => error!("[{name}] worker 未在 10 秒内退出"),
-    }
+async fn await_worker(name: &'static str, handle: JoinHandle<()>) {
+    // 这些调用点的名称是固定字面量；统一 helper 在超时后 abort 并 await，
+    // 不再把仍访问数据库的 worker 通过丢弃 JoinHandle 带入关库阶段。
+    wait_join_handle(name, handle, StdDuration::from_secs(10)).await;
 }
 
 async fn l1_loop(

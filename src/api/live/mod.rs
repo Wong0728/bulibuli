@@ -640,64 +640,96 @@ async fn burn_recording_danmaku(
             .await
             .map_err(|error| AppError::Internal(format!("保存直播烧录任务失败: {error}")))?;
     }
-    tokio::spawn(async move {
-        let Ok(_permit) = burn_semaphore.acquire_owned().await else {
+    let panic_tasks = burn_tasks.clone();
+    let panic_db = db.clone();
+    let panic_task_id = task_id.clone();
+    let rejected_tasks = burn_tasks.clone();
+    let rejected_db = db.clone();
+    let rejected_task_id = task_id.clone();
+    let accepted = state.infra.background_tasks.spawn_with_panic(
+        "live_burn_task",
+        async move {
+            let Ok(_permit) = burn_semaphore.acquire_owned().await else {
+                let mut tasks = burn_tasks.lock().await;
+                if let Some(task) = tasks.get_mut(&task_id) {
+                    task.status = "failed".to_string();
+                    task.message = "获取烧录并发槽失败".to_string();
+                    task.updated_at = chrono::Utc::now().timestamp();
+                }
+                drop(tasks);
+                persist_live_burn_snapshot(&db, &burn_tasks, &task_id).await;
+                return;
+            };
+            {
+                let mut tasks = burn_tasks.lock().await;
+                if let Some(task) = tasks.get_mut(&task_id) {
+                    task.status = "running".to_string();
+                    task.message = "正在烧录互动弹幕，请勿关闭程序".to_string();
+                    task.updated_at = chrono::Utc::now().timestamp();
+                }
+            }
+            persist_live_burn_snapshot(&db, &burn_tasks, &task_id).await;
+            let result = burner.burn_live_interactions(&output, items).await;
             let mut tasks = burn_tasks.lock().await;
             if let Some(task) = tasks.get_mut(&task_id) {
-                task.status = "failed".to_string();
-                task.message = "获取烧录并发槽失败".to_string();
-                task.updated_at = chrono::Utc::now().timestamp();
+                match result {
+                    Ok((true, path, message)) => {
+                        task.status = "completed".to_string();
+                        task.message =
+                            crate::services::live_recorder::ffmpeg_session::redact_diagnostics(
+                                &message,
+                            );
+                        task.output_path = path
+                            .as_deref()
+                            .and_then(|value| value.strip_prefix(&download_dir).ok())
+                            .map(|value| value.to_string_lossy().replace('\\', "/"));
+                        task.updated_at = chrono::Utc::now().timestamp();
+                    }
+                    Ok((false, _, message)) => {
+                        task.status = "failed".to_string();
+                        task.message =
+                            crate::services::live_recorder::ffmpeg_session::redact_diagnostics(
+                                &message,
+                            );
+                        task.updated_at = chrono::Utc::now().timestamp();
+                    }
+                    Err(error) => {
+                        task.status = "failed".to_string();
+                        task.message =
+                            crate::services::live_recorder::ffmpeg_session::redact_diagnostics(
+                                &format!("烧录失败: {error}"),
+                            );
+                        task.updated_at = chrono::Utc::now().timestamp();
+                    }
+                }
             }
             drop(tasks);
             persist_live_burn_snapshot(&db, &burn_tasks, &task_id).await;
-            return;
-        };
-        {
-            let mut tasks = burn_tasks.lock().await;
-            if let Some(task) = tasks.get_mut(&task_id) {
-                task.status = "running".to_string();
-                task.message = "正在烧录互动弹幕，请勿关闭程序".to_string();
+        },
+        move || async move {
+            let mut tasks = panic_tasks.lock().await;
+            if let Some(task) = tasks.get_mut(&panic_task_id) {
+                task.status = "failed".to_string();
+                task.message = "直播烧录任务异常终止".to_string();
                 task.updated_at = chrono::Utc::now().timestamp();
             }
-        }
-        persist_live_burn_snapshot(&db, &burn_tasks, &task_id).await;
-        let result = burner.burn_live_interactions(&output, items).await;
-        let mut tasks = burn_tasks.lock().await;
-        if let Some(task) = tasks.get_mut(&task_id) {
-            match result {
-                Ok((true, path, message)) => {
-                    task.status = "completed".to_string();
-                    task.message =
-                        crate::services::live_recorder::ffmpeg_session::redact_diagnostics(
-                            &message,
-                        );
-                    task.output_path = path
-                        .as_deref()
-                        .and_then(|value| value.strip_prefix(&download_dir).ok())
-                        .map(|value| value.to_string_lossy().replace('\\', "/"));
-                    task.updated_at = chrono::Utc::now().timestamp();
-                }
-                Ok((false, _, message)) => {
-                    task.status = "failed".to_string();
-                    task.message =
-                        crate::services::live_recorder::ffmpeg_session::redact_diagnostics(
-                            &message,
-                        );
-                    task.updated_at = chrono::Utc::now().timestamp();
-                }
-                Err(error) => {
-                    task.status = "failed".to_string();
-                    task.message =
-                        crate::services::live_recorder::ffmpeg_session::redact_diagnostics(
-                            &format!("烧录失败: {error}"),
-                        );
-                    task.updated_at = chrono::Utc::now().timestamp();
-                }
-            }
+            drop(tasks);
+            persist_live_burn_snapshot(&panic_db, &panic_tasks, &panic_task_id).await;
+        },
+    );
+    if !accepted {
+        let mut tasks = rejected_tasks.lock().await;
+        if let Some(task) = tasks.get_mut(&rejected_task_id) {
+            task.status = "failed".to_string();
+            task.message = "应用正在关闭，直播烧录任务未启动".to_string();
+            task.updated_at = chrono::Utc::now().timestamp();
         }
         drop(tasks);
-        persist_live_burn_snapshot(&db, &burn_tasks, &task_id).await;
-    });
+        persist_live_burn_snapshot(&rejected_db, &rejected_tasks, &rejected_task_id).await;
+        return Err(AppError::Internal(
+            "应用正在关闭，无法启动直播烧录任务".to_string(),
+        ));
+    }
     Ok(Json(ApiResponse::with_message(
         json!({"task_id": response_task_id, "status": "queued"}),
         "烧录任务已排队，完成后会生成带弹幕的版本",

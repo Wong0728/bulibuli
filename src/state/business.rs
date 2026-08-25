@@ -55,6 +55,7 @@ impl BusinessState {
                 settings_service: infra.settings_service.clone(),
                 burn_semaphore: media.burn_semaphore.clone(),
                 cancellation: infra.cancellation.child_token(),
+                background_tasks: infra.background_tasks.clone(),
             })
             .await,
         );

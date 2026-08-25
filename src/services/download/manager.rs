@@ -17,6 +17,7 @@ use tracing::{error, info, warn};
 
 use super::queue::page_info_from_task;
 use super::{file_stem_for, DownloadManager, DownloadManagerDependencies};
+use crate::services::spawn_util::wait_join_handle;
 
 impl DownloadManager {
     pub async fn new(dependencies: DownloadManagerDependencies) -> Result<Self> {
@@ -30,6 +31,7 @@ impl DownloadManager {
             ws,
             settings_service,
             cancellation,
+            background_tasks,
         } = dependencies;
         let settings = settings_service.current();
         if let Err(error) = aria2.init(settings.as_ref()).await {
@@ -50,6 +52,7 @@ impl DownloadManager {
             disk_resume_handle: Arc::new(Mutex::new(None)),
             cancellation: cancellation.clone(),
             settings_service,
+            background_tasks,
             progress_writer: ProgressWriter::start(db.clone(), cancellation.child_token()),
             state_service: DownloadStateService::new(db.clone()),
             concurrency_gate: ConcurrencyGate::new(max_parallel),
@@ -290,18 +293,10 @@ impl DownloadManager {
         }
         self.cancellation.cancel();
         if let Some(handle) = self.monitor_handle.lock().await.take() {
-            match tokio::time::timeout(Duration::from_secs(10), handle).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => error!("下载监督任务退出异常: {error}"),
-                Err(_) => error!("下载监督任务未在 10 秒内退出"),
-            }
+            wait_join_handle("download_monitor", handle, Duration::from_secs(10)).await;
         }
         if let Some(handle) = self.disk_resume_handle.lock().await.take() {
-            match tokio::time::timeout(Duration::from_secs(10), handle).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => error!("磁盘恢复续传任务退出异常: {error}"),
-                Err(_) => error!("磁盘恢复续传任务未在 10 秒内退出"),
-            }
+            wait_join_handle("download_disk_resume", handle, Duration::from_secs(10)).await;
         }
     }
 }

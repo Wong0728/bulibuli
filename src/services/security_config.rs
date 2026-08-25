@@ -180,7 +180,10 @@ impl SecurityConfig {
 #[derive(Clone)]
 pub struct SecurityConfigService {
     path: PathBuf,
+    /// 当前 listener/认证链实际使用的快照。
     inner: Arc<RwLock<SecurityConfig>>,
+    /// 磁盘上的目标配置。模式切换写入这里，但在重启前不替换 active mode。
+    configured: Arc<RwLock<SecurityConfig>>,
     /// 内置 GeoIP 数据库路径（位于 `resources/geo/` 下，未在 security.toml 显式配置时使用）。
     /// 不写入配置文件，避免跨机器路径不可移植。
     builtin_geo_db: Option<PathBuf>,
@@ -217,7 +220,8 @@ impl SecurityConfigService {
         }
         Ok(Self {
             path,
-            inner: Arc::new(RwLock::new(config)),
+            inner: Arc::new(RwLock::new(config.clone())),
+            configured: Arc::new(RwLock::new(config)),
             builtin_geo_db,
         })
     }
@@ -233,10 +237,16 @@ impl SecurityConfigService {
         self.read().clone()
     }
 
+    /// 返回已写入 `security.toml`、但可能需要重启才能让 listener 使用的配置。
+    pub fn configured(&self) -> SecurityConfig {
+        self.configured_read().clone()
+    }
+
     /// 更新已持久化配置对应的当前内存快照。只用于无需重启即可生效的字段；
     /// 访问模式切换仍由调用方保留 `restart_required` 语义。
     pub fn replace_current(&self, config: SecurityConfig) {
-        *self.write() = config;
+        *self.write() = config.clone();
+        *self.configured_write() = config;
     }
 
     pub async fn update(
@@ -246,7 +256,7 @@ impl SecurityConfigService {
         // 所有 SecurityConfigService 实例共享同一把进程级锁，覆盖“读当前配置 →
         // 校验 → 写临时文件 → 原子替换”的完整事务，避免 Setup 与设置页互相覆盖。
         let _guard = config_update_lock().lock().await;
-        let mut next = self.current();
+        let mut next = self.configured();
         mutate(&mut next)?;
         next.access_rules
             .retain(|rule| rule.active(Utc::now().timestamp()));
@@ -260,7 +270,18 @@ impl SecurityConfigService {
             .map_err(|error| {
                 AppError::Internal(format!("保存 security.toml 任务失败: {error}"))
             })??;
-        *self.write() = next;
+        *self.configured_write() = next.clone();
+
+        // 网络模式决定已绑定 listener，不能在进程内偷偷切换。其余安全字段
+        // （访问规则、Geo、可信路径等）仍立即热更新；这样 `ctl mode` 返回
+        // restart_required=true 时，active/configured 两个状态不会互相撒谎。
+        let active = self.current();
+        let mut active_next = next;
+        if active.mode != active_next.mode {
+            active_next.mode = active.mode;
+            active_next.proxy_domain = active.proxy_domain;
+        }
+        *self.write() = active_next;
         Ok(())
     }
 
@@ -308,6 +329,18 @@ impl SecurityConfigService {
 
     fn write(&self) -> RwLockWriteGuard<'_, SecurityConfig> {
         self.inner
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn configured_read(&self) -> RwLockReadGuard<'_, SecurityConfig> {
+        self.configured
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn configured_write(&self) -> RwLockWriteGuard<'_, SecurityConfig> {
+        self.configured
             .write()
             .unwrap_or_else(|error| error.into_inner())
     }
@@ -463,5 +496,27 @@ mod tests {
 
         config.auth_bypass_ips = vec!["0.0.0.0".parse().expect("ip")];
         assert!(config.validate().is_err());
+    }
+
+    #[tokio::test]
+    async fn mode_update_keeps_active_listener_until_restart() {
+        let data_dir = tempfile::tempdir().expect("data dir");
+        let service = SecurityConfigService::load(data_dir.path(), data_dir.path())
+            .expect("load security config");
+
+        service
+            .update(|config| {
+                config.mode = AccessMode::Lan;
+                Ok(())
+            })
+            .await
+            .expect("persist mode");
+
+        assert_eq!(service.current().mode, AccessMode::Local);
+        assert_eq!(service.configured().mode, AccessMode::Lan);
+        assert_ne!(service.current().mode, service.configured().mode);
+
+        service.replace_current(service.configured());
+        assert_eq!(service.current().mode, AccessMode::Lan);
     }
 }
