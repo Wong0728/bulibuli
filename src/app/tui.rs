@@ -398,6 +398,8 @@ fn restore_output_code_page(previous: Option<u32>) {
             let _ = SetConsoleOutputCP(code_page);
         }
     }
+    #[cfg(not(windows))]
+    let _ = previous;
 }
 
 fn annotate_io_error(stage: &'static str, error: std::io::Error) -> std::io::Error {
