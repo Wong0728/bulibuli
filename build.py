@@ -624,7 +624,7 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
     current_marker = f"-v{APP_VERSION}"
     for stale in dist_dir.glob("*"):
         version_tail = stale.name.split(current_marker, 1)[1] if current_marker in stale.name else None
-        if version_tail in {"", ".zip", ".tar.gz", ".sha256"}:
+        if version_tail in {"", ".zip", ".tar.gz", ".sha256", ".zip.sha256", ".tar.gz.sha256"}:
             continue
         if stale.is_dir() and stale.name.startswith(f"{APP_SLUG}-"):
             print(f"  清理旧产物目录: {stale.name}")
