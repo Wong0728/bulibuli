@@ -1,7 +1,6 @@
 //! 充电/付费前置校验：gate_download 判定与 pay_blocked 历史记录落库。
 
 use crate::models::history;
-use chrono::DateTime;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use tracing::warn;
 
@@ -115,9 +114,7 @@ impl MonitorService {
             .await
             .ok()
             .flatten();
-        let pub_date = pub_timestamp.and_then(|ts| {
-            DateTime::from_timestamp(ts, 0).map(|d| d.format("%Y-%m-%d").to_string())
-        });
+        let pub_date = pub_timestamp.and_then(crate::services::time_format::pub_date);
         if let Some(h) = existing {
             let mut model: history::ActiveModel = h.into();
             model.state = Set(Some(state.to_string()));

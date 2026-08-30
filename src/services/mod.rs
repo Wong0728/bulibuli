@@ -29,6 +29,7 @@ pub(crate) mod settings;
 pub(crate) mod spawn_util;
 pub(crate) mod subtitle_burner;
 pub(crate) mod subtitle_fetch;
+pub(crate) mod time_format;
 pub(crate) mod update;
 pub(crate) mod url_parser;
 pub(crate) mod verify;

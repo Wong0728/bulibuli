@@ -3,7 +3,7 @@
 use crate::services::dm_proto;
 use crate::services::wbi;
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Local};
+use chrono::Local;
 use futures::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -452,9 +452,11 @@ impl DanmakuService {
                 self.type_name(dm["type"].as_i64().unwrap_or(1)),
                 self.size_name(dm["size"].as_i64().unwrap_or(25)),
                 dm["color"].as_i64().unwrap_or(0),
-                DateTime::from_timestamp(dm["timestamp"].as_i64().unwrap_or(0), 0)
-                    .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .unwrap_or_default(),
+                crate::services::time_format::format_unix_local(
+                    dm["timestamp"].as_i64().unwrap_or(0),
+                    "%Y-%m-%d %H:%M:%S",
+                )
+                .unwrap_or_default(),
                 dm["text"].as_str().unwrap_or("")
             ));
         }

@@ -326,4 +326,31 @@ mod tests {
             1
         );
     }
+
+    /// 回填 SQL 与写入侧必须同口径：两者都按进程时区出日期，任何一侧改动都要能被这条
+    /// 对拍发现（例如 SQLite 的 `localtime` 修饰符在某平台不可用时会返回 NULL）。
+    #[tokio::test]
+    async fn pub_date_backfill_sql_matches_rust_helper() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        for ts in [1_753_804_800i64, 1_700_000_000, 946_684_800] {
+            let row = db
+                .query_one_raw(Statement::from_string(
+                    db.get_database_backend(),
+                    format!("SELECT date({ts}, 'unixepoch', 'localtime') AS d"),
+                ))
+                .await
+                .expect("sqlite date expression");
+            let sqlite_day = row
+                .expect("one row")
+                .try_get::<Option<String>>("", "d")
+                .expect("read d")
+                .expect("sqlite localtime must resolve");
+            assert_eq!(
+                sqlite_day,
+                crate::services::time_format::pub_date(ts).expect("rust helper must resolve")
+            );
+        }
+    }
 }

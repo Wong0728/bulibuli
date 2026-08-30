@@ -4,7 +4,7 @@ use crate::models::{download_task, history};
 use crate::services::file_safety::ensure_existing_within_root;
 use crate::services::live_recorder::ffmpeg_session::redact_diagnostics;
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::Local;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
@@ -187,11 +187,7 @@ impl DownloadManager {
         let mut pub_date = existing
             .as_ref()
             .and_then(|h| h.pub_date.clone())
-            .or_else(|| {
-                pub_ts.and_then(|ts| {
-                    DateTime::from_timestamp(ts, 0).map(|d| d.format("%Y-%m-%d").to_string())
-                })
-            });
+            .or_else(|| pub_ts.and_then(crate::services::time_format::pub_date));
         let mut pic = existing.as_ref().and_then(|h| h.pic.clone());
         let mut duration = existing.as_ref().and_then(|h| h.duration);
         let mut view = existing.as_ref().and_then(|h| h.view);
@@ -225,11 +221,7 @@ impl DownloadManager {
                 });
             if let Some(ts) = Some(info.created).filter(|&ts| ts > 0).or(pub_timestamp) {
                 pub_ts = Some(ts);
-                pub_date = Some(
-                    DateTime::from_timestamp(ts, 0)
-                        .map(|d| d.format("%Y-%m-%d").to_string())
-                        .unwrap_or_default(),
-                );
+                pub_date = Some(crate::services::time_format::pub_date(ts).unwrap_or_default());
             }
             pic = Some(info.pic.clone());
             duration = Some(info.duration);

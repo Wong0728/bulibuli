@@ -3,7 +3,7 @@
 use crate::models::{blogger, history};
 use crate::services::bili_api::models::user::{same_image_url, UserVideo};
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::Local;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set, Statement,
 };
@@ -268,8 +268,7 @@ impl MonitorService {
                             bvid: Set(new_bvid.to_string()),
                             title: Set(Some(v.title.clone())),
                             pub_timestamp: Set(Some(v.created)),
-                            pub_date: Set(DateTime::from_timestamp(v.created, 0)
-                                .map(|d| d.format("%Y-%m-%d").to_string())),
+                            pub_date: Set(crate::services::time_format::pub_date(v.created)),
                             pic: Set(Some(v.pic.clone())),
                             state: Set(Some("pending".to_string())),
                             reupload_of: Set(Some(old_bvid.clone())),

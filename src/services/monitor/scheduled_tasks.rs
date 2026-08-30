@@ -502,9 +502,7 @@ impl MonitorService {
             }
             model.update(&self.db).await?;
         } else {
-            let pub_date = pub_timestamp.and_then(|ts| {
-                DateTime::from_timestamp(ts, 0).map(|date| date.format("%Y-%m-%d").to_string())
-            });
+            let pub_date = pub_timestamp.and_then(crate::services::time_format::pub_date);
             history::ActiveModel {
                 uid: Set(Some(uid.to_string())),
                 bvid: Set(bvid.to_string()),

@@ -1,6 +1,5 @@
 //! 评论 HTML 渲染：自包含页面（内嵌样式 + 结构化 JSON 数据）。
 
-use chrono::DateTime;
 use serde_json::Value;
 
 use super::DanmakuService;
@@ -89,8 +88,7 @@ impl DanmakuService {
     /// 文末内嵌 <script id="cmt-data"> 结构化 JSON，供前端/程序解析渲染。
     pub(super) fn format_comments_html(&self, bvid: &str, avid: i64, comments: &[Value]) -> String {
         let fmt_time = |ts: i64| -> String {
-            DateTime::from_timestamp(ts, 0)
-                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+            crate::services::time_format::format_unix_local(ts, "%Y-%m-%d %H:%M")
                 .unwrap_or_default()
         };
 

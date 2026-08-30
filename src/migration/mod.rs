@@ -17,6 +17,7 @@ mod m20260820_000014_live_source_version;
 mod m20260820_000015_burn_tasks;
 mod m20260821_000016_history_source_uniqueness;
 mod m20260822_000017_rename_live_recording_trigger;
+mod m20260830_000018_history_pub_date_local;
 
 pub struct Migrator;
 
@@ -41,6 +42,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260820_000015_burn_tasks::Migration),
             Box::new(m20260821_000016_history_source_uniqueness::Migration),
             Box::new(m20260822_000017_rename_live_recording_trigger::Migration),
+            Box::new(m20260830_000018_history_pub_date_local::Migration),
         ]
     }
 }
