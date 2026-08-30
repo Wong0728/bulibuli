@@ -10,7 +10,7 @@ use sea_orm::{
 use std::collections::HashSet;
 use tracing::{info, warn};
 
-use super::video_window::{select_video_window, title_similarity};
+use super::video_window::{scan_pages, select_video_window, title_similarity};
 use super::MonitorService;
 
 impl MonitorService {
@@ -45,7 +45,21 @@ impl MonitorService {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        let uid_i64: i64 = uid.parse().unwrap_or(0);
+        // uid 必须是正整数：脏数据解析成 0 会让每个周期都用 mid=0 打接口。
+        let uid_i64: i64 = match uid.parse() {
+            Ok(value) if value > 0 => value,
+            _ => {
+                self.add_log(
+                    Some(&uid),
+                    None,
+                    "错误: 博主 UID 非法，跳过本轮检查",
+                    "error",
+                )
+                .await;
+                self.schedule_next(blogger).await?;
+                return Ok(());
+            }
+        };
         self.add_log(
             Some(&uid),
             None,
@@ -54,15 +68,20 @@ impl MonitorService {
         )
         .await;
 
-        // 跳过充电视频时多拉一段窗口，保证过滤后仍能凑满 query_limit 个非充电视频
-        let fetch_limit = if skip_charge {
-            query_limit + 10
-        } else {
-            query_limit
-        };
+        // 扫描计划全程使用同一 ps：B 站按 offset=(pn-1)*ps 取窗口，首页用小 ps
+        // 会让第 2 页从第 50 条开始，中间条目永远扫不到，并因落在已扫描时间窗口内
+        // 却不在 scanned_bvids 里而被下面的下架检测误标为 removed。
+        let page_limit = settings
+            .get("monitor")
+            .and_then(|v| v.get("scan_page_limit"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(5)
+            .clamp(1, 20) as i32;
+        let pages = scan_pages(page_limit);
+        let (first_page, first_size) = pages[0];
         let result = self
             .bili_api
-            .get_user_videos_page(uid_i64, &cookies, 1, fetch_limit as i32)
+            .get_user_videos_page(uid_i64, &cookies, first_page, first_size)
             .await;
         let result = match result {
             Ok(page) => page,
@@ -90,22 +109,16 @@ impl MonitorService {
                     .ok()
                     .flatten()
             });
-        let page_limit = settings
-            .get("monitor")
-            .and_then(|v| v.get("scan_page_limit"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(5)
-            .clamp(1, 20) as i32;
         let mut reached_boundary = checkpoint_bvid
             .as_ref()
             .is_some_and(|checkpoint| all_videos.iter().any(|video| video.bvid == *checkpoint));
-        for page in 2..=page_limit {
+        for &(page, page_size) in pages.iter().skip(1) {
             if reached_boundary {
                 break;
             }
             let page_result = self
                 .bili_api
-                .get_user_videos_page(uid_i64, &cookies, page, 50)
+                .get_user_videos_page(uid_i64, &cookies, page, page_size)
                 .await?;
             let page_videos = page_result.videos;
             if page_videos.is_empty() {

@@ -1,6 +1,20 @@
-//! 视频窗口截取与标题相似度：供 `blogger_check` 的自动下载窗口与重投检测使用。
+//! 视频窗口截取、标题相似度与扫描分页计划：供 `blogger_check` 的自动下载窗口与重投检测使用。
 
 use crate::services::bili_api::models::user::UserVideo;
+
+/// B 站 `space/wbi/arc/search` 单页上限，也是监控扫描全程使用的页大小。
+pub(super) const SCAN_PAGE_SIZE: i32 = 50;
+
+/// 一次投稿扫描的分页计划：`(pn, ps)` 序列。
+///
+/// B 站按 `offset = (pn - 1) * ps` 取窗口，因此同一次扫描内 ps 必须恒定：
+/// 首页用小 ps 会让第 2 页直接从 50 开始，中间条目永远扫不到，
+/// 落在空洞里的已下载视频会被下架检测误判成 removed。
+pub(super) fn scan_pages(page_limit: i32) -> Vec<(i32, i32)> {
+    (1..=page_limit.clamp(1, 20))
+        .map(|page| (page, SCAN_PAGE_SIZE))
+        .collect()
+}
 
 /// 自动下载窗口截取：从新到旧遍历，凑满 `limit` 个非充电视频即停止。
 /// `skip_charge` 开启时，充电视频（is_charging_arc）不占名额但保留在结果里，
@@ -63,6 +77,33 @@ fn char_bigrams(s: &str) -> std::collections::HashSet<(char, char)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_pages_cover_contiguous_offsets_without_holes() {
+        // 回归：首页用小 ps、后续页用 ps=50 会在 13..49 留下永远扫不到的空洞，
+        // 落入空洞的已下载视频会被下架检测误标 removed。
+        for page_limit in [1, 5, 20] {
+            let plan = scan_pages(page_limit);
+            assert_eq!(plan.len(), usize::try_from(page_limit).expect("positive"));
+            let mut expected_offset = 0i64;
+            for (pn, ps) in &plan {
+                assert_eq!(i64::from(*pn - 1) * i64::from(*ps), expected_offset);
+                expected_offset += i64::from(*ps);
+            }
+            assert!(
+                plan.windows(2).all(|pair| pair[0].1 == pair[1].1),
+                "同一次扫描内 ps 必须恒定: {plan:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_pages_clamps_page_limit() {
+        assert_eq!(scan_pages(0), vec![(1, SCAN_PAGE_SIZE)]);
+        assert_eq!(scan_pages(-3), vec![(1, SCAN_PAGE_SIZE)]);
+        assert_eq!(scan_pages(999).len(), 20);
+        assert_eq!(SCAN_PAGE_SIZE, 50);
+    }
 
     #[test]
     fn test_title_similarity_identical() {
