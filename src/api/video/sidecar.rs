@@ -184,7 +184,7 @@ async fn resolve_sidecar_dir(
                         let download_dir = media.download_manager.download_dir(None).await;
                         // DB 中的 file_path 可能被污染（security.toml 注入等纵深场景），
                         // 与 cover.rs 对 cover_local_path 的防御一致：校验写入目录在 download_dir 内。
-                        if ensure_existing_within_root(parent, &download_dir)
+                        if ensure_existing_within_root(&download_dir, parent)
                             .await
                             .is_ok()
                         {

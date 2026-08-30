@@ -4,6 +4,7 @@ use crate::services::auth::ClientInfo;
 use crate::services::danmu_collector::commands::{
     command_base, is_link_command, is_stats_command, is_system_command, system_event_label,
 };
+use crate::services::file_safety::ensure_existing_within_root;
 use crate::services::live_recorder::ArchivedLiveEvent;
 use crate::state::SharedState;
 use axum::extract::{Extension, Path, Query, State};
@@ -339,6 +340,10 @@ pub(super) async fn open_history_directory(
     let directory = std::path::Path::new(output)
         .parent()
         .ok_or_else(|| AppError::BadRequest("录制输出路径无效".into()))?;
+    // 与普通下载侧 open_directory 同一道闸门：DB 中的 output_path 可能被改库或
+    // 恢复备份污染，open 之前必须确认它仍在 download_dir 内（直播产物本就写在
+    // download_dir/live 下）。
+    ensure_existing_within_root(&state.infra.paths.download_dir, directory).await?;
     if !directory.is_dir() {
         return Err(AppError::NotFound("录制输出目录不存在".into()));
     }
