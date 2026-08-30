@@ -5,7 +5,6 @@ use crate::services::danmu_collector::commands::{
     command_base, is_link_command, is_stats_command, is_system_command, system_event_label,
 };
 use crate::services::live_recorder::ArchivedLiveEvent;
-use crate::services::security_config::can_open_directory;
 use crate::state::SharedState;
 use axum::extract::{Extension, Path, Query, State};
 use axum::Json;
@@ -281,7 +280,7 @@ pub(super) async fn history(
     Extension(client): Extension<ClientInfo>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
+    let can_open_directory = client.can_open_directory(&state.bili.security.current().mode);
     let rows = state
         .media
         .live_recorder
@@ -300,7 +299,7 @@ pub(super) async fn history_item(
     Extension(client): Extension<ClientInfo>,
     Path(recording_id): Path<i32>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
+    let can_open_directory = client.can_open_directory(&state.bili.security.current().mode);
     let row = state
         .media
         .live_recorder
@@ -324,7 +323,7 @@ pub(super) async fn open_history_directory(
     Extension(client): Extension<ClientInfo>,
     Path(recording_id): Path<i32>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    if !can_open_directory(&state.bili.security.current().mode, client.ip) {
+    if !client.can_open_directory(&state.bili.security.current().mode) {
         return Err(AppError::BadRequest("仅本机访问支持打开所在目录".into()));
     }
     let row = state

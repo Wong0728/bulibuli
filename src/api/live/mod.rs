@@ -6,7 +6,6 @@ use crate::services::live_recorder::RecordingTrigger;
 use crate::services::live_source::{
     schedule_from_json, CaptureMode, NewLiveSource, UpdateLiveSource, WeeklySchedule,
 };
-use crate::services::security_config::can_open_directory;
 use crate::services::subtitle_burner::{DanmakuItem, SubtitleBurner};
 use crate::state::SharedState;
 use axum::{
@@ -352,7 +351,7 @@ async fn dashboard(
     State(state): State<SharedState>,
     Extension(client): Extension<ClientInfo>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
+    let can_open_directory = client.can_open_directory(&state.bili.security.current().mode);
     let (sources, runtime, sessions, monitor, risk_notice, merge_jobs, recovery) = tokio::join!(
         state.business.live_source_service.list(),
         state.business.live_monitor.runtime_snapshot(),

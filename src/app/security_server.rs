@@ -477,10 +477,11 @@ async fn enforce_request_security(
         .map(|value| value.0)
         .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)));
     let config = state.bili.security.current();
-    let client_ip = match effective_client_ip(&config.mode, peer.ip(), request.headers()) {
-        Ok(ip) => ip,
-        Err(response) => return response,
-    };
+    let (client_ip, ip_is_client) =
+        match effective_client_ip(&config.mode, peer.ip(), request.headers()) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
     let (allowed, explicit_allow) = config.client_allowed(client_ip);
     if !allowed {
         return api_error(StatusCode::FORBIDDEN, 403, "当前来源已被访问策略拒绝");
@@ -495,6 +496,7 @@ async fn enforce_request_security(
     request.extensions_mut().insert(ClientInfo {
         ip: client_ip,
         explicit_allow,
+        ip_is_client,
     });
 
     let path = request.uri().path().to_string();
@@ -634,9 +636,9 @@ fn effective_client_ip(
     mode: &AccessMode,
     peer: IpAddr,
     headers: &HeaderMap,
-) -> Result<IpAddr, Response> {
+) -> Result<(IpAddr, bool), Response> {
     if *mode != AccessMode::Proxy {
-        return Ok(peer);
+        return Ok((peer, true));
     }
     if !is_effectively_loopback(peer) {
         return Err(api_error(
@@ -651,10 +653,12 @@ fn effective_client_ip(
     let trust_proxy = std::env::var("BILI__TRUST_PROXY_HEADERS")
         .is_ok_and(|value| matches!(value.trim(), "true" | "1" | "on" | "yes"));
     if !trust_proxy {
-        tracing::debug!(
-            "proxy 模式未设置 BILI__TRUST_PROXY_HEADERS=true，忽略 x-forwarded-for，使用 TCP 对端地址"
+        // 此时唯一可得的地址是本机反代的回环地址，它不代表发起请求的设备。
+        tracing::warn!(
+            "proxy 模式未设置 BILI__TRUST_PROXY_HEADERS=true：忽略 x-forwarded-for，\
+             客户端地址按 TCP 对端（本机反向代理回环地址）记录，按 IP 的能力判定不可用"
         );
-        return Ok(peer);
+        return Ok((peer, false));
     }
     let forwarded = headers
         .get("x-forwarded-for")
@@ -670,6 +674,7 @@ fn effective_client_ip(
     forwarded
         .trim()
         .parse()
+        .map(|ip| (ip, true))
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, 400, "客户端地址无效"))
 }
 

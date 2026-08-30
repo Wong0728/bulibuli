@@ -34,8 +34,12 @@ pub fn is_local_client(ip: IpAddr) -> bool {
 
 /// 打开所在目录/显示绝对路径只对与服务同机的客户端有意义；远程访问只能复制/显示安全路径。
 /// Local 模式只监听环回，天然同机；Lan/Proxy 模式下按实际客户端 IP 判断。
-pub fn can_open_directory(mode: &AccessMode, client_ip: IpAddr) -> bool {
-    matches!(mode, AccessMode::Local) || is_local_client(client_ip)
+///
+/// `ip_is_client` 为假时（Proxy 模式未显式信任 x-forwarded-for），`client_ip` 拿到的是
+/// 本机反向代理的回环地址而不是真实客户端，一律拒绝——否则任意远程设备都能让服务器
+/// 弹出资源管理器窗口，"仅本机支持打开所在目录"的承诺就不成立了。
+pub fn can_open_directory(mode: &AccessMode, client_ip: IpAddr, ip_is_client: bool) -> bool {
+    matches!(mode, AccessMode::Local) || (ip_is_client && is_local_client(client_ip))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -447,12 +451,22 @@ mod tests {
         let loopback_v6: IpAddr = "::1".parse().unwrap();
         let loopback_mapped: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
         let remote: IpAddr = "192.168.1.10".parse().unwrap();
-        assert!(can_open_directory(&AccessMode::Local, remote));
-        assert!(can_open_directory(&AccessMode::Lan, loopback));
-        assert!(can_open_directory(&AccessMode::Lan, loopback_v6));
-        assert!(can_open_directory(&AccessMode::Lan, loopback_mapped));
-        assert!(!can_open_directory(&AccessMode::Lan, remote));
-        assert!(!can_open_directory(&AccessMode::Proxy, remote));
+        assert!(can_open_directory(&AccessMode::Local, remote, true));
+        assert!(can_open_directory(&AccessMode::Lan, loopback, true));
+        assert!(can_open_directory(&AccessMode::Lan, loopback_v6, true));
+        assert!(can_open_directory(&AccessMode::Lan, loopback_mapped, true));
+        assert!(!can_open_directory(&AccessMode::Lan, remote, true));
+        assert!(!can_open_directory(&AccessMode::Proxy, remote, true));
+        // 回归：Proxy 模式不信任 x-forwarded-for 时，解析出的"客户端地址"其实是
+        // 本机反代的回环地址，不能据此放行打开目录（任意远程设备都能弹窗）。
+        assert!(!can_open_directory(&AccessMode::Proxy, loopback, false));
+        assert!(!can_open_directory(
+            &AccessMode::Proxy,
+            loopback_mapped,
+            false
+        ));
+        // 显式信任 XFF 且客户端确在同机，才恢复"仅本机可打开"的语义。
+        assert!(can_open_directory(&AccessMode::Proxy, loopback, true));
     }
 
     #[test]

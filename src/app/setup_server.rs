@@ -163,6 +163,9 @@ fn inject_setup_client_info(request: &mut Request<Body>) -> IpAddr {
         ip,
         // 与主服务对回环地址的 client_allowed 结果保持一致。
         explicit_allow: false,
+        // setup 端口只绑 127.0.0.1，能到达这里的连接必然来自本机，
+        // 注入的回环地址真实代表发起请求的客户端。
+        ip_is_client: true,
     });
     ip
 }

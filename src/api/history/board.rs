@@ -4,7 +4,6 @@ use crate::error::{ApiResponse, AppError};
 use crate::models::{blogger, download_task, history};
 use crate::services::auth::ClientInfo;
 use crate::services::history::{SidecarProbe, SidecarStatus};
-use crate::services::security_config::can_open_directory;
 use crate::state::business::BusinessState;
 use crate::state::infra::InfraState;
 use crate::state::SharedState;
@@ -37,7 +36,7 @@ pub(super) async fn list_history(
 
     // 单视频详情查询：返回该 bvid 的 history、sidecar 和最新 download_task 状态。
     if let Some(bvid) = q.bvid.as_deref() {
-        let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
+        let can_open_directory = client.can_open_directory(&state.bili.security.current().mode);
         let data = build_single_video_response(
             &state.business,
             &state.infra,
@@ -54,7 +53,7 @@ pub(super) async fn list_history(
     let tab = q.tab.as_deref().unwrap_or("completed");
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(50).clamp(1, 50);
-    let can_open_directory = can_open_directory(&state.bili.security.current().mode, client.ip);
+    let can_open_directory = client.can_open_directory(&state.bili.security.current().mode);
     let board = build_board_response(
         &state.business,
         &state.infra,

@@ -4,7 +4,6 @@ use crate::error::{ApiResponse, AppError};
 use crate::models::operation_log::OperationTarget;
 use crate::services::auth::ClientInfo;
 use crate::services::file_safety::ensure_existing_within_root;
-use crate::services::security_config::can_open_directory;
 use crate::state::SharedState;
 use axum::{extract::Query, extract::State, Extension, Json};
 use serde::Deserialize;
@@ -55,7 +54,7 @@ pub(super) async fn open_directory(
     Extension(client): Extension<ClientInfo>,
     Json(req): Json<OpenDirectoryRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
-    if !can_open_directory(&state.bili.security.current().mode, client.ip) {
+    if !client.can_open_directory(&state.bili.security.current().mode) {
         return Err(AppError::BadRequest(
             "仅本机访问支持打开所在目录".to_string(),
         ));

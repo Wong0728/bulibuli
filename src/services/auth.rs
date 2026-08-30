@@ -1,5 +1,5 @@
 use crate::error::{AppError, AppResult};
-use crate::services::security_config::{AccessMode, SecurityConfigService};
+use crate::services::security_config::{can_open_directory, AccessMode, SecurityConfigService};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
 use rand::{Rng, RngCore};
@@ -168,6 +168,19 @@ impl SessionRole {
 pub struct ClientInfo {
     pub ip: IpAddr,
     pub explicit_allow: bool,
+    /// `ip` 是否真实代表发起请求的客户端。
+    ///
+    /// Local/Lan 模式下 TCP 对端就是客户端，恒为真。Proxy 模式只绑回环，对端永远是
+    /// 本机反向代理：只有显式信任 `x-forwarded-for`（BILI__TRUST_PROXY_HEADERS）时
+    /// 拿到的才是真实客户端地址，否则 `ip` 是反代的 127.0.0.1，不能用于「与服务同机」判定。
+    pub ip_is_client: bool,
+}
+
+impl ClientInfo {
+    /// 「打开所在目录/显示绝对路径」能力判定，见 [`crate::services::security_config::can_open_directory`]。
+    pub fn can_open_directory(&self, mode: &AccessMode) -> bool {
+        can_open_directory(mode, self.ip, self.ip_is_client)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
