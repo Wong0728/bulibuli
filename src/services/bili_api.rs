@@ -82,6 +82,9 @@ pub struct BiliApi {
     video_list_cache: Arc<RwLock<HashMap<VideoListCacheKey, (UserVideosPage, Instant)>>>,
     video_info_cache: Arc<RwLock<HashMap<VideoInfoCacheKey, (VideoInfo, Instant)>>>,
     qrcode_sessions: Arc<Mutex<HashMap<String, QrCodeSession>>>,
+    /// 系统事件（bili:risk-control / bili:auth-expired）上次推送时刻，用于节流：
+    /// 风控持续期间每条失败请求都推送，会让前端同一个弹窗反复重开。
+    last_system_notice: Arc<RwLock<HashMap<&'static str, Instant>>>,
 }
 
 impl BiliApi {
@@ -136,6 +139,7 @@ impl BiliApi {
             video_list_cache: Arc::new(RwLock::new(HashMap::new())),
             video_info_cache: Arc::new(RwLock::new(HashMap::new())),
             qrcode_sessions: Arc::new(Mutex::new(HashMap::new())),
+            last_system_notice: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 

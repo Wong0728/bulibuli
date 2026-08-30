@@ -13,6 +13,10 @@ use tracing::{debug, warn};
 
 const MAX_API_JSON_BYTES: usize = 2 * 1024 * 1024;
 
+/// 同一系统事件的最小通知间隔。风控/登录失效期间每条失败请求都会触发通知，
+/// 而前端 `showSystemModal` 会用同标题顶掉旧弹窗——不加节流用户既读不完也关不掉。
+const SYSTEM_NOTICE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
 use super::models::{BiliEnvelope, RiskControlData};
 use super::BiliApi;
 
@@ -24,7 +28,8 @@ impl BiliApi {
     pub(super) async fn get_wbi_keys(&self, enriched_cookies: &str) -> Result<(String, String)> {
         // WBI keys 来自 api.bilibili.com，必须走严格 TLS 的 api_client。
         const NAV_URL: &str = "https://api.bilibili.com/x/web-interface/nav";
-        self.wbi_keys
+        let result = self
+            .wbi_keys
             .get(|| async {
                 // nav 请求复用统一请求管线（限流在发送处统一扣减、网络重试、
                 // 超时与请求头均与其他 B站 API 一致），不再绕过重试直连。
@@ -34,7 +39,18 @@ impl BiliApi {
                     .await;
                 self.send_with_retry(request).await
             })
-            .await
+            .await;
+        // WbiKeysCache 只负责分类与失效，拿不到 ws：登录态在签名环节失效（nav -101/-352）
+        // 时前端收不到 bili:auth-expired，表现就是"什么都拉不到"却毫无提示。
+        if let Some(error) = result
+            .as_ref()
+            .err()
+            .and_then(|e| e.downcast_ref::<BiliApiError>())
+        {
+            self.notify_bili_error(error, &serde_json::Value::Null)
+                .await;
+        }
+        result
     }
 
     /// 公开 WBI keys 获取方法，供 DanmakuService 等复用。
@@ -185,18 +201,20 @@ impl BiliApi {
                     // 重试后仍 429：持续限流，放弃并通过既有风控事件通道提示用户，
                     // 而不是让业务静默失败。
                     warn!("B站 API 重试后仍触发 429，放弃重试并推送风控提示");
-                    if let Err(notify_error) = self
-                        .ws
-                        .broadcast_system(
-                            "bili:risk-control",
-                            json!({
-                                "code": 429,
-                                "message": "触发 B 站限流，请稍后再试"
-                            }),
-                        )
-                        .await
-                    {
-                        warn!("推送 B站限流提示事件失败: {notify_error}");
+                    if self.system_notice_due("bili:risk-control").await {
+                        if let Err(notify_error) = self
+                            .ws
+                            .broadcast_system(
+                                "bili:risk-control",
+                                json!({
+                                    "code": 429,
+                                    "message": "触发 B 站限流，请稍后再试"
+                                }),
+                            )
+                            .await
+                        {
+                            warn!("推送 B站限流提示事件失败: {notify_error}");
+                        }
                     }
                     return Ok(response);
                 }
@@ -322,9 +340,18 @@ impl BiliApi {
             return Err(error.into());
         }
         if !content_type.is_empty() && !content_type.contains("json") {
-            return Err(anyhow!(
-                "B站 API {api_name} 返回非 JSON Content-Type {content_type}"
-            ));
+            // HTTP 200 + 非 JSON：B 站风控拦截页（HTML）。此前只抛裸 anyhow，既不分类
+            // 也不推事件，前端毫无提示，表现就是"莫名其妙什么都拉不到"。
+            self.wbi_keys.invalidate().await;
+            let error = BiliApiError::classify(
+                -412,
+                format!("B站 API {api_name} 返回非 JSON Content-Type {content_type}"),
+            );
+            if notify {
+                self.notify_bili_error(&error, &serde_json::Value::Null)
+                    .await;
+            }
+            return Err(error.into());
         }
         if let Some(host) = host.as_deref().filter(|host| is_cdn_host(host)) {
             self.bad_cdns.record_success(host).await;
@@ -355,6 +382,19 @@ impl BiliApi {
         Err(error.into())
     }
 
+    /// 同一系统事件在 `SYSTEM_NOTICE_COOLDOWN` 内只允许推送一次。
+    async fn system_notice_due(&self, event: &'static str) -> bool {
+        let mut notices = self.last_system_notice.write().await;
+        if notices
+            .get(event)
+            .is_some_and(|at| at.elapsed() < SYSTEM_NOTICE_COOLDOWN)
+        {
+            return false;
+        }
+        notices.insert(event, std::time::Instant::now());
+        true
+    }
+
     pub(super) async fn notify_bili_error(&self, error: &BiliApiError, data: &serde_json::Value) {
         let event = match error.kind {
             BiliErrorKind::RiskControl => Some("bili:risk-control"),
@@ -364,6 +404,9 @@ impl BiliApi {
         let Some(event) = event else {
             return;
         };
+        if !self.system_notice_due(event).await {
+            return;
+        }
         let mut payload = json!({ "code": error.code, "message": error.message });
         if matches!(error.kind, BiliErrorKind::RiskControl) {
             if let Ok(risk) = serde_json::from_value::<RiskControlData>(data.clone()) {
