@@ -222,14 +222,6 @@ export const useAppStore = defineStore('app', () => {
 
   // 博主日志不走 WS/兜底轮询：TabAuto 选中博主后自带 /api/logs/blogger 的 2s HTTP 轮询。
 
-  function startFallbackPolling() {
-    startProgressPolling();
-  }
-
-  function stopFallbackPolling() {
-    stopProgressPolling();
-  }
-
   // --- 下载终态 toast + 防抖刷看板（core.js:342-377 对齐） ---
   /** 任务状态内存表（老框架 manualDownloadProgress 的终态判断部分）。 */
   const lastProgressStatus = new Map<string, string>();
@@ -274,7 +266,7 @@ export const useAppStore = defineStore('app', () => {
       serverStatus.value = 'connected';
       socket?.emit('download:subscribe');
       // WS 已连接，停止 HTTP 轮询回退（老框架 core.js connect）。
-      stopFallbackPolling();
+      stopProgressPolling();
     });
 
     socket.on('disconnect', () => {
@@ -283,7 +275,7 @@ export const useAppStore = defineStore('app', () => {
       // 主动断开（会话注销/退出）不启动兜底轮询。
       if (socketIntentionallyClosed) return;
       // WS 断开，启动 HTTP 轮询回退（老框架 core.js disconnect）。
-      startFallbackPolling();
+      startProgressPolling();
     });
 
     socket.on('connect_error', () => {
@@ -400,12 +392,12 @@ export const useAppStore = defineStore('app', () => {
 
     // 启动即开启兜底轮询（对齐老框架 bootstrap 的 startProgressUpdates）；
     // WS 首次连接成功后由 connect 处理器停止。
-    startFallbackPolling();
+    startProgressPolling();
   }
 
   function disconnectSocket() {
     socketIntentionallyClosed = true;
-    stopFallbackPolling();
+    stopProgressPolling();
     socket?.disconnect();
     socket = null;
     wsConnected.value = false;
@@ -433,7 +425,7 @@ export const useAppStore = defineStore('app', () => {
     });
     window.addEventListener('beforeunload', () => {
       // 对齐老框架 core.js beforeunload：停轮询 + 断开 WS。
-      stopFallbackPolling();
+      stopProgressPolling();
       socket?.disconnect();
     });
   }
