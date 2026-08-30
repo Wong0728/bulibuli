@@ -37,6 +37,24 @@ bulibuli ctl sys status
 
 输出中的 `active_mode`、`configured_mode` 和 `restart_required` 应一起判断；`mode` 字段保留为当前 active 模式以兼容旧脚本。
 
+### Proxy 模式下的客户端地址
+
+`proxy` 模式下服务只绑定 `127.0.0.1`，TCP 对端永远是本机反向代理，因此服务端**默认不信任**
+`x-forwarded-for`。要让按 IP 的策略生效，必须显式设置：
+
+```text
+BILI__TRUST_PROXY_HEADERS=true
+```
+
+并且反向代理必须**覆盖**（而非透传追加）`x-forwarded-for`，否则客户端可以伪造来源地址。
+未设置该变量时：
+
+- 「打开所在目录」与绝对路径显示一律拒绝——即使解析出的地址是 `127.0.0.1`，它代表的也是
+  反代而不是发起请求的设备；
+- 若已配置 `access_rules` 或开启 `geo cn`，这些按 IP 的限制无法求值，请求会被直接拒绝
+  （403）并记一条 WARN，提示去设置该环境变量；
+- 未配置任何按 IP 的限制时，访问照常放行，由反向代理自身负责准入。
+
 ## 备份与恢复
 
 ### 数据库快照

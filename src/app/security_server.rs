@@ -482,6 +482,20 @@ async fn enforce_request_security(
             Ok(value) => value,
             Err(response) => return response,
         };
+    if !ip_is_client && config.ip_policy_configured() {
+        // 按 IP 的限制性规则需要真实客户端地址才能求值。这里不静默按反代的回环地址
+        // 放行（那会让 access_rules / geo_cn 悄悄失效），也不对未配置任何限制的默认
+        // 反代部署报错——那种情况本就没有"被忽略的意图"。
+        tracing::warn!(
+            %client_ip,
+            "Proxy 模式已配置按 IP 的访问规则或地理限制，但未信任 x-forwarded-for，无法求值，请求已拒绝"
+        );
+        return api_error(
+            StatusCode::FORBIDDEN,
+            403,
+            "已配置按 IP 的访问规则/地理限制，但 Proxy 模式拿不到真实客户端地址：请设置 BILI__TRUST_PROXY_HEADERS=true，并保证反向代理覆盖（而非透传）x-forwarded-for",
+        );
+    }
     let (allowed, explicit_allow) = config.client_allowed(client_ip);
     if !allowed {
         return api_error(StatusCode::FORBIDDEN, 403, "当前来源已被访问策略拒绝");
@@ -501,7 +515,7 @@ async fn enforce_request_security(
 
     let path = request.uri().path().to_string();
     let public = is_public_path(&path);
-    let bypassed_auth = config.should_bypass_auth(client_ip);
+    let bypassed_auth = config.should_bypass_auth(client_ip, ip_is_client);
     let mut session = None;
     if !public {
         if bypassed_auth {

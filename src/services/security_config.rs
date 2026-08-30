@@ -144,8 +144,20 @@ impl SecurityConfig {
         Ok(())
     }
 
-    pub fn should_bypass_auth(&self, ip: IpAddr) -> bool {
-        self.auth_bypass_ips.contains(&ip)
+    pub fn should_bypass_auth(&self, ip: IpAddr, ip_is_client: bool) -> bool {
+        // 免凭证白名单只按真实客户端地址命中：Proxy 模式不信任 x-forwarded-for 时
+        // ip 是本机反代的回环地址，据此放行等于任意远程设备免凭证拿到 Owner。
+        ip_is_client && self.auth_bypass_ips.contains(&ip)
+    }
+
+    /// 是否存在「按 IP 的限制性配置」——即一旦拿不到真实客户端地址就无法兑现的操作者意图。
+    ///
+    /// 注意 `access_default == Deny` **不**计入：它是出厂默认值（首次运行自动生成的
+    /// security.toml 就写入 deny），无法与「操作者显式选择 deny」区分，计入会让所有未设置
+    /// BILI__TRUST_PROXY_HEADERS 的反代部署直接不可用。
+    pub fn ip_policy_configured(&self) -> bool {
+        let now = Utc::now().timestamp();
+        self.geo_cn || self.access_rules.iter().any(|rule| rule.active(now))
     }
 
     pub fn client_allowed(&self, ip: IpAddr) -> (bool, bool) {
@@ -506,10 +518,48 @@ mod tests {
 
         config.auth_bypass_ips = vec!["192.0.2.10".parse().expect("ip")];
         assert!(config.validate().is_ok());
-        assert!(config.should_bypass_auth("192.0.2.10".parse().expect("ip")));
+        assert!(config.should_bypass_auth("192.0.2.10".parse().expect("ip"), true));
+        // 地址不代表真实客户端（Proxy 模式未信任 XFF）时白名单一律不命中。
+        assert!(!config.should_bypass_auth("192.0.2.10".parse().expect("ip"), false));
 
         config.auth_bypass_ips = vec!["0.0.0.0".parse().expect("ip")];
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn ip_policy_configured_only_counts_explicit_restrictions() {
+        let config = SecurityConfig::default();
+        // 出厂默认只有 access_default=Deny，无法与"操作者显式选择"区分，不算已配策略：
+        // 计入会让未设 BILI__TRUST_PROXY_HEADERS 的反代部署全部 403。
+        assert!(!config.ip_policy_configured());
+
+        let with_rule = SecurityConfig {
+            access_rules: vec![AccessRule {
+                id: "allow-lan".to_string(),
+                network: "192.168.1.0/24".parse().expect("lan"),
+                action: AccessAction::Allow,
+                expires_at: None,
+            }],
+            ..Default::default()
+        };
+        assert!(with_rule.ip_policy_configured());
+
+        let expired = SecurityConfig {
+            access_rules: vec![AccessRule {
+                id: "gone".to_string(),
+                network: "192.168.1.0/24".parse().expect("lan"),
+                action: AccessAction::Allow,
+                expires_at: Some(Utc::now().timestamp() - 60),
+            }],
+            ..Default::default()
+        };
+        assert!(!expired.ip_policy_configured());
+
+        let with_geo = SecurityConfig {
+            geo_cn: true,
+            ..Default::default()
+        };
+        assert!(with_geo.ip_policy_configured());
     }
 
     #[tokio::test]
