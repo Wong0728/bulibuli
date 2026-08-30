@@ -145,7 +145,11 @@ async fn inject_setup_session(
     next: Next,
 ) -> Response {
     let ip = inject_setup_client_info(&mut request);
-    let token = crate::api::auth::session_cookie(request.headers()).unwrap_or_default();
+    let token = crate::api::auth::session_cookie(
+        request.headers(),
+        state.bili.security.current().mode == crate::services::security_config::AccessMode::Proxy,
+    )
+    .unwrap_or_default();
     let session = state
         .bili
         .auth

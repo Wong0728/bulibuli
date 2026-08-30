@@ -36,7 +36,8 @@ struct CoverQuery {
 /// （该函数未导出且所属模块正被并行修改，这里镜像一份保持单一语义）：
 /// BV + 10 位 base58 字符（去 0/O/I/l）。在进入 DB 查询、目录扫描和
 /// 封面落盘前先行拦截，防止恶意 bvid 构造文件名注入或路径穿越。
-fn is_valid_bvid(bvid: &str) -> bool {
+/// `api/video/cover.rs` 的下载落盘共用此函数，避免两处入口口径漂移。
+pub(crate) fn is_valid_bvid(bvid: &str) -> bool {
     bvid.len() == 12
         && bvid.starts_with("BV")
         && bvid[2..]

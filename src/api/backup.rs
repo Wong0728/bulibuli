@@ -30,6 +30,9 @@ pub fn router() -> Router<SharedState> {
 async fn backup(State(state): State<SharedState>) -> Result<Json<ApiResponse<Value>>, AppError> {
     let dir = state.infra.paths.data_dir.join("backups");
     tokio::fs::create_dir_all(&dir).await?;
+    // 备份目录含数据库快照与（完整备份时）密钥、security.toml：权限自己设定，
+    // 不依赖部署 umask。
+    crate::config::enforce_private_dir(&dir)?;
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let target = dir.join(format!("{BACKUP_PREFIX}{timestamp}.db"));
     // SQLite 要求 VACUUM INTO 的目标文件不存在；同秒重复请求时提前给出可读错误。
@@ -68,6 +71,9 @@ async fn full_backup(
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let dir = state.infra.paths.data_dir.join("backups");
     tokio::fs::create_dir_all(&dir).await?;
+    // 备份目录含数据库快照与（完整备份时）密钥、security.toml：权限自己设定，
+    // 不依赖部署 umask。
+    crate::config::enforce_private_dir(&dir)?;
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let target = dir.join(format!("{FULL_BACKUP_PREFIX}{timestamp}"));
     if target.exists() {

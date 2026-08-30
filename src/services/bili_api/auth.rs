@@ -8,6 +8,9 @@ use tracing::debug;
 use super::models::auth::{NavData, NavStatus, QrcodeGenerate, QrcodePoll, QrcodePollData};
 use super::BiliApi;
 
+/// 扫码会话在内存表中的最长驻留时间：B 站二维码本身约 3 分钟过期，留 5 分钟余量。
+const QR_SESSION_TTL: Duration = Duration::from_secs(5 * 60);
+
 impl BiliApi {
     /// 获取当前登录态信息（头像/昵称/大会员/等级），基于 /x/web-interface/nav。
     /// 未登录时返回 `NavStatus { is_login: false, .. }`（B 站对未登录 Cookie 常返回 -101，
@@ -56,10 +59,10 @@ impl BiliApi {
             .parse_data::<QrcodeGenerate>(resp, "get_qrcode_url")
             .await?;
         if !result.qrcode_key.is_empty() {
-            self.qrcode_sessions
-                .lock()
-                .await
-                .insert(result.qrcode_key.clone(), (HashMap::new(), Instant::now()));
+            let mut sessions = self.qrcode_sessions.lock().await;
+            // 此前只有 poll 路径会清理：生成后不再轮询的会话会永久驻留。
+            sessions.retain(|_, (_, created_at)| created_at.elapsed() < QR_SESSION_TTL);
+            sessions.insert(result.qrcode_key.clone(), (HashMap::new(), Instant::now()));
         }
         Ok(result)
     }
@@ -100,14 +103,14 @@ impl BiliApi {
         let mut sessions = self.qrcode_sessions.lock().await;
         if sessions
             .get(qrcode_key)
-            .is_some_and(|(_, created_at)| created_at.elapsed() >= Duration::from_secs(5 * 60))
+            .is_some_and(|(_, created_at)| created_at.elapsed() >= QR_SESSION_TTL)
         {
             sessions.remove(qrcode_key);
         }
         let entry = sessions
             .entry(qrcode_key.to_string())
             .or_insert_with(|| (HashMap::new(), Instant::now()));
-        if entry.1.elapsed() >= Duration::from_secs(5 * 60) {
+        if entry.1.elapsed() >= QR_SESSION_TTL {
             entry.0.clear();
             entry.1 = Instant::now();
         }

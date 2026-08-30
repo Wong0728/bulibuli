@@ -26,6 +26,11 @@ pub fn router() -> Router<SharedState> {
         )
 }
 
+/// 会话 Cookie 名：Proxy 模式使用带 `__Host-` 前缀的名字（浏览器会强制
+/// Secure + Path=/ + 无 Domain），其它模式使用普通名字。
+const HOST_SESSION_NAME: &str = "__Host-bili-session";
+const SESSION_NAME: &str = "bili-session";
+
 #[derive(Deserialize)]
 struct PairRequest {
     code: String,
@@ -38,7 +43,11 @@ async fn auth_state(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let pairing = state.bili.auth.pairing_state().await;
-    let token = session_cookie(&headers).unwrap_or_default();
+    let token = session_cookie(
+        &headers,
+        state.bili.security.current().mode == AccessMode::Proxy,
+    )
+    .unwrap_or_default();
     let session = state.bili.auth.authenticate(&token, client.ip).await?;
     if session.is_none() {
         // 未认证访问：限流探测，抑制远程枚举配对窗口（已配对设备不受影响）。
@@ -150,12 +159,37 @@ async fn logout(
     Ok(response)
 }
 
-pub(crate) fn session_cookie(headers: &HeaderMap) -> Option<String> {
+/// 读取会话 Cookie。`proxy` 为当前访问模式是否为 Proxy——该模式下发的是
+/// `__Host-bili-session`，其它模式是 `bili-session`。
+///
+/// 优先取与模式匹配的名字：否则任何能在父域种 `bili-session` 的子站（反代域名下的
+/// 其它站点）都能遮蔽合法会话，把请求固定到攻击者的会话上。只有在缺少匹配名字时才
+/// 回退到另一个，避免模式切换后旧 Cookie 直接失效、迫使已配对设备重新走配对。
+pub(crate) fn session_cookie(headers: &HeaderMap, proxy: bool) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
-    raw.split(';').find_map(|part| {
-        let (name, value) = part.trim().split_once('=')?;
-        matches!(name, "__Host-bili-session" | "bili-session").then(|| value.to_string())
-    })
+    let preferred = if proxy {
+        HOST_SESSION_NAME
+    } else {
+        SESSION_NAME
+    };
+    let fallback = if proxy {
+        SESSION_NAME
+    } else {
+        HOST_SESSION_NAME
+    };
+    let mut fallback_value = None;
+    for part in raw.split(';') {
+        let Some((name, value)) = part.trim().split_once('=') else {
+            continue;
+        };
+        if name == preferred {
+            return Some(value.to_string());
+        }
+        if name == fallback {
+            fallback_value = Some(value.to_string());
+        }
+    }
+    fallback_value
 }
 
 pub(crate) fn set_session_cookie(
@@ -165,9 +199,9 @@ pub(crate) fn set_session_cookie(
 ) -> Result<(), AppError> {
     let proxy = state.security.current().mode == AccessMode::Proxy;
     let name = if proxy {
-        "__Host-bili-session"
+        HOST_SESSION_NAME
     } else {
-        "bili-session"
+        SESSION_NAME
     };
     let secure = if proxy { "; Secure" } else { "" };
     let value =
@@ -195,4 +229,49 @@ fn clear_session_cookies(response: &mut Response) -> Result<(), AppError> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{session_cookie, HOST_SESSION_NAME, SESSION_NAME};
+    use axum::http::{header::COOKIE, HeaderMap};
+
+    fn cookie_headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let raw = pairs
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let mut headers = HeaderMap::new();
+        headers.insert(COOKIE, raw.parse().expect("cookie header"));
+        headers
+    }
+
+    #[test]
+    fn mode_matching_cookie_wins_regardless_of_order() {
+        // 遮蔽攻击：父域其它子站能种 `bili-session`，它排在合法 Cookie 之前也不能生效。
+        let headers = cookie_headers(&[(SESSION_NAME, "planted"), (HOST_SESSION_NAME, "owner")]);
+        assert_eq!(
+            session_cookie(&headers, true).as_deref(),
+            Some("owner"),
+            "Proxy 模式必须优先 __Host- 名字"
+        );
+        let reversed = cookie_headers(&[(HOST_SESSION_NAME, "owner"), (SESSION_NAME, "planted")]);
+        assert_eq!(session_cookie(&reversed, true).as_deref(), Some("owner"));
+        assert_eq!(session_cookie(&headers, false).as_deref(), Some("planted"));
+    }
+
+    #[test]
+    fn other_name_only_used_as_fallback_after_mode_switch() {
+        // 模式切换（需要重启）后旧 Cookie 不应立刻失效、迫使已配对设备重新配对。
+        let only_plain = cookie_headers(&[(SESSION_NAME, "token")]);
+        assert_eq!(session_cookie(&only_plain, true).as_deref(), Some("token"));
+        let only_host = cookie_headers(&[(HOST_SESSION_NAME, "token")]);
+        assert_eq!(session_cookie(&only_host, false).as_deref(), Some("token"));
+        assert_eq!(session_cookie(&HeaderMap::new(), false), None);
+        assert_eq!(
+            session_cookie(&cookie_headers(&[("other", "x")]), false).as_deref(),
+            None
+        );
+    }
 }

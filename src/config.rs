@@ -231,15 +231,26 @@ pub fn load_config() -> Result<(AppConfig, AppPaths)> {
     let paths = AppPaths::new(&app_config)?;
     std::fs::create_dir_all(&paths.database_dir).context("创建数据库目录失败")?;
     std::fs::create_dir_all(&paths.download_dir).context("创建下载目录失败")?;
+    // data_dir 也要收紧：完整备份会把 .secret-store.key 与 security.toml 复制进
+    // data/backups，只收 database/download 两个子目录会留下宽松权限的密钥落盘面。
+    for directory in [&paths.data_dir, &paths.database_dir, &paths.download_dir] {
+        enforce_private_dir(directory)?;
+    }
+    Ok((app_config, paths))
+}
+
+/// 将目录权限收紧为仅属主可读写进入（0700），不依赖部署 umask。
+/// 密钥文件、security.toml 与完整备份都落在这类目录里。
+pub(crate) fn enforce_private_dir(path: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        for directory in [&paths.database_dir, &paths.download_dir] {
-            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
-                .with_context(|| format!("设置目录权限失败: {}", directory.display()))?;
-        }
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("设置目录权限失败: {}", path.display()))?;
     }
-    Ok((app_config, paths))
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn apply_environment_overrides(config: &mut AppConfig) -> Result<()> {

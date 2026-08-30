@@ -444,7 +444,11 @@ async fn index(
     Extension(client): Extension<ClientInfo>,
     headers: HeaderMap,
 ) -> Response {
-    let token = session_cookie(&headers).unwrap_or_default();
+    let token = session_cookie(
+        &headers,
+        state.bili.security.current().mode == AccessMode::Proxy,
+    )
+    .unwrap_or_default();
     let session = match state.bili.auth.authenticate(&token, client.ip).await {
         Ok(value) => value,
         Err(error) => return error.into_response(),
@@ -529,7 +533,8 @@ async fn enforce_request_security(
             request.extensions_mut().insert(Some(value.clone()));
             session = Some(value);
         } else {
-            let token = session_cookie(request.headers()).unwrap_or_default();
+            let token = session_cookie(request.headers(), config.mode == AccessMode::Proxy)
+                .unwrap_or_default();
             match state.bili.auth.authenticate(&token, client_ip).await {
                 Ok(Some(value)) => {
                     if let Err(response) = authorize_session(&request, &value) {

@@ -155,8 +155,10 @@ pub(super) async fn download_cover(
     Json(request): Json<DownloadCoverRequest>,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let bvid = request.bvid.trim();
-    if bvid.is_empty() {
-        return Err(AppError::BadRequest("请提供视频BV号".to_string()));
+    if !crate::api::cover::is_valid_bvid(bvid) {
+        // bvid 直接参与封面文件名拼接：只查非空等于把防线寄托在"B 站会拒绝畸形 bvid"
+        // 这个上游行为上，与 GET /api/cover/{bvid} 的校验口径不一致。
+        return Err(AppError::BadRequest("视频BV号格式无效".to_string()));
     }
     let cookies = state.infra.settings_service.cookie_header().await?;
     let info = state.bili.bili_api.get_video_info(bvid, &cookies).await?;
