@@ -220,7 +220,7 @@ pub(super) async fn get_videos(
     let result = state
         .bili
         .bili_api
-        .get_user_videos_page(uid_int, &cookies, page, limit)
+        .get_user_videos_page(uid_int, &cookies, page, limit, false)
         .await?;
     info!(
         "[API] /api/video/get-videos 成功: uid={}, 返回视频数={}",

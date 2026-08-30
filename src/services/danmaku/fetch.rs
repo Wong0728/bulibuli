@@ -74,11 +74,15 @@ impl DanmakuService {
         cookies: &HashMap<String, String>,
     ) -> Result<(Vec<Value>, usize, usize, Vec<usize>, bool)> {
         // 先合并设备指纹，再获取 WBI keys：nav 接口在新风控下要求携带登录态 Cookie
-        let enriched = self
-            .cookie_manager
-            .enrich(&cookie_header(cookies))
-            .await
-            .unwrap_or_else(|_| cookie_header(cookies));
+        let enriched = match self.cookie_manager.enrich(&cookie_header(cookies)).await {
+            Ok(value) => value,
+            Err(error) => {
+                // 无设备指纹的冷设备极易命中 -352，降级必须留痕，
+                // 否则前端只看到一个没有原因的 partial。
+                warn!("合并设备指纹失败，降级为无指纹 Cookie 继续拉取: {error}");
+                cookie_header(cookies)
+            }
+        };
         let (img_key, sub_key) = self.bili_api.get_wbi_keys_public(&enriched).await?;
         let referer = format!("https://www.bilibili.com/video/{bvid}");
 
@@ -110,7 +114,11 @@ impl DanmakuService {
             {
                 Ok(resp) => {
                     if !resp.status().is_success() {
-                        warn!("弹幕分段 {index} HTTP {} 失败", resp.status());
+                        let status = resp.status().as_u16();
+                        warn!("弹幕分段 {index} HTTP {status} 失败");
+                        self.bili_api
+                            .notify_http_status("danmaku_seg", status)
+                            .await;
                         continue;
                     }
                     match read_limited_response(resp, MAX_DANMAKU_SEGMENT_BYTES).await {

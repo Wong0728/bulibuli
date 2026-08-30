@@ -162,6 +162,39 @@ impl BiliApi {
             .await
     }
 
+    /// 按调用类别选择限流桶：后台批量扫描（监控轮询、博主资料刷新）不得占用
+    /// 交互请求配额，否则扫描密集期用户的搜索/刷新会在 5rps 队列后面排队到超时。
+    /// 注意 WBI keys 仍走前台桶——它有 30 分钟缓存，摊薄后可忽略。
+    pub(super) async fn send_classed(
+        &self,
+        request: RequestBuilder,
+        background: bool,
+    ) -> Result<reqwest::Response> {
+        if background {
+            self.send_with_retry_limited(request, &self.background_rate_limiter)
+                .await
+        } else {
+            self.send_with_retry(request).await
+        }
+    }
+
+    /// 供不走统一 JSON 信封的接口（protobuf / 二进制流）把 HTTP 层风控与登录态
+    /// 信号送回前端：这些响应不会被 `read_envelope` 解析，否则前端只能看到 partial。
+    pub async fn notify_http_status(&self, api_name: &str, status: u16) {
+        let code = match status {
+            401 => -101,
+            403 | 412 => -403,
+            429 => 429,
+            _ => return,
+        };
+        let error = BiliApiError::classify(code, format!("{api_name} HTTP {status}"));
+        if matches!(error.kind, BiliErrorKind::RiskControl) {
+            self.wbi_keys.invalidate().await;
+        }
+        self.notify_bili_error(&error, &serde_json::Value::Null)
+            .await;
+    }
+
     /// 带自定义限流器的重试发送。
     ///
     /// 限流配额**只在真正发送处扣减一次**（构建请求不扣减），

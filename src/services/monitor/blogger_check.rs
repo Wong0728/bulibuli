@@ -81,7 +81,7 @@ impl MonitorService {
         let (first_page, first_size) = pages[0];
         let result = self
             .bili_api
-            .get_user_videos_page(uid_i64, &cookies, first_page, first_size)
+            .get_user_videos_page(uid_i64, &cookies, first_page, first_size, true)
             .await;
         let result = match result {
             Ok(page) => page,
@@ -118,7 +118,7 @@ impl MonitorService {
             }
             let page_result = self
                 .bili_api
-                .get_user_videos_page(uid_i64, &cookies, page, page_size)
+                .get_user_videos_page(uid_i64, &cookies, page, page_size, true)
                 .await?;
             let page_videos = page_result.videos;
             if page_videos.is_empty() {
@@ -362,7 +362,7 @@ impl MonitorService {
             }
         };
         let cookies = self.get_cookies_for_blogger(uid).await;
-        let info = match self.bili_api.get_user_info(uid_i64, &cookies).await {
+        let info = match self.bili_api.get_user_info(uid_i64, &cookies, true).await {
             Ok(v) => v,
             Err(e) => {
                 warn!("博主资料变更检测失败: uid={}, error={}", uid, e);

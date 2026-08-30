@@ -1020,20 +1020,24 @@ async fn blg_add(state: &SharedState, args: &[String]) -> AppResult<Value> {
     }
 
     // 拉取资料（失败时回退到空资料，不阻断添加）
-    let (name, face, sign, level, fans) =
-        match state.bili.bili_api.get_user_info(uid_i64, &cookies).await {
-            Ok(profile) => (
-                Some(profile.name).filter(|s| !s.is_empty()),
-                Some(profile.face).filter(|s| !s.is_empty()),
-                Some(profile.sign).filter(|s| !s.is_empty()),
-                Some(profile.level as i32),
-                Some(profile.fans),
-            ),
-            Err(error) => {
-                tracing::warn!(uid, %error, "blg add 拉取资料失败，使用兜底信息");
-                (None, None, None, None, None)
-            }
-        };
+    let (name, face, sign, level, fans) = match state
+        .bili
+        .bili_api
+        .get_user_info(uid_i64, &cookies, false)
+        .await
+    {
+        Ok(profile) => (
+            Some(profile.name).filter(|s| !s.is_empty()),
+            Some(profile.face).filter(|s| !s.is_empty()),
+            Some(profile.sign).filter(|s| !s.is_empty()),
+            Some(profile.level as i32),
+            Some(profile.fans),
+        ),
+        Err(error) => {
+            tracing::warn!(uid, %error, "blg add 拉取资料失败，使用兜底信息");
+            (None, None, None, None, None)
+        }
+    };
 
     let ctx = ctl_audit_ctx(
         &format!("blg add {uid}"),
@@ -1388,11 +1392,11 @@ async fn sys_refresh(state: &SharedState, args: &[String]) -> AppResult<Value> {
                 None,
                 None,
                 move |_| async move {
-                    let n = refresh
+                    let outcome = refresh
                         .trigger_l1()
                         .await
                         .map_err(|e| AppError::Internal(format!("触发 board 刷新失败: {e}")))?;
-                    Ok(json!({"scope": "board", "triggered": n}))
+                    Ok(json!({"scope": "board", "triggered": outcome.refreshed, "skipped": outcome.skipped}))
                 },
             )
             .await?;
@@ -1414,11 +1418,11 @@ async fn sys_refresh(state: &SharedState, args: &[String]) -> AppResult<Value> {
                 None,
                 None,
                 move |_| async move {
-                    let n = refresh
+                    let outcome = refresh
                         .trigger_l2()
                         .await
                         .map_err(|e| AppError::Internal(format!("触发 blogger 刷新失败: {e}")))?;
-                    Ok(json!({"scope": "blogger", "triggered": n}))
+                    Ok(json!({"scope": "blogger", "triggered": outcome.refreshed, "skipped": outcome.skipped}))
                 },
             )
             .await?;

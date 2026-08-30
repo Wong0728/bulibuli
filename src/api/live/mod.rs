@@ -114,7 +114,7 @@ async fn room_info(
     let profile = state
         .bili
         .bili_api
-        .get_user_info(init.uid, &cookies)
+        .get_user_info(init.uid, &cookies, false)
         .await
         .ok();
     let recording = state.media.live_recorder.status(init.room_id).await;
@@ -421,7 +421,7 @@ async fn add_source(
     let profile = state
         .bili
         .bili_api
-        .get_user_info(init.uid, &cookies)
+        .get_user_info(init.uid, &cookies, false)
         .await
         .ok();
     let source = state

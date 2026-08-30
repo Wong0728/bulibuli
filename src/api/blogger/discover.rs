@@ -62,7 +62,11 @@ pub(super) async fn validate_uid(
         .await
         .unwrap_or_default();
     // `get_user_info` 成功即表示 UID 存在（exists=true）；不存在或风控错误直接上抛。
-    let profile = state.bili.bili_api.get_user_info(q.uid, &cookies).await?;
+    let profile = state
+        .bili
+        .bili_api
+        .get_user_info(q.uid, &cookies, false)
+        .await?;
     info!("博主 UID {} 校验成功: name={}", q.uid, profile.name);
     Ok(Json(ApiResponse::success(serde_json::to_value(profile)?)))
 }

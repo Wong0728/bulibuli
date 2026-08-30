@@ -19,12 +19,15 @@ impl BiliApi {
     ///
     /// 内置 30 秒 TTL 内存缓存：相同 (UID, page, page_size) 的查询在缓存有效期内
     /// 直接返回，避免短时间内重复发起 HTTP 请求。
+    ///
+    /// `background = true` 表示监控/刷新等批量扫描，请求扣后台限流桶而非交互桶。
     pub async fn get_user_videos_page(
         &self,
         uid: i64,
         cookies: &str,
         page: i32,
         page_size: i32,
+        background: bool,
     ) -> Result<UserVideosPage> {
         let cache_key: VideoListCacheKey = (session_fingerprint(cookies), uid, page, page_size);
 
@@ -66,7 +69,7 @@ impl BiliApi {
         let request = self
             .build_get_request(url, &params, &referer, &enriched)
             .await;
-        let resp = self.send_with_retry(request).await?;
+        let resp = self.send_classed(request, background).await?;
         let data: ArcSearchData = self.parse_data(resp, "get_user_videos").await?;
         let videos: Vec<UserVideo> = data.list.vlist.into_iter().map(UserVideo::from).collect();
         let result = UserVideosPage {
@@ -283,7 +286,14 @@ impl BiliApi {
     }
 
     /// 按 UID 获取用户信息（用于添加博主时的 UID 校验）。
-    pub async fn get_user_info(&self, uid: i64, cookies: &str) -> Result<UserProfile> {
+    ///
+    /// `background = true` 时两次请求（acc/info、relation/stat）都扣后台限流桶。
+    pub async fn get_user_info(
+        &self,
+        uid: i64,
+        cookies: &str,
+        background: bool,
+    ) -> Result<UserProfile> {
         let enriched = self.enrich_cookies(cookies).await?;
         let (img_key, sub_key) = self.get_wbi_keys(&enriched).await?;
         let mut params = HashMap::new();
@@ -297,7 +307,7 @@ impl BiliApi {
         let request = self
             .build_get_request(url, &params, &referer, &enriched)
             .await;
-        let resp = self.send_with_retry(request).await?;
+        let resp = self.send_classed(request, background).await?;
         let info: AccInfo = self.parse_data(resp, "get_user_info").await?;
         let face = normalize_image_url(&info.face);
 
@@ -313,7 +323,7 @@ impl BiliApi {
             let request = self
                 .build_get_request(stat_url, &stat_params, &referer, &enriched)
                 .await;
-            match self.send_with_retry(request).await {
+            match self.send_classed(request, background).await {
                 Ok(resp) => match self
                     .parse_data::<RelationStat>(resp, "get_relation_stat")
                     .await

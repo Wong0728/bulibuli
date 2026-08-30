@@ -116,6 +116,32 @@ pub struct RefreshService {
     l1_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     l2_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     cancellation: CancellationToken,
+    /// 与 L1/L2 worker 共用的风险闸门：手动触发也必须过它。
+    gate: RefreshGate,
+    /// 手动刷新单飞标记：连点不再叠出多轮全量 sweep。
+    manual_busy: Arc<AtomicBool>,
+}
+
+/// 手动可触发的两类全量扫描。
+enum ManualSweep {
+    Board,
+    Bloggers,
+}
+
+/// 手动刷新的结果。`skipped` 说明本轮被主动跳过的原因——跳过不是失败，
+/// 但只回一个 0 会让前端显示"已刷新 0 条"，用户不知道发生了什么。
+pub struct ManualRefreshOutcome {
+    pub refreshed: usize,
+    pub skipped: Option<&'static str>,
+}
+
+/// 释放手动刷新单飞标记；`?` 提前返回时同样要释放。
+struct ManualRefreshGuard(Arc<AtomicBool>);
+
+impl Drop for ManualRefreshGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 impl RefreshService {
@@ -132,14 +158,15 @@ impl RefreshService {
             l1_handle: Arc::new(tokio::sync::Mutex::new(None)),
             l2_handle: Arc::new(tokio::sync::Mutex::new(None)),
             cancellation,
+            gate: RefreshGate::default(),
+            manual_busy: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// 启动 L1 + L2 worker。
     pub async fn start(&self) {
-        let gate = RefreshGate::default();
-        self.start_l1(gate.clone()).await;
-        self.start_l2(gate).await;
+        self.start_l1(self.gate.clone()).await;
+        self.start_l2(self.gate.clone()).await;
     }
 
     /// 停止 L1 + L2 worker。
@@ -185,21 +212,50 @@ impl RefreshService {
     }
 
     /// 手动触发 L1 刷新（POST /api/refresh?kind=board 用）。
-    pub async fn trigger_l1(&self) -> Result<usize> {
-        let cookies = read_cookies(&self.settings_service).await;
-        Ok(refresh_video_stats(&self.db, &self.bili_api, &cookies)
-            .await?
-            .success)
+    pub async fn trigger_l1(&self) -> Result<ManualRefreshOutcome> {
+        self.run_manual(ManualSweep::Board).await
     }
 
     /// 手动触发 L2 刷新（POST /api/refresh?kind=blogger 用）。
-    pub async fn trigger_l2(&self) -> Result<usize> {
+    pub async fn trigger_l2(&self) -> Result<ManualRefreshOutcome> {
+        self.run_manual(ManualSweep::Bloggers).await
+    }
+
+    /// 手动触发的一轮刷新：与 worker 走同一道风险闸门，并受单飞保护。
+    ///
+    /// 此前手动路径直接打全量：连点会叠出多轮 sweep（每轮请求量随记录数线性），
+    /// 把配额刷满后换来更长的风控，而且完全绕过 worker 已建立的冷却。
+    async fn run_manual(&self, sweep: ManualSweep) -> Result<ManualRefreshOutcome> {
+        let endpoint = match sweep {
+            ManualSweep::Board => "video",
+            ManualSweep::Bloggers => "user",
+        };
+        if self.manual_busy.swap(true, Ordering::SeqCst) {
+            return Ok(ManualRefreshOutcome {
+                refreshed: 0,
+                skipped: Some("已有刷新任务在进行中，本次未重复触发"),
+            });
+        }
+        let _guard = ManualRefreshGuard(self.manual_busy.clone());
         let cookies = read_cookies(&self.settings_service).await;
-        Ok(
-            refresh_all_bloggers_report(&self.db, &self.bili_api, &cookies)
-                .await?
-                .success,
-        )
+        if self.gate.is_blocked(endpoint, &cookies).await {
+            warn!("[refresh] 手动 {endpoint} 刷新被风控冷却挡下，本轮未发起请求");
+            return Ok(ManualRefreshOutcome {
+                refreshed: 0,
+                skipped: Some("B 站接口处于风控冷却中，本次已跳过"),
+            });
+        }
+        let report = match sweep {
+            ManualSweep::Board => refresh_video_stats(&self.db, &self.bili_api, &cookies).await?,
+            ManualSweep::Bloggers => {
+                refresh_all_bloggers_report(&self.db, &self.bili_api, &cookies).await?
+            }
+        };
+        self.gate.record(endpoint, &cookies, report).await;
+        Ok(ManualRefreshOutcome {
+            refreshed: report.success,
+            skipped: None,
+        })
     }
 
     /// 手动触发单个视频刷新（POST /api/refresh?kind=video 用）。
@@ -410,7 +466,7 @@ async fn refresh_blogger_profile(
         Ok(uid) => uid,
         Err(_) => return (false, false),
     };
-    let info = match bili_api.get_user_info(uid, cookies).await {
+    let info = match bili_api.get_user_info(uid, cookies, true).await {
         Ok(info) => info,
         Err(error) => {
             warn!("[refresh L2] 获取博主 {} 出错: {error}", blogger.uid);

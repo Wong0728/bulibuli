@@ -247,7 +247,7 @@ impl MonitorService {
                 continue;
             };
             let cookies = self.get_cookies_for_blogger(&b.uid).await;
-            match self.bili_api.get_user_info(uid_i64, &cookies).await {
+            match self.bili_api.get_user_info(uid_i64, &cookies, true).await {
                 Ok(info) if info.fans > 0 => {
                     let uid = b.uid.clone();
                     let mut model: blogger::ActiveModel = b.into();

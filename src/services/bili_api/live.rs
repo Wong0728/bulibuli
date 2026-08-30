@@ -72,8 +72,10 @@ impl BiliApi {
         let response = self
             .send_with_retry_limited(request, &self.background_rate_limiter)
             .await?;
+        // 这是该端点的唯一一次请求（无回退接口），必须用普通解析器：silent 解析会吞掉
+        // 风控/未登录信号，直播侧只留下日志，调用方只能靠错误字符串匹配做退避。
         let data: LiveBatchStatusMap = self
-            .parse_data_silent(response, "live_status_info_by_uids")
+            .parse_data(response, "live_status_info_by_uids")
             .await?;
         Ok(data
             .into_values()

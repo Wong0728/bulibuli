@@ -183,7 +183,7 @@ pub(super) async fn add_blogger(
     let profile = state
         .bili
         .bili_api
-        .get_user_info(uid_i64, &cookies)
+        .get_user_info(uid_i64, &cookies, false)
         .await
         .map_err(|error| {
             warn!(uid, %error, "添加博主时拉取资料失败，拒绝创建");

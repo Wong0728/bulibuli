@@ -302,10 +302,13 @@ impl DanmuCollector {
         let mut request = ws_url
             .into_client_request()
             .context("build WebSocket request failed")?;
-        request.headers_mut().insert(
-            USER_AGENT,
-            HeaderValue::from_static("Mozilla/5.0 BilibiliLiveRecorder"),
-        );
+        // WS 握手的 UA 必须与设备指纹上报给 ExClimbWuzhi 的那份一致：同一会话里出现
+        // 两种客户端特征本身就是风控命中面。拿不到配置时（无 BiliApi 的测试路径）才回退。
+        const FALLBACK_USER_AGENT: &str = "Mozilla/5.0 BilibiliLiveRecorder";
+        let user_agent = bili_api
+            .and_then(|api| HeaderValue::from_str(api.user_agent()).ok())
+            .unwrap_or_else(|| HeaderValue::from_static(FALLBACK_USER_AGENT));
+        request.headers_mut().insert(USER_AGENT, user_agent);
         request.headers_mut().insert(
             ORIGIN,
             HeaderValue::from_static("https://live.bilibili.com"),

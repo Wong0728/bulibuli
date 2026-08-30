@@ -22,17 +22,25 @@ async fn refresh(
     info!(kind = %query.kind, "[API] manual refresh");
     let (data, message) = match query.kind.as_str() {
         "board" => {
-            let refreshed = state.business.refresh_service.trigger_l1().await?;
+            let outcome = state.business.refresh_service.trigger_l1().await?;
+            let message = match outcome.skipped {
+                Some(reason) => reason.to_string(),
+                None => format!("已刷新 {} 条视频", outcome.refreshed),
+            };
             (
-                json!({ "refreshed": refreshed }),
-                format!("已刷新 {refreshed} 条视频"),
+                json!({ "refreshed": outcome.refreshed, "skipped": outcome.skipped }),
+                message,
             )
         }
         "blogger" => {
-            let refreshed = state.business.refresh_service.trigger_l2().await?;
+            let outcome = state.business.refresh_service.trigger_l2().await?;
+            let message = match outcome.skipped {
+                Some(reason) => reason.to_string(),
+                None => format!("已刷新 {} 个博主", outcome.refreshed),
+            };
             (
-                json!({ "refreshed": refreshed }),
-                format!("已刷新 {refreshed} 个博主"),
+                json!({ "refreshed": outcome.refreshed, "skipped": outcome.skipped }),
+                message,
             )
         }
         "video" => {

@@ -93,14 +93,17 @@ impl BiliApi {
         cookie_manager: Arc<CookieManager>,
         ws: Arc<WebSocketManager>,
     ) -> Result<Self> {
+        // 不使用 reqwest 的 cookie jar：所有凭据请求都由 build_get_request 显式设置
+        // Cookie 头，jar 只会在"不带该头"的请求上（封面图、空 Cookie 的字幕拉取）注入
+        // 扫码轮询留下的 SESSDATA，换号后成为过期凭据外发面。
         let api_client = Client::builder()
-            .cookie_store(true)
+            .cookie_store(false)
             .danger_accept_invalid_certs(false)
             .timeout(std::time::Duration::from_secs(config.bili_api_timeout))
             .build()
             .context("创建 B站 API HTTP 客户端失败")?;
         let stream_client = Client::builder()
-            .cookie_store(true)
+            .cookie_store(false)
             .redirect(reqwest::redirect::Policy::none())
             .danger_accept_invalid_certs(false)
             .timeout(std::time::Duration::from_secs(config.bili_api_timeout))
@@ -156,6 +159,12 @@ impl BiliApi {
     /// 新代码请使用 `client_for(url)`，凭据请求不得使用此客户端。
     pub fn client(&self) -> &Client {
         &self.anonymous_client
+    }
+
+    /// 统一对外的 User-Agent：任何直连 B 站的握手都必须与设备指纹上报的 UA 一致，
+    /// 否则同一会话里出现两种客户端特征，反而更容易命中风控。
+    pub fn user_agent(&self) -> &str {
+        &self.config.user_agent
     }
 
     pub(crate) async fn invalidate_session_caches(&self) {
