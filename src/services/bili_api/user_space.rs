@@ -72,13 +72,17 @@ impl BiliApi {
         let resp = self.send_classed(request, background).await?;
         let data: ArcSearchData = self.parse_data(resp, "get_user_videos").await?;
         let videos: Vec<UserVideo> = data.list.vlist.into_iter().map(UserVideo::from).collect();
+        // 只看 count 会把"这一页真的空了"也算成还有下一页：接口对深分页有上限，
+        // 页码越界时 count 依然报全量，前端会停在同一页反复请求空结果。
+        let has_more =
+            !videos.is_empty() && i64::from(page.max(1)) * i64::from(ps) < data.page.count;
         let result = UserVideosPage {
             videos,
             total: data.page.count,
             page: page.max(1),
             page_size: ps,
             offset: (page.max(1) - 1) * ps,
-            has_more: i64::from(page.max(1)) * i64::from(ps) < data.page.count,
+            has_more,
         };
 
         // 写入缓存
@@ -227,7 +231,8 @@ impl BiliApi {
 
         // 合集和系列的分页字段名相同
         let total = data.page.total;
-        let has_more = (offset + videos.len() as i32) < total as i32;
+        // 空页一律算到底：越界时 total 仍按全量上报，只看数字会卡在反复请求同一空页。
+        let has_more = !videos.is_empty() && (offset + videos.len() as i32) < total as i32;
         Ok(SeriesVideosPage {
             videos,
             total,
