@@ -116,8 +116,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   /** 网络层请求失败（fetch 抛错 / 响应无法解析）时的降级（老框架 apiRequest catch）。 */
+  /** 判离线所需的连续网络层失败次数。单次即判会把"B 站上游慢导致我们这边
+   *  15/25/30s 超时"（/api/refresh、/api/blogger/search 等）算成本机断网：
+   *  持续 toast + 顶部横幅 + 锁住所有写操作按钮。真断网时 WS 会立刻断开并回落到
+   *  1.5s 的 HTTP 轮询，两次失败在秒级内就能凑满，代价只是延迟一个请求周期。 */
+  const OFFLINE_THRESHOLD = 2;
+
   function registerNetworkFailure() {
     networkFailCount.value++;
+    if (networkFailCount.value < OFFLINE_THRESHOLD) return;
     networkOnline.value = false;
     showNetworkToast();
   }
@@ -342,7 +349,7 @@ export const useAppStore = defineStore('app', () => {
       if (status) lastProgressStatus.set(stateKey, status);
     });
 
-    // 后端不发 live:update：直播看板由 TabLive 的 5 秒轮询 dashboard 驱动。
+    // 后端不发 live:update：直播看板由 TabLive 的 30s dashboard 轮询驱动（见 TabLive 头注释）。
 
     socket.on('bili:risk-control', (data: WsSystemEvent) => {
       if (!acceptWebSocketMessage('bili:risk-control', data)) return;

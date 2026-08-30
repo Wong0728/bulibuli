@@ -1,40 +1,58 @@
 /**
- * WebSocket 消息去重：保留与原 state.js 中 `acceptWebSocketMessage` 一致的语义。
+ * WebSocket 消息去重。
  *
- * - 后端通过 socketioxide 推消息时会自动塞一个 `id`（见 src/ws/mod.rs 的
- *   `broadcast_download_progress` / `broadcast_log` / `broadcast_system`）。
- * - 老系统/某些系统事件可能不带 `id`，或相同 id 在 200ms 内的重复事件是合法的
- *   （progress 推送），这里允许"无 id"的消息直接放行（不缓存），避免误丢。
- * - 带 id 的消息按 `namespace:id` 维度去重，缓存最近 2000 条。
+ * 后端对没有 `id` 的载荷会在推送现场补一个全新的 UUID（src/ws/mod.rs 的
+ * `entry("id").or_insert_with(|| Uuid::new_v4())`），下载进度载荷本身只带
+ * `task_id`——所以"按 id 去重"永远不会命中：它只是把每条正常消息记进缓存，
+ * 既挡不住 socket.io 长轮询模式的真实重复投递，缓存还常年堆满无效条目。
+ *
+ * 这里改为按 `事件名 + 载荷内容` 做键并排除 `id`：只有内容完全相同的短时间窗口内
+ * 的重复投递会被丢弃（这类重复不携带新信息，消费方都是幂等赋值/弹窗），
+ * 缓存带过期，不再是只进不出的死表。
  */
 const seen = new Map<string, number>();
-const MAX_SIZE = 2000;
+const DUPLICATE_WINDOW_MS = 5_000;
+const MAX_ENTRIES = 500;
 
-export function webSocketMessageKey(namespace: string, message: unknown): string | null {
+function contentKey(namespace: string, message: unknown): string | null {
   if (!namespace) return null;
-  if (!message || typeof message !== 'object') return null;
-  const id = (message as Record<string, unknown>).id;
-  if (typeof id !== 'string' || id.length === 0) return null;
-  return `${namespace}:${id}`;
+  if (message === null || message === undefined) return `${namespace}:null`;
+  if (typeof message !== 'object') return `${namespace}:${String(message)}`;
+  const fields = Object.entries(message as Record<string, unknown>)
+    .filter(([key]) => key !== 'id')
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const parts: string[] = [];
+  for (const [key, value] of fields) {
+    // 嵌套结构用 JSON 表示；循环引用等异常由外层 catch 兜底为"不去重"。
+    const rendered = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value);
+    parts.push(`${key}=${rendered}`);
+  }
+  return `${namespace}:{${parts.join(',')}}`;
 }
 
 export function acceptWebSocketMessage(namespace: string, message: unknown): boolean {
-  const key = webSocketMessageKey(namespace, message);
-  if (!key) {
-    // 无 id 的消息不参与去重，直接放行（保留原 state.js 的 "无 id 视为重复"
-    // 语义会造成所有 progress 推送被吞没）。
+  const now = Date.now();
+  let key: string | null;
+  try {
+    key = contentKey(namespace, message);
+  } catch {
     return true;
   }
-  if (seen.has(key)) return false;
-  seen.set(key, Date.now());
-  if (seen.size > MAX_SIZE) {
-    const oldest = seen.keys().next().value;
-    if (oldest) seen.delete(oldest);
+  if (key === null) return true;
+  const previous = seen.get(key);
+  if (previous !== undefined && now - previous < DUPLICATE_WINDOW_MS) return false;
+  seen.set(key, now);
+  if (seen.size > MAX_ENTRIES) {
+    for (const [seenKey, at] of seen) {
+      if (now - at >= DUPLICATE_WINDOW_MS) seen.delete(seenKey);
+    }
+    // 仍然超限说明是短时高频的不同消息：直接清表，去重只是优化不是正确性依赖。
+    if (seen.size > MAX_ENTRIES) seen.clear();
   }
   return true;
 }
 
-/** 暴露给测试或调试用：清空去重缓存。 */
+/** 暴露给测试用：清空去重缓存。 */
 export function _resetWsDedupe() {
   seen.clear();
 }

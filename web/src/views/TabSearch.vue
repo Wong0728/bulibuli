@@ -20,6 +20,10 @@ const searchMessage = ref('输入博主名称开始搜索');
 
 // 已添加博主的提交锁（防重复 POST）。
 const addingSavedUids = ref(new Set<number>());
+// 清空是逐条 DELETE：没有进行态时按钮可连点，会重复打同一批请求。
+const clearingSaved = ref(false);
+// 结果卡片按钮的状态来源：saved/list 里已有的 UID 显示"已添加"而不是永远"添加"。
+const savedUidSet = computed(() => new Set(blogger.savedBloggers.map((item) => String(item.uid))));
 // 博主变动通知弹窗。
 const showNoticeModal = ref(false);
 const noticeModalRoot = ref<HTMLElement | null>(null);
@@ -145,6 +149,8 @@ async function clearSaved() {
     confirmText: '清空',
     tone: 'danger',
   })) return;
+  if (clearingSaved.value) return;
+  clearingSaved.value = true;
   try {
     // 老框架按列表顺序逐个删除，不做并发。
     for (const item of [...blogger.savedBloggers]) {
@@ -156,6 +162,8 @@ async function clearSaved() {
   } catch (e: any) {
     // 老框架：网络失败交给全局网络链，其余固定文案。
     if (e?.code !== 0) toast.error('清空失败');
+  } finally {
+    clearingSaved.value = false;
   }
 }
 
@@ -209,12 +217,7 @@ async function acknowledgeAllNotices() {
   }
 }
 
-function imageUrl(url?: string) { return url ? videoApi.proxyImage(url) : ''; }
-
-/** 对齐老框架 data-image-error="hide"：加载失败仅隐藏图片，不显示替代占位。 */
-function imageError(event: Event) {
-  (event.target as HTMLImageElement).hidden = true;
-}
+import { imageUrl, hideImageOnError as imageError } from '@/utils/image';
 </script>
 
 <template>
@@ -250,8 +253,11 @@ function imageError(event: Event) {
               <div class="blogger-sign">{{ b.sign || '' }}</div>
             </div>
             <div class="blogger-search-actions">
-              <button class="btn btn-sm btn-primary" data-mutating :disabled="addingSavedUids.has(b.uid)" @click="addSaved(b)">
-                <i class="fa-solid fa-plus"></i> 添加
+              <button v-if="savedUidSet.has(String(b.uid))" class="btn btn-sm" disabled>
+                <i class="fa-solid fa-check"></i> 已添加
+              </button>
+              <button v-else class="btn btn-sm btn-primary" data-mutating :disabled="addingSavedUids.has(b.uid)" @click="addSaved(b)">
+                <i class="fa-solid fa-plus"></i> {{ addingSavedUids.has(b.uid) ? '添加中...' : '添加' }}
               </button>
             </div>
           </div>
@@ -267,8 +273,8 @@ function imageError(event: Event) {
       <div class="card-title">
         <i class="fa-solid fa-bookmark"></i>
         <span>已添加博主（可在其他标签页下拉选择）</span>
-        <button id="clear-known-bloggers-btn" class="btn btn-sm btn-ghost known-bloggers-clear" data-mutating @click="clearSaved">
-          <i class="fa-solid fa-trash"></i> 清空
+        <button id="clear-known-bloggers-btn" class="btn btn-sm btn-ghost known-bloggers-clear" data-mutating :disabled="clearingSaved" @click="clearSaved">
+          <i class="fa-solid fa-trash"></i> {{ clearingSaved ? '清空中...' : '清空' }}
         </button>
       </div>
       <div v-if="blogger.savedBloggers.length === 0" id="known-blogger-list">

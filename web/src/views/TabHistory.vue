@@ -15,12 +15,7 @@ const history = useHistoryStore();
 const app = useAppStore();
 const toast = useToastStore();
 
-function imageUrl(url?: string) { return url ? videoApi.proxyImage(url) : ''; }
-function imageError(event: Event) {
-  const image = event.target as HTMLImageElement;
-  image.hidden = true;
-  image.nextElementSibling?.removeAttribute('hidden');
-}
+import { imageUrl, imageError } from '@/utils/image';
 
 const subTab = ref<'downloading' | 'completed' | 'failed'>('completed');
 const refreshing = ref(false);
@@ -517,7 +512,7 @@ function describeFailure(failure?: { message?: string; kind?: string; fallback_r
         </div>
         <div class="board-top-bar-right">
           <span id="download-queue-summary" class="queue-summary" title="队列摘要：各状态任务数">{{ download.queueSummary }}</span>
-          <span id="aria2-status-dot-history" class="aria2-dot" :class="download.aria2DotClass" :title="download.aria2Title" @click="onAria2DotClick"></span>
+          <span id="aria2-status-dot-history" class="aria2-dot" :class="download.aria2DotClass" :title="download.aria2Title" role="button" tabindex="0" @click="onAria2DotClick" @keydown.enter.prevent="onAria2DotClick" @keydown.space.prevent="onAria2DotClick"></span>
           <button class="btn btn-sm btn-ghost" data-mutating title="暂停全部下载任务" @click="pauseAll">
             <i class="fa-solid fa-pause"></i> 全部暂停
           </button>
@@ -529,16 +524,16 @@ function describeFailure(failure?: { message?: string; kind?: string; fallback_r
           </button>
         </div>
       </div>
-      <div v-if="history.error" class="live-alert error" role="alert">历史记录加载失败：{{ history.error }}</div>
+      <div v-if="history.error" class="live-alert error" role="alert">下载管理加载失败：{{ history.error }}</div>
 
-      <div class="board-sub-tabs">
-        <div :class="['board-sub-tab', { active: subTab === 'downloading' }]" data-board-tab="downloading" @click="switchTab('downloading')">
+      <div class="board-sub-tabs" role="tablist">
+        <div :class="['board-sub-tab', { active: subTab === 'downloading' }]" data-board-tab="downloading" role="tab" tabindex="0" :aria-selected="subTab === 'downloading'" @click="switchTab('downloading')" @keydown.enter.prevent="switchTab('downloading')" @keydown.space.prevent="switchTab('downloading')">
           下载中 <span class="board-tab-count" id="board-count-downloading">{{ downloadingCount }}</span>
         </div>
-        <div :class="['board-sub-tab', { active: subTab === 'completed' }]" data-board-tab="completed" @click="switchTab('completed')">
+        <div :class="['board-sub-tab', { active: subTab === 'completed' }]" data-board-tab="completed" role="tab" tabindex="0" :aria-selected="subTab === 'completed'" @click="switchTab('completed')" @keydown.enter.prevent="switchTab('completed')" @keydown.space.prevent="switchTab('completed')">
           已下载 <span class="board-tab-count" id="board-count-completed">{{ history.completedTotal }}</span>
         </div>
-        <div :class="['board-sub-tab', { active: subTab === 'failed' }]" data-board-tab="failed" @click="switchTab('failed')">
+        <div :class="['board-sub-tab', { active: subTab === 'failed' }]" data-board-tab="failed" role="tab" tabindex="0" :aria-selected="subTab === 'failed'" @click="switchTab('failed')" @keydown.enter.prevent="switchTab('failed')" @keydown.space.prevent="switchTab('failed')">
           下载失败 <span class="board-tab-count" id="board-count-failed">{{ history.failedTotal }}</span>
         </div>
       </div>

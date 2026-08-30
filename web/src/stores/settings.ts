@@ -354,6 +354,28 @@ const FLAT_TO_NESTED: Record<string, (value: any, n: RuntimeSettingsNested) => v
   live_max_duration_hours: (v, n) => { n.live.max_duration_hours = Number(v); },
 };
 
+/** 主题在 <html data-theme> 上的落地口径（与老框架 settings.js applyTheme 一致）：
+ *  system → 移除属性，交给 prefers-color-scheme；否则写入 light/dark。 */
+export function applyThemeAttribute(theme: string) {
+  if (theme === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+}
+
+const THEME_STORAGE_KEY = 'bulibuli.theme';
+
+/** 记录上次已知的主题，供下次加载在设置接口返回前先应用（否则深色用户每次刷新
+ *  都会先看到一屏浅色）。localStorage 不可用时静默跳过，不影响渲染。 */
+function rememberTheme(theme: string) {
+  try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch { /* 隐私模式/配额 */ }
+}
+
+/** 应用上次已知的主题。必须在挂载前调用，才能起到消除首屏闪色的作用。 */
+export function applyStoredTheme() {
+  let theme: string | null = null;
+  try { theme = localStorage.getItem(THEME_STORAGE_KEY); } catch { return; }
+  if (theme) applyThemeAttribute(theme);
+}
+
 function applyFlatPatch(n: RuntimeSettingsNested, patch: Partial<Settings>) {
   for (const [k, v] of Object.entries(patch)) {
     const fn = FLAT_TO_NESTED[k];
@@ -371,6 +393,9 @@ export const useSettingsStore = defineStore('settings', () => {
   /** ffmpeg-path 检测失败标记（老框架：'检测失败' 状态，而不是恒'检测中...'）。 */
   const ffmpegDetectError = ref(false);
   let ffmpegGeneration = 0;
+  /** 路径为空时的补检次数上限（每次用户触发的检测都会重置）。 */
+  const FFMPEG_PATH_MAX_RETRIES = 3;
+  let ffmpegPathRetries = 0;
   const loading = ref(false);
   const loadError = ref<string | null>(null);
   const saving = ref(false);
@@ -395,6 +420,7 @@ export const useSettingsStore = defineStore('settings', () => {
       nested.value = merged;
       originalNested.value = JSON.parse(JSON.stringify(merged));
       settings.value = flatten(merged);
+      syncTheme(merged);
       dirty.value = false;
     } catch (error) {
       loadError.value = error instanceof Error ? error.message : '设置加载失败';
@@ -406,7 +432,16 @@ export const useSettingsStore = defineStore('settings', () => {
   function update(patch: Partial<Settings>) {
     applyFlatPatch(nested.value, patch);
     settings.value = flatten(nested.value);
+    syncTheme(nested.value);
     dirty.value = JSON.stringify(nested.value) !== JSON.stringify(originalNested.value);
+  }
+
+  /** 主题只有一个真相源：设置里的 appearance.theme。load/update/save/reset 都会经过
+   *  这里，避免"只有打开设置页才应用主题"以及各调用点各自 applyTheme 漂移。 */
+  function syncTheme(n: RuntimeSettingsNested) {
+    const theme = String((n as any)?.appearance?.theme || 'system');
+    applyThemeAttribute(theme);
+    rememberTheme(theme);
   }
 
   /** 对齐老框架 saveSettings：PUT 带 expected_revision，返回后端 message
@@ -423,6 +458,7 @@ export const useSettingsStore = defineStore('settings', () => {
       nested.value = raw;
       originalNested.value = JSON.parse(JSON.stringify(raw));
       settings.value = flatten(raw);
+      syncTheme(raw);
       dirty.value = false;
       return message || '';
     } finally { saving.value = false; }
@@ -435,6 +471,7 @@ export const useSettingsStore = defineStore('settings', () => {
     nested.value = JSON.parse(JSON.stringify(raw));
     originalNested.value = JSON.parse(JSON.stringify(raw));
     settings.value = flatten(raw);
+    syncTheme(raw);
     dirty.value = false;
     return message || '';
   }
@@ -451,10 +488,12 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /** 对齐老框架 refreshFFmpegDetectedPath：GET 带 mode 参数；失败置 ffmpegDetectError
-   *  （'检测失败'）；无 path 时 2s 补一次延迟重试；generation 防竞态。
- *  （路径预览是老框架纯前端 replaceAll，见 TabSettings 的 pathPreviewText。） */
-  async function refreshFfmpegPath(mode?: string) {
+   *  （'检测失败'）；无 path 时最多补看 FFMPEG_PATH_MAX_RETRIES 次；generation 防竞态。
+   *  （路径预览是老框架纯前端 replaceAll，见 TabSettings 的 pathPreviewText。） */
+  async function refreshFfmpegPath(mode?: string, isRetry = false) {
     const generation = ++ffmpegGeneration;
+    // 只有用户触发的检测才重置补检次数；递归补检带着同一个 mode 回来，不能重置。
+    if (!isRetry) ffmpegPathRetries = 0;
     ffmpegDetectError.value = false;
     try {
       const { data } = await getFull<FfmpegStatus>('/api/settings/ffmpeg-path', {
@@ -462,15 +501,19 @@ export const useSettingsStore = defineStore('settings', () => {
       });
       if (generation !== ffmpegGeneration) return;
       if (data) {
+        if (data.path) ffmpegPathRetries = 0;
         ffmpegInfo.value = {
           available: !!data.available,
           path: data.path ?? '',
           source: data.source ?? '',
           version: data.version ?? '',
         };
-        if (!data.path) {
+        if (!data.path && ffmpegPathRetries < FFMPEG_PATH_MAX_RETRIES) {
+          // 启动早期探测可能只是暂时拿不到路径，补看几次；但没装 ffmpeg 的机器上
+          // 无条件重排会在 KeepAlive 下永久每 2s 打一次接口。
+          ffmpegPathRetries++;
           setTimeout(() => {
-            if (generation === ffmpegGeneration) void refreshFfmpegPath(mode);
+            if (generation === ffmpegGeneration) void refreshFfmpegPath(mode, true);
           }, 2000);
         }
       }

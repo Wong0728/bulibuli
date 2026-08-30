@@ -86,11 +86,30 @@ export const useDownloadStore = defineStore('download', () => {
   let healthCacheAt = 0;
   let metricsInFlight: Promise<{ ok: boolean }> | null = null;
   let metricsCacheAt = 0;
+  /** WS 进度聚合窗口（毫秒）。 */
+  const TASKS_FLUSH_MS = 200;
+  let tasksFlushTimer: number | null = null;
+
+  /**
+   * 通知下游"任务集合变了"：不立刻换掉整个 Map。
+   *
+   * 后端按任务 1~2Hz 推进度，每条消息都 `tasks.value = new Map(...)` 会让下游
+   * computed 链（tasksByBvid → cardVmById）每帧重算整块看板的卡片视图模型；
+   * 多任务并发时就是每秒几十次全量重算。聚合到一个短窗口内只失效一次，
+   * 进度条仍以 ~5Hz 更新，用户看不出差别。
+   */
+  function markTasksChanged() {
+    if (tasksFlushTimer != null) return;
+    tasksFlushTimer = window.setTimeout(() => {
+      tasksFlushTimer = null;
+      tasks.value = new Map(tasks.value);
+    }, TASKS_FLUSH_MS);
+  }
 
   function upsert(task: DownloadTask) {
     if (!task || task.id == null) return;
     tasks.value.set(task.id, { ...tasks.value.get(task.id), ...task });
-    tasks.value = new Map(tasks.value);
+    markTasksChanged();
   }
 
   /**
@@ -150,7 +169,7 @@ export const useDownloadStore = defineStore('download', () => {
       if (!(incomingId > 0 && trustedTitle)) return;
       const created: DownloadTask = { ...(patch as DownloadTask), id: incomingId, title: patch.title! };
       tasks.value.set(incomingId, created);
-      tasks.value = new Map(tasks.value);
+      markTasksChanged();
       return;
     }
     const existing = tasks.value.get(key);
@@ -158,7 +177,7 @@ export const useDownloadStore = defineStore('download', () => {
     const merged: DownloadTask = { ...existing, ...patch, id: key } as DownloadTask;
     if (!merged.title) merged.title = bvid;
     tasks.value.set(key, merged);
-    tasks.value = new Map(tasks.value);
+    markTasksChanged();
   }
 
   /**
@@ -344,6 +363,7 @@ export const useDownloadStore = defineStore('download', () => {
     for (const [id, task] of tasks.value) {
       if (task.bvid === bvid && (task.type || 'video') === type) tasks.value.delete(id);
     }
+    // 删除是用户动作，立刻生效不做聚合。
     tasks.value = new Map(tasks.value);
     return message;
   }
@@ -507,6 +527,10 @@ export const useDownloadStore = defineStore('download', () => {
 
   /** 设备会话 401 失效时清空本会话的队列快照与缓存（app store 调用）。 */
   function reset() {
+    if (tasksFlushTimer != null) {
+      window.clearTimeout(tasksFlushTimer);
+      tasksFlushTimer = null;
+    }
     tasks.value = new Map();
     health.value = { aria2_connected: false };
     healthChecked.value = false;

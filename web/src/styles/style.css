@@ -4905,6 +4905,12 @@ tr:hover {
     color: var(--brand);
     border-bottom-color: var(--brand);
 }
+
+/* 子 tab 是带 tabindex 的 div，键盘导航时必须有可见焦点环（与 .section-header 同口径）。 */
+.board-sub-tab:focus-visible {
+    outline: var(--size-2) solid var(--brand);
+    outline-offset: var(--size-neg-2);
+}
 .board-tab-count {
     display: inline-flex;
     align-items: center;

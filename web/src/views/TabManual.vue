@@ -15,16 +15,7 @@ const download = useDownloadStore();
 const toast = useToastStore();
 const settings = useSettingsStore();
 
-function imageUrl(url?: string) {
-  if (!url) return '';
-  const normalized = url.startsWith('//') ? `https:${url}` : url;
-  return videoApi.proxyImage(normalized);
-}
-function imageError(event: Event) {
-  const image = event.target as HTMLImageElement;
-  image.hidden = true;
-  image.nextElementSibling?.removeAttribute('hidden');
-}
+import { imageUrl, imageError } from '@/utils/image';
 
 const qualityOptions = [
   { qn: 125, label: 'HDR', tag: 'HDR' },

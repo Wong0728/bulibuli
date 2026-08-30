@@ -44,3 +44,29 @@
     color: var(--brand);
     margin-right: var(--size-4);
 }
+
+/* 第三方致谢（CC BY 4.0 署名义务）：贴在设置页底部操作区，故保持低视觉权重。 */
+.settings-attribution {
+    margin-top: var(--size-12);
+    padding-top: var(--size-8);
+    border-top: 1px solid var(--border);
+    font-size: var(--size-12);
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+.settings-attribution-title {
+    font-weight: 600;
+    margin-bottom: var(--size-4);
+}
+
+.settings-attribution ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    list-style: disc;
+}
+
+.settings-attribution a {
+    color: inherit;
+    text-decoration: underline;
+}

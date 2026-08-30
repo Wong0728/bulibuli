@@ -197,3 +197,70 @@ test('Vue pairing enters the main app and uses aligned request contracts', async
   expect(state.calls.some(call => call.path === '/api/settings')).toBeTruthy();
   expect(state.calls.some(call => call.path === '/api/live/dashboard')).toBeTruthy();
 });
+
+/**
+ * 图标回归门：本项目用的是 Font Awesome **Free** 字体（web/public/css/lib/）。
+ * Pro 专有字名（如 fa-radar、fa-message-dollar）在 CSS 里没有规则 → 渲染成空白；
+ * 品牌字形（如 fa-bilibili）只存在于 Brands 字族，写成 fa-solid 会画 .notdef 缺字框。
+ * 两种缺陷都只能靠肉眼发现，用户反馈时只看到"方框里打了个叉"。
+ */
+test('app only uses Font Awesome glyphs present in the bundled free stylesheet', async () => {
+  const { readFile, readdir } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const css = await readFile(new URL('../web/public/css/lib/fontawesome.min.css', import.meta.url), 'utf8');
+
+  // 项目自带的是 FA **Free**：Pro 专有名字（如 fa-radar）在 CSS 里完全没有规则。
+  const definedClasses = new Set([...css.matchAll(/\.((?:fa|fab|fas|far)-(?:[a-z0-9-]+))/g)].map((m) => m[1]));
+  const glyphs = new Set([...css.matchAll(/\.(fa-[a-z0-9-]+):before/g)].map((m) => m[1]));
+  expect(definedClasses.size).toBeGreaterThan(1000);
+
+  // Brands 字族独有的图标：写 fa-solid 会画出 .notdef 缺字框。FA 生成的 CSS 把品牌
+  // 字形单独排在 `.fa-brands,.fab{...}` 之后，所以字族归属可以直接从样式表推出来，
+  // 不用再手维护一份清单（漏一条就等于没有门）。
+  const brandsStart = css.lastIndexOf('.fa-brands,.fab{');
+  const brandsEnd = css.indexOf('.fa-regular,.far{', brandsStart);
+  const brandGlyphs = new Set(
+    [...css.slice(brandsStart, brandsEnd).matchAll(/\.(fa-[a-z0-9-]+):before/g)].map((m) => m[1]),
+  );
+  expect(brandGlyphs.size).toBeGreaterThan(400);
+
+  const used = [];
+  const { fileURLToPath } = await import('node:url');
+  const walk = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) { await walk(path); continue; }
+      if (!/\.(vue|ts)$/.test(entry.name)) continue;
+      const text = await readFile(path, 'utf8');
+      for (const match of text.matchAll(/class="([^"]*fa-[^"]*)"/g)) {
+        const tokens = match[1].split(/\s+/);
+        const line = text.slice(0, match.index).split('\n').length;
+        for (const token of tokens) {
+          if (!/^fa-[a-z0-9-]+$/.test(token)) continue;
+          used.push({
+            token,
+            where: `${entry.name}:${line}`,
+            hasBrandClass: tokens.includes('fa-brands'),
+          });
+        }
+      }
+    }
+  };
+  await walk(fileURLToPath(new URL('../web/src', import.meta.url)));
+
+  // 不是字形又没有任何 CSS 规则 = 拼错或 Pro 专有；工具类（fa-spin/fa-3x/fa-fw）有规则，放行。
+  const missing = used
+    .filter(({ token }) => !glyphs.has(token) && !definedClasses.has(token))
+    .map(({ token, where }) => `${token} @ ${where}`);
+  expect(missing, `Free 版不存在或拼错的图标名：${missing.join(', ')}`).toEqual([]);
+
+  const brandWithoutBrands = used
+    .filter(({ token, hasBrandClass }) => brandGlyphs.has(token) && !hasBrandClass)
+    .map(({ token, where }) => `${token} @ ${where}`);
+  expect(brandWithoutBrands, `品牌图标必须用 fa-brands：${brandWithoutBrands.join(', ')}`).toEqual([]);
+
+  const solidWithBrands = used
+    .filter(({ token, hasBrandClass }) => glyphs.has(token) && !brandGlyphs.has(token) && hasBrandClass)
+    .map(({ token, where }) => `${token} @ ${where}`);
+  expect(solidWithBrands, `非品牌图标不能写成 fa-brands：${solidWithBrands.join(', ')}`).toEqual([]);
+});

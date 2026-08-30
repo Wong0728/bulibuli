@@ -10,18 +10,14 @@ import type { Blogger } from '@/api/types';
 import BloggerConfigForm, { type BloggerConfigFormModel } from '@/components/BloggerConfigForm.vue';
 import { confirmDialog } from '@/composables/confirm';
 import { useModalFocus } from '@/composables/modalFocus';
+import { autoScrollToBottomIfPinned } from '@/utils/scroll';
 
 const blogger = useBloggerStore();
 const app = useAppStore();
 const auth = useAuthStore();
 const toast = useToastStore();
 
-function imageUrl(url?: string) { return url ? videoApi.proxyImage(url) : ''; }
-function imageError(event: Event) {
-  const image = event.target as HTMLImageElement;
-  image.hidden = true;
-  image.nextElementSibling?.removeAttribute('hidden');
-}
+import { imageUrl, imageError } from '@/utils/image';
 
 const editBlogger = ref<Blogger | null>(null);
 const editForm = ref<BloggerConfigFormModel>(createForm());
@@ -222,11 +218,10 @@ function stopLogRefresh() {
   logTimer = null;
 }
 
-// 对齐老框架 renderBloggerLogs：日志最新在最后，容器滚到底部。
+// 对齐老框架 renderBloggerLogs：日志最新在最后，容器跟随到底部——
+// 但只在用户本来就停在底部时跟随，否则翻看历史会被每 2s 的刷新拽回去。
 watch(bloggerLogs, () => {
-  void nextTick(() => {
-    if (logsPanel.value) logsPanel.value.scrollTop = logsPanel.value.scrollHeight;
-  });
+  void nextTick(() => autoScrollToBottomIfPinned(logsPanel.value));
 });
 
 async function refreshOnEnter() {

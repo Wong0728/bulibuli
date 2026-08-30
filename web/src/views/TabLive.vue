@@ -22,12 +22,7 @@ const live = useLiveStore();
 const toast = useToastStore();
 const weekdays = LIVE_WEEKDAYS;
 
-function imageUrl(url?: string) { return url ? videoApi.proxyImage(url) : ''; }
-function imageError(event: Event) {
-  const image = event.target as HTMLImageElement;
-  image.hidden = true;
-  image.nextElementSibling?.removeAttribute('hidden');
-}
+import { imageUrl, imageError } from '@/utils/image';
 
 /** toast 文案：优先取后端 result.message，无（或 'success'）时用老框架兜底文案。 */
 function messageOr(message: string | undefined, fallback: string): string {
@@ -643,6 +638,17 @@ const displayEvents = computed(() => mergeLiveEvents(liveEvents.value).filter(ev
 
 const scEvents = computed(() => liveEvents.value.filter(e => e.event_type === 'super_chat').slice(-3).reverse());
 
+/** 时间线倒序（最新在上）在 computed 里算一次：写在模板里会在每次渲染时
+ *  复制整个数组，配合 :key="index" 会让 100 行列表每 2s 按下标整体重建。 */
+const timelineEvents = computed(() => [...displayEvents.value].reverse());
+
+/** 事件在 store 里是 any[]，可用字段做稳定键；缺失时才退回下标。 */
+function timelineKey(event: any, index: number) {
+  const id = event?.id;
+  if (id !== undefined && id !== null && id !== '') return String(id);
+  return `${event?.event_type || 'event'}-${event?.media_time_ms ?? index}`;
+}
+
 const heatBuckets = computed(() => {
   const buckets: number[] = [];
   for (const event of liveEvents.value) {
@@ -1044,7 +1050,7 @@ const nextScheduleText = computed(() => {
               </div>
               <div class="live-event-timeline">
                 <p v-if="!displayEvents.length" class="empty-hint">暂无符合条件的互动</p>
-                <div v-for="(event, index) in displayEvents.slice().reverse()" :key="index"
+                <div v-for="(event, index) in timelineEvents" :key="timelineKey(event, index)"
                      class="live-event-row" :class="`live-event-${eventCategory(event)}`"
                      :data-time-ms="event.media_time_ms || 0">
                   <time>{{ formatMediaTime(event.media_time_ms) }}</time>
@@ -1119,7 +1125,7 @@ const nextScheduleText = computed(() => {
                   <span class="live-recording-stat"><i class="fa-solid fa-comments"></i> 弹幕 <b>{{ (r.danmaku_count ?? 0).toLocaleString() }}</b></span>
                   <span class="live-recording-stat"><i class="fa-solid fa-user-group"></i> 独立用户 <b>{{ (r.unique_user_count ?? 0).toLocaleString() }}</b></span>
                   <span v-if="(r.peak_watched ?? 0) > 0" class="live-recording-stat"><i class="fa-solid fa-eye"></i> 峰值 <b>{{ (r.peak_watched ?? 0).toLocaleString() }}</b></span>
-                  <span v-if="(r.sc_count ?? 0) > 0" class="live-recording-stat"><i class="fa-solid fa-message-dollar"></i> SC <b>{{ r.sc_count ?? 0 }}</b></span>
+                  <span v-if="(r.sc_count ?? 0) > 0" class="live-recording-stat"><i class="fa-solid fa-comment-dollar"></i> SC <b>{{ r.sc_count ?? 0 }}</b></span>
                   <span v-if="(r.guard_count ?? 0) > 0" class="live-recording-stat"><i class="fa-solid fa-shield-halved"></i> 上舰 <b>{{ r.guard_count ?? 0 }}</b></span>
                   <span v-if="(r.estimated_paid_value ?? 0) > 0" class="live-recording-stat"><i class="fa-solid fa-coins"></i> 礼物 ¥<b>{{ (r.estimated_paid_value ?? 0).toFixed(2) }}</b></span>
                   <span v-if="r.danmu_unavailable" class="live-recording-stat warn"><i class="fa-solid fa-triangle-exclamation"></i> 弹幕采集异常</span>

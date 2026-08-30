@@ -3,6 +3,7 @@ import { createPinia, type Pinia } from 'pinia';
 import App from './App.vue';
 import './styles/index.css';
 import { useToastStore } from './stores/toast';
+import { applyStoredTheme } from './stores/settings';
 
 // CSP `script-src 'self'` 会拦掉内联 onload，异步样式表将永远停在 media="print"。
 // 切换动作由这份同源 bundle 接管：已加载完的立即并入渲染，其余等 load 事件。
@@ -11,6 +12,10 @@ for (const link of Array.from(document.querySelectorAll<HTMLLinkElement>('link[d
   if (link.sheet) promote();
   else link.addEventListener('load', promote, { once: true });
 }
+
+/** 深色主题在挂载前按上次已知值应用：既消除刷新时的浅色首屏闪烁，也不必为了主题
+ *  在未激活任何页面前去请求 /api/settings（该契约由 tests/vue_app.spec.mjs 钉住）。 */
+applyStoredTheme();
 
 const app = createApp(App);
 const pinia = createPinia();

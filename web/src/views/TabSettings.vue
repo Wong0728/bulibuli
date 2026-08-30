@@ -14,23 +14,13 @@ const download = useDownloadStore();
 
 // 扫码登录：通过 app store 共享开关（顶部"未登录"按钮也共用）
 import { useAppStore } from '@/stores/app';
+import { autoScrollToBottomIfPinned } from '@/utils/scroll';
 const app = useAppStore();
 const foundationStatus = ref<any>(null);
 /** 基础配置摘要读取失败文案（老框架 catch：基础配置状态读取失败：...）。 */
 const foundationError = ref('');
 const isOwner = computed(() => auth.state.role === 'owner');
-function imageUrl(url?: string) { return url ? videoApi.proxyImage(url) : ''; }
-function imageError(event: Event) {
-  const image = event.target as HTMLImageElement;
-  image.hidden = true;
-  image.nextElementSibling?.removeAttribute('hidden');
-}
-
-/** 对齐老框架 settings.js applyTheme：system → 移除 data-theme，否则写入。 */
-function applyTheme(theme: string) {
-  if (theme === 'system') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = theme;
-}
+import { imageUrl, imageError } from '@/utils/image';
 
 // --- 全局日志 15s 轮询（对齐老框架 startGlobalLogsPolling，对所有已认证角色开放）---
 let logsTimer: number | null = null;
@@ -67,15 +57,20 @@ onActivated(() => {
   void (async () => {
     // 老框架 loadSettingsFragment → startGlobalLogsPolling：日志轮询不依赖 owner。
     startGlobalLogsPolling();
-    // 老框架 bootstrap.js：仅 owner 才 loadSettingsFromServer（含 ffmpeg 检测、
-    // foundation 摘要、update 状态）；/api/settings 是 owner-only，非 owner 不调。
-    if (!isOwner.value) return;
+    // 主题对所有角色生效且只有服务端一份真值，故 load() 不再受 owner 门限
+    // （GET /api/settings 非 owner 也可读，服务端按角色脱敏绝对路径）；
+    // 其余项（ffmpeg 检测、foundation 摘要、update 状态、健康轮询）仍仅 owner 需要。
     await settings.load();
-    if (!settings.loadError) applyTheme(settings.settings.theme || 'system');
-    updateStatusLoaded.value = await settings.loadUpdateStatus();
-    await loadFoundationSummary();
-    void settings.refreshFfmpegPath();
-    void download.refreshHealth();
+    if (!isOwner.value) return;
+    // 以下几段互不依赖（且都是 owner-only 端点：/api/settings/* 与 /api/update/*），
+    // 并行发出；此前串在 await 链上，弱网下进页会一段段地等。
+    const [updateStatus] = await Promise.all([
+      settings.loadUpdateStatus(),
+      loadFoundationSummary(),
+      settings.refreshFfmpegPath(),
+      download.refreshHealth(),
+    ]);
+    updateStatusLoaded.value = updateStatus;
     startHealthPolling();
   })();
 });
@@ -92,11 +87,10 @@ watch(() => settings.loadError, (err) => {
   if (err) toast.error(`加载设置失败：${err}`);
 });
 
-// 老框架 refreshGlobalLogs：渲染后滚动到底部。
+// 老框架 refreshGlobalLogs：渲染后滚动到底部——但用户往上翻看时不能拽回底部。
 watch(() => settings.logs, async () => {
   await nextTick();
-  const panel = document.getElementById('global-logs-list');
-  if (panel) panel.scrollTop = panel.scrollHeight;
+  autoScrollToBottomIfPinned(document.getElementById('global-logs-list'));
 });
 
 // 老框架 onFFmpegModeChange：切换检测模式时重新检测。
@@ -342,8 +336,8 @@ function setGroup(g: Group) { group.value = g; }
 /** 主题切换：立即把状态写到 store 并在 <html> 上反映（老框架 applyTheme），
  *  持久化通过 settings.update → save() 完成。 */
 function onThemeChange(v: string) {
+  // store 的 update() 已统一应用并记忆主题，这里不再各自写 data-theme。
   settings.update({ theme: v as any });
-  applyTheme(v);
 }
 
 // --- 基础配置只读摘要（对齐老框架 settings.js loadFoundationSummary / loadAiSkillInfo）---
@@ -1112,7 +1106,7 @@ const downloadModeNote = computed(() => '自动启动内置 aria2c 并通过 RPC
 
         <!-- 监控行为 -->
         <div v-show="inGroup('monitor')" :class="{ collapsed: collapsedSections.has('monitor') }" class="section-collapsible" data-section="monitor">
-          <div class="section-header" role="button" tabindex="0"><h2><i class="fa-solid fa-radar"></i> 监控行为</h2></div>
+          <div class="section-header" role="button" tabindex="0"><h2><i class="fa-solid fa-satellite-dish"></i> 监控行为</h2></div>
           <div class="section-body">
             <div class="settings-grid">
               <div class="form-group form-full">
@@ -1397,10 +1391,15 @@ const downloadModeNote = computed(() => '自动启动内置 aria2c 并通过 RPC
           <button class="btn btn-danger" data-action="reset-settings" :disabled="!isOwner" @click="resetSettings"><i class="fa-solid fa-undo"></i> 恢复默认</button>
           <button class="btn" data-action="load-settings" :disabled="!isOwner" @click="settings.load"><i class="fa-solid fa-redo"></i> 刷新</button>
         </div>
-        <!-- DB-IP GeoIP 数据归因（CC BY 4.0 许可要求）。 -->
-        <p class="form-note settings-attribution">
-          GeoIP data by <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">DB-IP.com</a> (CC BY 4.0)
-        </p>
+        <!-- 第三方致谢：CC BY 4.0 许可要求保留署名（见 NOTICE.md），不可移除，
+             只把它从孤立的一句英文变成有归属的中文小节。 -->
+        <div class="settings-attribution">
+          <div class="settings-attribution-title">第三方致谢</div>
+          <ul>
+            <li>GeoIP 数据来源 <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">DB-IP.com</a>（CC BY 4.0）</li>
+            <li>图标来自 <a href="https://fontawesome.com" target="_blank" rel="noopener noreferrer">Font Awesome</a> Free（CC BY 4.0）</li>
+          </ul>
+        </div>
       </div>
     </div>
   </section>

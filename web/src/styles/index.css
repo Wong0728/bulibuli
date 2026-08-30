@@ -51,5 +51,11 @@ img { max-width: 100%; }
     margin-left: 6px;
     vertical-align: middle;
 }
+
+/* aria2 状态点可点击（弹诊断信息），也可键盘触发。 */
+.aria2-dot:focus-visible {
+    outline: 2px solid var(--brand, #165dff);
+    outline-offset: 2px;
+}
 .aria2-dot.connected { background: var(--bulibuli-success); box-shadow: 0 0 6px rgba(82, 196, 26, 0.4); }
 .aria2-dot.disconnected { background: var(--bulibuli-text-faint); }

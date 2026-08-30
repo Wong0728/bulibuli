@@ -10,14 +10,19 @@
          异步加载不阻塞首屏渲染；图标区在加载完成前以无图标形态短暂降级。
          切换动作由 main.ts 完成：CSP 是 script-src 'self'（无 'unsafe-hashes'），
          内联 onload 会被浏览器拦掉，样式表会永久停在 media="print"（图标全部不显示）。 -->
+    <!-- 三枚 woff2 提前并行取：字体只有等 fontawesome 样式表切回 media=all 后才会被 @font-face
+         触发下载，串在后面会让图标晚一个往返才出现（三个族都在用：solid/brands/regular）。 -->
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/app/css/lib/webfonts/fa-solid-900.woff2" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/app/css/lib/webfonts/fa-brands-400.woff2" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/app/css/lib/webfonts/fa-regular-400.woff2" />
     <link rel="stylesheet" href="/app/css/lib/fontawesome.min.css" media="print" data-lazy-media="all" />
     <noscript><link rel="stylesheet" href="/app/css/lib/fontawesome.min.css" /></noscript>
-    <script type="module" crossorigin src="/app/assets/index-CLmYE035.js"></script>
+    <script type="module" crossorigin src="/app/assets/index-DJssdyR7.js"></script>
     <link rel="modulepreload" crossorigin href="/app/assets/vendor-HeeKQrZG.js">
-    <link rel="stylesheet" crossorigin href="/app/assets/index-CUr9n5Uy.css">
+    <link rel="stylesheet" crossorigin href="/app/assets/index-BRVX2iF4.css">
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app"></div>
     <!-- 二维码库（约 23KB）仅扫码登录弹窗使用：已改为 CookieLoginModals 打开弹窗时动态注入加载，
          不再随首屏 HTML 下发。 -->
   </body>

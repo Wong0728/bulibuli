@@ -221,7 +221,7 @@ defineExpose({ openQrLogin, closeQrLogin });
   <div v-if="showQr" ref="qrRoot" id="qrcode-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="qrcode-modal-title" @click.self="closeQrLogin">
     <div class="modal-container qrcode">
       <div class="modal-header">
-        <i class="fa-solid fa-bilibili text-brand"></i>
+        <i class="fa-brands fa-bilibili text-brand"></i>
         <span id="qrcode-modal-title">B站扫码登录</span>
       </div>
       <div id="qrcode-container" class="qrcode-container">

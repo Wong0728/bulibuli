@@ -126,15 +126,30 @@ export const useHistoryStore = defineStore('history', () => {
       const data = (await historyApi.list(tab, pages[tab], pageSize.value, fresh)) as unknown as HistoryBoardResponse | null;
       const items = Array.isArray(data?.items) ? (data!.items as any[]).map(normalizeGroup) : [];
       const mergedGroups = append ? [...(tab === 'completed' ? completedGroups.value : tab === 'failed' ? failedGroups.value : downloadingGroups.value)] : [];
+      // 按 uid 建索引、每组维护已见视频集合：原来的 mergedGroups.find() 加上每组
+      // 重新 new Set(videos.map())，在翻页追加时是 O(组数²)，几千条记录会明显卡。
+      const indexByUid = new Map<string, number>();
+      mergedGroups.forEach((group, position) => indexByUid.set(String(group.uid), position));
+      const knownIdsByUid = new Map<string, Set<number>>();
       for (const group of items) {
-        const existing = mergedGroups.find(item => String(item.uid) === String(group.uid));
-        if (existing) {
-          const known = new Set(existing.videos.map(video => video.id));
-          existing.videos = [...existing.videos, ...group.videos.filter(video => !known.has(video.id))];
-          existing.counts = group.counts ?? existing.counts;
-        } else {
+        const uid = String(group.uid);
+        const position = indexByUid.get(uid);
+        const existing = position === undefined ? undefined : mergedGroups[position];
+        if (!existing) {
+          indexByUid.set(uid, mergedGroups.length);
+          knownIdsByUid.set(uid, new Set(group.videos.map(video => video.id)));
           mergedGroups.push(group);
+          continue;
         }
+        let known = knownIdsByUid.get(uid);
+        if (!known) {
+          known = new Set(existing.videos.map(video => video.id));
+          knownIdsByUid.set(uid, known);
+        }
+        const fresh = group.videos.filter(video => !known.has(video.id));
+        for (const video of fresh) known.add(video.id);
+        if (fresh.length) existing.videos = [...existing.videos, ...fresh];
+        existing.counts = group.counts ?? existing.counts;
       }
       const flat = mergedGroups.flatMap(group => group.videos);
       // 较慢的旧请求不能覆盖用户刚切换到的子 Tab。

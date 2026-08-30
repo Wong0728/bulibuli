@@ -125,6 +125,8 @@ function enterAuthenticatedApp() {
     }
     phase.value = await resolveEntryPhase();
     if (phase.value !== 'main') return;
+    // 这里刻意不请求 /api/settings：tests/vue_app.spec.mjs 钉住了"未激活页面不得在
+    // 后台初始化或轮询"。主题的早期应用改由 main.ts 读上次已知值（localStorage）完成。
     void Promise.allSettled([download.refreshHealth(), download.refreshStatus()]);
   })().finally(() => {
     enteringApp = null;
@@ -172,15 +174,7 @@ watch(() => auth.isCookieValid, (valid) => {
 });
 function retryConnection() { void enterAuthenticatedApp(); }
 
-function imageError(event: Event) {
-  const image = event.target as HTMLImageElement;
-  image.hidden = true;
-  image.nextElementSibling?.removeAttribute('hidden');
-}
-
-function imageUrl(url?: string) {
-  return url ? videoApi.proxyImage(url) : '';
-}
+import { imageUrl, imageError } from '@/utils/image';
 
 const viewerLocalActions = new Set([
   'switch-tab', 'switch-board-tab', 'switch-live-board',
