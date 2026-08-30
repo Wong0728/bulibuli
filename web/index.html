@@ -6,9 +6,11 @@
     <title>补哩补哩 bulibuli</title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon" />
     <link rel="stylesheet" href="/app/css/lib/jetbrains-mono.css" />
-    <!-- fontawesome（约 100KB CSS + 字体）非首屏必需：用 media="print" 欺骗加载 + onload 切回 all，
-         异步加载不阻塞首屏渲染；图标区在加载完成前以无图标形态短暂降级。 -->
-    <link rel="stylesheet" href="/app/css/lib/fontawesome.min.css" media="print" onload="this.media='all'" />
+    <!-- fontawesome（约 100KB CSS + 字体）非首屏必需：用 media="print" 欺骗加载 + 加载完成后切回 all，
+         异步加载不阻塞首屏渲染；图标区在加载完成前以无图标形态短暂降级。
+         切换动作由 main.ts 完成：CSP 是 script-src 'self'（无 'unsafe-hashes'），
+         内联 onload 会被浏览器拦掉，样式表会永久停在 media="print"（图标全部不显示）。 -->
+    <link rel="stylesheet" href="/app/css/lib/fontawesome.min.css" media="print" data-lazy-media="all" />
     <noscript><link rel="stylesheet" href="/app/css/lib/fontawesome.min.css" /></noscript>
   </head>
   <body>

@@ -16,8 +16,9 @@
 
 1. 从 [Releases](https://github.com/Wong0728/bulibuli/releases) 下载对应平台的 `portable` 包和同名 `.sha256`，校验后解压到任意有写权限的目录。
 2. 运行程序：Windows 双击或执行 `bulibuli.exe`（启动器会通过 PowerShell 调用 `bulibuli-core.exe`）；Linux/macOS 执行 `./bulibuli`（首次请先 `chmod +x bulibuli resources/aria2c resources/ffmpeg`）。
-3. 打开终端打印的本地地址（默认 `http://127.0.0.1:5000`），输入终端横幅中的**首次设备配对码**完成配对。配对码 10 分钟有效且只能用一次；过期或丢失可执行 `bulibuli ctl pair` 重新生成，无需重启。
-4. 在网页中按需扫码登录 B 站，然后添加要监控的视频或直播间。
+3. 首次启动会自动打开 Setup 向导（地址为主端口 +1，默认 `http://127.0.0.1:5001`）：三步选完访问模式与 AI Skill 并保存后，页面自动交接回主端口（默认 `http://127.0.0.1:5000`）。
+4. 在主端口输入终端横幅中的**首次设备配对码**完成配对。配对码 10 分钟有效且只能用一次；过期或丢失可执行 `bulibuli ctl pair` 重新生成，无需重启——把该行输出整段复制粘贴进输入框即可，页面会从文本中精确提取配对码。
+5. 在网页中按需扫码登录 B 站，然后添加要监控的视频或直播间。
 
 ## 最低系统要求
 
@@ -134,9 +135,9 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termu
 
 ## 首次设置与常用操作
 
-1. 启动程序并打开终端打印的本地 URL。
+1. 启动程序并打开终端打印的本地 URL；首次启动会先进入 Setup 向导（Setup 端口免认证），完成三步并保存后交接回主端口。
 2. 首次设备配对码以醒目横幅在终端打印（请确保终端可见；以 nohup/systemd/Docker 方式运行看不到输出时，可执行 `bulibuli ctl pair` 重新生成，无需重启）。
-3. 在网页中完成设备配对和安全设置，再按需扫码登录 B 站。
+3. 在主端口完成设备配对（配对被拒绝时，页面行内显示后端的真实原因，例如「配对码无效」或「当前未开放设备配对」），再按需扫码登录 B 站。
 4. 完整包优先使用包内 aria2c 和 FFmpeg；轻量 `core` 包没有包内运行时时，按环境变量再到系统 `PATH` 查找，媒体探测会继续寻找 ffprobe 或回退 FFmpeg。
 
 常用本机控制命令（需服务已运行；AI Skill 未启用时仍放行只读 `sys status`，其他高级命令需先执行 `ai on`）：

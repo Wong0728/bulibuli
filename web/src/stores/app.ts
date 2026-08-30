@@ -14,7 +14,7 @@ import { ref, computed } from 'vue';
 import { io, Socket } from 'socket.io-client';
 import { auth as authApi, health, setup as setupApi, download as downloadApi } from '@/api';
 import type { DownloadProgressEvent } from '@/api/types';
-import { setApiErrorHandlers, setNetworkHooks, NETWORK_ERR_MSG } from '@/api/client';
+import { setApiErrorHandlers, setNetworkHooks, NETWORK_ERR_MSG, QUIET_UNAUTHORIZED } from '@/api/client';
 import { acceptWebSocketMessage } from '@/utils/ws-dedupe';
 import { confirmDialog, closeConfirmByTitle } from '@/composables/confirm';
 import { useToastStore } from './toast';
@@ -450,7 +450,14 @@ export const useAppStore = defineStore('app', () => {
       setBackendAvailable(false);
       return 'unavailable';
     }
-    if (!authStore().isAuthenticated) return 'pair';
+    if (!authStore().isAuthenticated) {
+      // Setup 端口免认证提供 /api/setup/status：首次配置未完成时先走三步向导。
+      // 配对码只存在于服务端终端，把向导挡在配对门禁之后会让首次启动无路可走。
+      // 主端口该请求 401（此处属能力探测，不得触发全局会话失效），失败即回配对。
+      const pending = await setupApi.status(QUIET_UNAUTHORIZED).catch(() => null);
+      if (pending && !pending.completed) return 'setup';
+      return 'pair';
+    }
 
     // 认证后立即获取 CSRF token：所有写请求（含 Setup apply）必须携带，否则 403。
     await authStore().refreshCsrfToken();

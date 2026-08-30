@@ -367,3 +367,48 @@ async fn backup_is_owner_only_and_rbac_enforced() {
         "Operator 不应被 RBAC 拦截"
     );
 }
+
+/// 配对额度只统计失败：连续 6 台设备成功配对（超过每 IP 5 次/分钟）不得被限流挡住；
+/// 连续 5 次错码之后，第 6 次提交必须落在每分钟额度或临时封禁上（两者都是 409）。
+#[tokio::test]
+async fn pairing_quota_counts_failures_only() {
+    let temp = TempDir::new().expect("tempdir");
+    let (state, _) = build_state(&temp).await.expect("build app state");
+    let auth = state.bili.auth.clone();
+    let client_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
+    for index in 1..=6 {
+        let code = auth.open_pairing().await;
+        auth.pair(
+            &code,
+            &format!("device-{index}"),
+            client_ip,
+            "contract-test",
+            false,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("第 {index} 次成功配对不应被限流: {error}"));
+    }
+
+    // 重新开一个有效窗口：否则一次性码已被上面的成功配对消耗，错码提交会先落在
+    // 「窗口未开放」分支，测不到失败额度。
+    auth.open_pairing().await;
+    for _ in 1..=5 {
+        let error = auth
+            .pair("ZZZZZZZZ", "intruder", client_ip, "contract-test", false)
+            .await
+            .expect_err("错误配对码必须被拒绝");
+        assert!(
+            matches!(error, crate::error::AppError::Unauthorized(_)),
+            "错码应按凭证错误处理: {error}"
+        );
+    }
+    let error = auth
+        .pair("ZZZZZZZZ", "intruder", client_ip, "contract-test", false)
+        .await
+        .expect_err("失败额度用尽后必须拒绝后续尝试");
+    assert!(
+        matches!(error, crate::error::AppError::Conflict(_)),
+        "超过每 IP 每分钟失败额度应返回 Conflict: {error}"
+    );
+}

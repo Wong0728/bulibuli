@@ -4,6 +4,14 @@ import App from './App.vue';
 import './styles/index.css';
 import { useToastStore } from './stores/toast';
 
+// CSP `script-src 'self'` 会拦掉内联 onload，异步样式表将永远停在 media="print"。
+// 切换动作由这份同源 bundle 接管：已加载完的立即并入渲染，其余等 load 事件。
+for (const link of Array.from(document.querySelectorAll<HTMLLinkElement>('link[data-lazy-media]'))) {
+  const promote = () => { link.media = link.dataset.lazyMedia || 'all'; };
+  if (link.sheet) promote();
+  else link.addEventListener('load', promote, { once: true });
+}
+
 const app = createApp(App);
 const pinia = createPinia();
 app.use(pinia);

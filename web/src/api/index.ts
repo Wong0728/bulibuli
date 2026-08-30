@@ -4,7 +4,8 @@
  * - POST 用 body
  * - 二进制流/下载直接用 fetch 返回的 Response
  */
-import { get, post, put, request } from './client';
+import { get, post, put, request, QUIET_UNAUTHORIZED } from './client';
+import type { ApiErrorHandlers } from './client';
 import type {
   AuthState, CookieStatus, QrcodeGenerate, QrcodePoll, FoundationStatus, SetupStatus, DetectResult,
   Blogger, SavedBlogger, SearchedUser, UserProfileResult, Series, VideoItem, VideoUrlsResult, VideoInfo,
@@ -19,7 +20,9 @@ export const auth = {
   // 配对刚写入会话 Cookie，入口状态不能读到旧的 GET 缓存。
   state: () => request<AuthState>('/api/auth/state', { method: 'GET', cache: 'no-store' }),
   pair: (code: string, device_name?: string) =>
-    post<{ paired: boolean }>('/api/auth/pair', { code, device_name }),
+    // 配对失败（码错/窗口过期）返回 401，此时并不存在“失效的会话”：跳过全局处理，
+    // 由 PairView 行内展示后端真实原因，避免「设备会话已失效」误导。
+    post<{ paired: boolean }>('/api/auth/pair', { code, device_name }, QUIET_UNAUTHORIZED),
   // 后端响应是 { logged_out: true }（src/api/auth.rs::logout）。
   logout: () => post<{ logged_out: boolean }>('/api/auth/logout'),
 };
@@ -283,7 +286,8 @@ export const update = {
  *   - GET  /api/setup/ports   返回端口 / URL 信息
  */
 export const setup = {
-  status: () => get<SetupStatus>('/api/setup/status'),
+  // handlers 供入口探测使用：主端口未配对时该请求 401，属于能力探测而非会话失效。
+  status: (handlers?: ApiErrorHandlers) => get<SetupStatus>('/api/setup/status', undefined, handlers),
   apply: (config: { mode: 'local' | 'lan' | 'proxy'; access_default?: 'allow' | 'deny'; proxy_domain?: string; mark_completed?: boolean }) =>
     post<SetupApplyResult>('/api/setup/apply', config),
   finish: () => post<{ main_url: string | null; accessible_urls: string[] }>('/api/setup/finish'),

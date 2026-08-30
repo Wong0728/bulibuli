@@ -21,11 +21,12 @@ const SESSION_ABSOLUTE_SECONDS: i64 = 90 * 24 * 60 * 60;
 const ROTATE_AFTER_SECONDS: i64 = 24 * 60 * 60;
 const PREVIOUS_TOKEN_GRACE_SECONDS: i64 = 120;
 const CODE_ALPHABET: &[u8] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
-/// 每 IP 每分钟最大登录/配对尝试次数
+/// 每 IP 每分钟最大**失败**登录/配对尝试次数（成功配对不占额度）。
 const LOGIN_RATE_LIMIT_PER_IP: usize = 5;
-/// `/api/auth/state` 未认证探测限流：每 IP 每分钟上限（PairView 5s 轮询 ≈ 12 次/分钟，
-/// 正常前端不受影响；快速枚举配对窗口的脚本会被拦下）。
-const STATE_PROBE_LIMIT_PER_IP: usize = 20;
+/// `/api/auth/state` 未认证探测限流：每 IP 每分钟上限。单个 PairView 5s 轮询 ≈ 12 次/分钟，
+/// 主端口与 Setup 端口各开一个页签就是 24 次/分钟，20 会把正常用户挡在门外；
+/// 放宽到 40（约 3 个页签）仍能拦下快速枚举配对窗口的脚本。
+const STATE_PROBE_LIMIT_PER_IP: usize = 40;
 const MAX_AUTHENTICATION_LOCKS: usize = 4096;
 
 #[derive(Clone)]
@@ -48,6 +49,14 @@ struct PairWindow {
     code: String,
     expires_at: i64,
     role: SessionRole,
+}
+
+/// 一次性配对码的判定结果：「窗口未开放/已过期」是环境状态，「码不匹配」是凭证错误，
+/// 两者的日志原因与失败计数处理不同。
+enum PairAttempt {
+    Granted(SessionRole),
+    WindowUnavailable,
+    CodeMismatch,
 }
 
 struct AuthSessionRow {
@@ -262,38 +271,65 @@ impl AuthService {
         explicit_allow: bool,
     ) -> AppResult<String> {
         let now = Utc::now().timestamp();
-        self.check_attempt_allowed(ip, now).await?;
-        if !explicit_allow && self.security.current().geo_cn && !self.ip_is_cn(ip)? {
-            return Err(AppError::Unauthorized(
-                "当前网络区域不允许发起新设备配对".to_string(),
-            ));
+        if let Err(error) = self.check_attempt_allowed(ip, now).await {
+            tracing::warn!(%ip, %error, "配对请求被限流拒绝");
+            return Err(error);
+        }
+        if !explicit_allow && self.security.current().geo_cn {
+            match self.ip_is_cn(ip) {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!(%ip, "配对失败：来源网络不在允许区域");
+                    self.record_attempt(ip, now).await;
+                    return Err(AppError::Unauthorized(
+                        "当前网络区域不允许发起新设备配对".to_string(),
+                    ));
+                }
+                Err(error) => {
+                    tracing::warn!(%ip, %error, "配对失败：GeoIP 判定不可用");
+                    self.record_attempt(ip, now).await;
+                    return Err(error);
+                }
+            }
         }
         let normalized = submitted.replace('-', "").trim().to_ascii_uppercase();
-        let role = {
+        let attempt = {
             let mut window = self.pairing.lock().await;
-            let Some(current) = window.as_ref() else {
-                return Err(AppError::Unauthorized("当前未开放设备配对".to_string()));
+            let outcome = match window.as_ref() {
+                None => PairAttempt::WindowUnavailable,
+                Some(current) if current.expires_at <= now => PairAttempt::WindowUnavailable,
+                Some(current) => {
+                    let equal = normalized.len() == current.code.len()
+                        && normalized.as_bytes().ct_eq(current.code.as_bytes()).into();
+                    if equal {
+                        PairAttempt::Granted(current.role)
+                    } else {
+                        PairAttempt::CodeMismatch
+                    }
+                }
             };
-            if current.expires_at <= now {
+            // 过期与成功都要作废窗口（一次性码不得重复使用）；码不匹配时保留窗口供重试。
+            if !matches!(outcome, PairAttempt::CodeMismatch) {
                 *window = None;
-                return Err(AppError::Unauthorized("当前未开放设备配对".to_string()));
             }
-            let equal = normalized.len() == current.code.len()
-                && normalized.as_bytes().ct_eq(current.code.as_bytes()).into();
-            if equal {
-                let role = current.role;
-                *window = None;
-                Some(role)
-            } else {
-                None
+            outcome
+        };
+        match attempt {
+            PairAttempt::Granted(role) => {
+                self.attempts.lock().await.per_ip.remove(&ip);
+                self.create_session(device_name, ip, user_agent, role).await
             }
-        };
-        let Some(role) = role else {
-            self.record_failure(ip, now).await;
-            return Err(AppError::Unauthorized("配对码无效，请稍后重试".to_string()));
-        };
-        self.attempts.lock().await.per_ip.remove(&ip);
-        self.create_session(device_name, ip, user_agent, role).await
+            PairAttempt::WindowUnavailable => {
+                tracing::warn!(%ip, "配对失败：当前未开放设备配对或配对码已过期");
+                Err(AppError::Unauthorized("当前未开放设备配对".to_string()))
+            }
+            PairAttempt::CodeMismatch => {
+                tracing::warn!(%ip, "配对失败：配对码不匹配");
+                self.record_attempt(ip, now).await;
+                self.record_failure(ip, now).await;
+                Err(AppError::Unauthorized("配对码无效，请稍后重试".to_string()))
+            }
+        }
     }
 
     pub async fn authenticate(&self, token: &str, ip: IpAddr) -> AppResult<Option<SessionAuth>> {
@@ -506,39 +542,34 @@ impl AuthService {
     }
 
     async fn check_attempt_allowed(&self, ip: IpAddr, now: i64) -> AppResult<()> {
-        // 检查每 IP 登录速率限制（每分钟最多 LOGIN_RATE_LIMIT_PER_IP 次）
+        // 检查每 IP 登录速率限制（每分钟最多 LOGIN_RATE_LIMIT_PER_IP 次失败）。
+        // 只读不记账：成功配对不该消耗额度，否则连配几台设备就会被 409 锁住。
         {
-            let mut login_attempts = self.login_attempts.lock().await;
-            // /api/auth/pair 是公开端点：攻击者轮换 IPv6 源地址可让 map 无限增长，
-            // 插入前先淘汰最久未活动的 IP，总量有上界。
-            evict_stalest_ip(&mut login_attempts, |timestamps| {
-                timestamps.back().copied().unwrap_or(0)
-            });
-            let timestamps = login_attempts.entry(ip).or_default();
-            while timestamps
-                .front()
-                .is_some_and(|timestamp| *timestamp <= now - 60)
-            {
-                timestamps.pop_front();
-            }
-            if timestamps.len() >= LOGIN_RATE_LIMIT_PER_IP {
+            let login_attempts = self.login_attempts.lock().await;
+            let recent = login_attempts
+                .get(&ip)
+                .map(|timestamps| {
+                    timestamps
+                        .iter()
+                        .filter(|timestamp| **timestamp > now - 60)
+                        .count()
+                })
+                .unwrap_or(0);
+            if recent >= LOGIN_RATE_LIMIT_PER_IP {
                 return Err(AppError::Conflict(
                     "该 IP 登录尝试过于频繁（每 IP 每分钟限 5 次），请稍后重试".to_string(),
                 ));
             }
-            timestamps.push_back(now);
         }
 
-        // 检查全局速率限制（每分钟最多 LOGIN_RATE_LIMIT_GLOBAL 次）
-        let mut attempts = self.attempts.lock().await;
-        while attempts
+        // 检查全局速率限制（每分钟最多 LOGIN_RATE_LIMIT_GLOBAL 次失败）
+        let attempts = self.attempts.lock().await;
+        let recent_global = attempts
             .global
-            .front()
-            .is_some_and(|timestamp| *timestamp <= now - 60)
-        {
-            attempts.global.pop_front();
-        }
-        if attempts.global.len() >= self.login_rate_limit_global {
+            .iter()
+            .filter(|timestamp| **timestamp > now - 60)
+            .count();
+        if recent_global >= self.login_rate_limit_global {
             return Err(AppError::Conflict(
                 "登录尝试过于频繁，请稍后重试".to_string(),
             ));
@@ -552,8 +583,25 @@ impl AuthService {
                 "该 IP 因多次失败已被临时封禁，请稍后重试".to_string(),
             ));
         }
-        attempts.global.push_back(now);
         Ok(())
+    }
+
+    /// 登记一次失败的登录/配对尝试（每 IP 与全局每分钟额度各 +1）。
+    /// `/api/auth/pair` 是公开端点：攻击者轮换 IPv6 源地址可让 map 无限增长，
+    /// 插入前先淘汰最久未活动的 IP，总量有上界。
+    async fn record_attempt(&self, ip: IpAddr, now: i64) {
+        {
+            let mut login_attempts = self.login_attempts.lock().await;
+            evict_stalest_ip(&mut login_attempts, |timestamps| {
+                timestamps.back().copied().unwrap_or(0)
+            });
+            let timestamps = login_attempts.entry(ip).or_default();
+            timestamps.retain(|timestamp| *timestamp > now - 60);
+            timestamps.push_back(now);
+        }
+        let mut attempts = self.attempts.lock().await;
+        attempts.global.retain(|timestamp| *timestamp > now - 60);
+        attempts.global.push_back(now);
     }
 
     /// `/api/auth/state` 未认证探测限流：每 IP 每分钟最多 STATE_PROBE_LIMIT_PER_IP 次。

@@ -5,7 +5,7 @@ function envelope(data = {}, message = 'ok') {
 }
 
 async function mockVueApi(page) {
-  const state = { paired: false, cookies: false, calls: [], liveSource: true, recording: false, historyEntry: true };
+  const state = { paired: false, pairRejects: false, setupCompleted: true, setupRequiresAuth: true, cookies: false, calls: [], liveSource: true, recording: false, historyEntry: true };
   await page.route('**/socket.io/**', route => route.abort());
   await page.route('**/api/**', async route => {
     const request = route.request();
@@ -22,12 +22,25 @@ async function mockVueApi(page) {
     } else if (path === '/api/auth/csrf') {
       data = { csrf_token: 'vue-test-csrf' };
     } else if (path === '/api/auth/pair') {
+      if (state.pairRejects) {
+        await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ code: 401, message: '配对码无效，请稍后重试', data: null }) });
+        return;
+      }
       state.paired = true;
       data = { paired: true };
     } else if (path === '/api/cookies/status') data = state.cookies
       ? { configured: true, has_cookies: true, valid: true, uname: 'Vue 测试用户', mid: 123 }
       : { configured: false, has_cookies: false, valid: false };
-    else if (path === '/api/setup/status') data = { completed: true, mode: 'local', configured_mode: 'local' };
+    else if (path === '/api/setup/status') {
+      // 主端口该端点需要会话；Setup 端口免认证（setupRequiresAuth=false）。
+      if (state.setupRequiresAuth && !state.paired) {
+        await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ code: 401, message: '需要先完成设备配对', data: null }) });
+        return;
+      }
+      data = { completed: state.setupCompleted, mode: 'local', configured_mode: 'local' };
+    }
+    else if (path === '/api/setup/detect') data = { ipv4: ['127.0.0.1'], ipv6: [] };
+    else if (path === '/api/setup/ports') data = { main_port: 5000, setup_port: 5001, main_url: 'http://127.0.0.1:5000', setup_url: 'http://127.0.0.1:5001', accessible_urls: [] };
     else if (path === '/api/settings') data = {};
     else if (path === '/api/settings/ffmpeg-path') data = { available: true, path: '' };
     else if (path === '/api/update/status') data = {};
@@ -64,8 +77,58 @@ test('Vue app shows pairing before business initialization', async ({ page }) =>
   await page.goto('/app/');
   await expect(page.getByRole('heading', { name: '补哩补哩远程配对' })).toBeVisible();
   expect(state.calls.slice(0, 2).map(call => call.path)).toEqual(['/api/ready', '/api/auth/state']);
-  expect(state.calls.every(call => call.path === '/api/ready' || call.path === '/api/auth/state')).toBeTruthy();
+  // /api/setup/status 是入口的能力探测（主端口未配对时 401），不属于业务初始化。
+  const entryPaths = new Set(['/api/ready', '/api/auth/state', '/api/setup/status']);
+  expect(state.calls.every(call => entryPaths.has(call.path))).toBeTruthy();
+  // 探测性 401 不代表会话失效：不得弹出「设备会话已失效」并清空业务状态。
+  await expect(page.getByText('设备会话已失效，请重新配对')).toHaveCount(0);
+  // 异步样式表由主 bundle 在加载完成后并入渲染（内联 onload 会被 CSP 拦掉）。
+  await expect(page.locator('link[href*="fontawesome.min.css"]')).toHaveJSProperty('media', 'all');
   await expect(page.locator('#pair-code')).toBeEnabled();
+});
+
+test('Setup 向导未完成时先进向导，不先卡在配对页', async ({ page }) => {
+  const state = await mockVueApi(page);
+  state.setupCompleted = false;
+  state.setupRequiresAuth = false; // Setup 端口免认证提供向导 API
+  await page.goto('/app/');
+  await expect(page.getByRole('heading', { name: '欢迎使用补哩补哩' })).toBeVisible();
+  expect(state.calls.some(call => call.path === '/api/auth/pair')).toBeFalsy();
+  expect(state.calls.some(call => call.path === '/api/cookies/status')).toBeFalsy();
+});
+
+test('配对码被拒时只给行内原因，不误报设备会话失效', async ({ page }) => {
+  const state = await mockVueApi(page);
+  state.pairRejects = true;
+  await page.goto('/app/');
+  await page.locator('#pair-code').fill('ABCD-EFGH');
+  await page.getByRole('button', { name: '确认配对' }).click();
+  await expect(page.locator('.hint')).toHaveText('配对码无效，请稍后重试');
+  await expect(page.getByText('设备会话已失效，请重新配对')).toHaveCount(0);
+});
+
+test('配对码输入从整段粘贴文本中精确提取', async ({ page }) => {
+  await mockVueApi(page);
+  await page.goto('/app/');
+  const input = page.locator('#pair-code');
+  // maxlength=9 会截断键入的长文本，粘贴路径只能靠真实 paste 事件覆盖。
+  const paste = text => input.evaluate((el, value) => {
+    const transfer = new DataTransfer();
+    transfer.setData('text', value);
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }));
+  }, text);
+
+  await paste('{"ok":true,"data":{"pairing_code":"ABCD-K234"}}');
+  await expect(input).toHaveValue('ABCD-K234');
+  await paste('首次设备配对码：QR7T-2KW9（10 分钟内有效，仅可使用一次。');
+  await expect(input).toHaveValue('QR7T-2KW9');
+  // 粘贴内容里没有完整 8 位码：不拦截默认行为，输入框保持上一次的结果。
+  await paste('note to self');
+  await expect(input).toHaveValue('QR7T-2KW9');
+  // 逐字键入仍走原有归一规则：小写转大写、第 5 位补短横。
+  await input.fill('');
+  await input.pressSequentially('ab2d');
+  await expect(input).toHaveValue('AB2D');
 });
 
 test('Vue pairing enters the main app and uses aligned request contracts', async ({ page }) => {

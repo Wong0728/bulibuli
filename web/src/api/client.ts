@@ -17,10 +17,15 @@ let csrfToken: string | null = null;
 /** 老框架 state.js：全局统一网络错误文案（toast / 横幅共用）。 */
 export const NETWORK_ERR_MSG = '网络连接异常，请检查网络或后端服务状态';
 
-type ApiErrorHandlers = {
+export type ApiErrorHandlers = {
   onUnauthorized?: (e: ApiError, url: string) => void | Promise<void>;
   onRiskControl?: (e: ApiError, url: string) => void | Promise<void>;
 };
+
+/** 本次 401 不触发全局「设备会话失效」副作用（错误仍照常抛给调用方显示真实原因）。
+ *  配对提交与入口探测属于这一类：它们失败时根本还没有会话可失效。 */
+export const QUIET_UNAUTHORIZED: ApiErrorHandlers = { onUnauthorized: () => {} };
+
 let globalHandlers: ApiErrorHandlers = {};
 
 /** 网络层钩子：由 app store 注册，把请求成败接入全局网络降级体系（对齐老框架 core.js apiRequest）。 */
@@ -209,7 +214,11 @@ async function request<T = unknown>(
   return parsed.data as T | null;
 }
 
-const get = <T = unknown>(url: string, params?: Record<string, unknown>) => {
+const get = <T = unknown>(
+  url: string,
+  params?: Record<string, unknown>,
+  handlers?: ApiErrorHandlers,
+) => {
   if (params) {
     const qs = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
@@ -219,10 +228,10 @@ const get = <T = unknown>(url: string, params?: Record<string, unknown>) => {
     const s = qs.toString();
     if (s) url += (url.includes('?') ? '&' : '?') + s;
   }
-  return request<T>(url, { method: 'GET' });
+  return request<T>(url, { method: 'GET' }, handlers);
 };
-const post = <T = unknown>(url: string, body?: unknown) =>
-  request<T>(url, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined });
+const post = <T = unknown>(url: string, body?: unknown, handlers?: ApiErrorHandlers) =>
+  request<T>(url, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined }, handlers);
 const put = <T = unknown>(url: string, body?: unknown) =>
   request<T>(url, { method: 'PUT', body: body !== undefined ? JSON.stringify(body) : undefined });
 const getFull = <T = unknown>(url: string, params?: Record<string, unknown>) => {

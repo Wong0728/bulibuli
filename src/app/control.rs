@@ -346,6 +346,7 @@ pub async fn run_client(data_dir: &Path, args: &[String]) -> AppResult<String> {
     {
         let mut stream = connect_unix_control(data_dir).await?;
         stream.write_all(&request).await?;
+        stream.write_all(b"\n").await?;
         stream.shutdown().await?;
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await?;
@@ -358,6 +359,8 @@ pub async fn run_client(data_dir: &Path, args: &[String]) -> AppResult<String> {
         // 连接后先校验服务端身份（S2）：任何本机进程都能创建同名管道冒充服务端。
         verify_pipe_server_identity(&stream)?;
         stream.write_all(&request).await?;
+        // 换行收尾：管道客户端的 shutdown() 不产生服务端可见的 EOF。
+        stream.write_all(b"\n").await?;
         stream.shutdown().await?;
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await?;
@@ -2595,18 +2598,53 @@ mod skill_doc_tests {
 /// 断开连接，防止单个慢速/挂起客户端长期占用服务端任务。
 const IPC_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// 一次 ctl 请求的读取结果。
+enum ControlRequestRead {
+    Complete,
+    Timeout,
+    TooLong,
+}
+
+/// 读取一条以 `\n` 收尾的 ctl 请求。
+///
+/// 请求必须由换行符（或对端关闭）界定：Windows 命名管道的客户端没有半关闭语义
+/// （`DisconnectNamedPipe` 只能服务端调用），客户端 `shutdown()` 不产生 EOF，
+/// 用 `read_to_end` 等结束会一直卡到空闲超时——Windows 上每条 `ctl` 命令都会失败。
+async fn read_control_request<S>(
+    stream: &mut S,
+    buffer: &mut Vec<u8>,
+) -> AppResult<ControlRequestRead>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut byte = [0u8; 1];
+    loop {
+        let read = match tokio::time::timeout(IPC_READ_TIMEOUT, stream.read(&mut byte)).await {
+            Ok(result) => result?,
+            Err(_) => return Ok(ControlRequestRead::Timeout),
+        };
+        if read == 0 {
+            return Ok(ControlRequestRead::Complete);
+        }
+        if byte[0] == b'\n' {
+            return Ok(ControlRequestRead::Complete);
+        }
+        buffer.push(byte[0]);
+        if buffer.len() > MAX_COMMAND_BYTES {
+            return Ok(ControlRequestRead::TooLong);
+        }
+    }
+}
+
 async fn handle_stream<S>(mut stream: S, state: SharedState) -> AppResult<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut buffer = Vec::new();
-    // 读满上限 +1 字节即可判断超长；整体包在空闲超时里，慢速客户端 30s 后被断开。
-    let mut limited = (&mut stream).take((MAX_COMMAND_BYTES + 1) as u64);
-    let read = limited.read_to_end(&mut buffer);
-    match tokio::time::timeout(IPC_READ_TIMEOUT, read).await {
-        Ok(result) => result?,
-        Err(_) => {
-            // 超时也走统一错误信封，客户端能区分"连上了但被服务端断开"和"连接失败"。
+    match read_control_request(&mut stream, &mut buffer).await {
+        Ok(ControlRequestRead::Complete) => {}
+        // 超时也走统一错误信封，客户端能区分"连上了但被服务端断开"和"连接失败"。
+        Ok(ControlRequestRead::Timeout) => {
             let body = json!({
                 "ok": false,
                 "error": format!("控制命令读取超时（{} 秒无完整请求）", IPC_READ_TIMEOUT.as_secs()),
@@ -2616,12 +2654,13 @@ where
             stream.shutdown().await?;
             return Ok(());
         }
-    };
-    if buffer.len() > MAX_COMMAND_BYTES {
-        let body = json!({"ok": false, "error": "控制命令过长", "code": "BAD_REQUEST"});
-        stream.write_all(format_response(&body).as_bytes()).await?;
-        stream.shutdown().await?;
-        return Ok(());
+        Ok(ControlRequestRead::TooLong) => {
+            let body = json!({"ok": false, "error": "控制命令过长", "code": "BAD_REQUEST"});
+            stream.write_all(format_response(&body).as_bytes()).await?;
+            stream.shutdown().await?;
+            return Ok(());
+        }
+        Err(error) => return Err(error),
     }
     // 解析失败返回统一错误信封（而非直接断开让客户端看到空响应/UTF-8 错误），
     // 与 execute 层的错误信封格式保持一致。
@@ -2871,6 +2910,42 @@ async fn serve_ipc(_state: SharedState, _cancellation: CancellationToken) -> App
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    /// 换行即视为请求完整：Windows 命名管道客户端不会产生 EOF。
+    #[tokio::test]
+    async fn control_request_ends_at_newline() {
+        let mut stream = Cursor::new(&b"[\"pair\"]\ntrailing"[..]);
+        let mut buffer = Vec::new();
+        let outcome = read_control_request(&mut stream, &mut buffer)
+            .await
+            .expect("读取请求");
+        assert!(matches!(outcome, ControlRequestRead::Complete));
+        assert_eq!(buffer, br#"["pair"]"#.to_vec(), "换行后的字节不得混入请求");
+    }
+
+    /// 老客户端（不发换行、直接关写端）仍然可用：EOF 同样界定请求结束。
+    #[tokio::test]
+    async fn control_request_accepts_eof_without_newline() {
+        let mut stream = Cursor::new(&br#"["help"]"#[..]);
+        let mut buffer = Vec::new();
+        let outcome = read_control_request(&mut stream, &mut buffer)
+            .await
+            .expect("读取请求");
+        assert!(matches!(outcome, ControlRequestRead::Complete));
+        assert_eq!(buffer, br#"["help"]"#.to_vec());
+    }
+
+    #[tokio::test]
+    async fn control_request_rejects_oversized_payload() {
+        let payload = vec![b'a'; MAX_COMMAND_BYTES + 8];
+        let mut stream = Cursor::new(&payload[..]);
+        let mut buffer = Vec::new();
+        let outcome = read_control_request(&mut stream, &mut buffer)
+            .await
+            .expect("读取请求");
+        assert!(matches!(outcome, ControlRequestRead::TooLong));
+    }
 
     #[test]
     fn help_groups_all_categories() {

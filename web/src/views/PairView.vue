@@ -11,6 +11,8 @@ const expiresAt = ref<number | null>(null);
 const loading = ref(false);
 const polling = ref(false);
 const error = ref('');
+/** 最近一次轮询产生的错误文案：只有它自己能在轮询恢复后被清掉。 */
+const pollError = ref<string | null>(null);
 const paired = ref(false);
 const now = ref(Math.floor(Date.now() / 1000));
 /** 服务器时钟偏移（server_time - 本地时间）：倒计时用本地时钟 + 偏移校准。 */
@@ -45,13 +47,28 @@ const hintClass = computed(() => {
 });
 const buttonText = computed(() => paired.value ? '配对成功 ✓' : '确认配对');
 
+/** 与服务端 `src/services/auth.rs::CODE_ALPHABET` 一致的配对码字母表（已排除易混的 0/O/1/I/L）。 */
+const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+/** 整段粘贴（终端横幅、`ctl pair` 的 JSON 输出）时精确抠出配对码，避免把相邻文本当码。 */
+const CODE_PATTERN = new RegExp(`[${CODE_ALPHABET}]{4}-?[${CODE_ALPHABET}]{4}`);
+
 function formatCode(value: string) {
-  const normalized = value.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 8);
+  const extracted = value.match(CODE_PATTERN)?.[0] ?? value;
+  const normalized = extracted.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 8);
   return normalized.length > 4 ? `${normalized.slice(0, 4)}-${normalized.slice(4)}` : normalized;
 }
 
 function onCodeInput(event: Event) {
   code.value = formatCode((event.target as HTMLInputElement).value);
+}
+
+/** 粘贴要单独处理：`maxlength=9` 会让浏览器把整段文本截断在前 9 个字符，
+ *  @input 只能看到残缺片段（如 `{"data":{`）。这里直接读剪贴板全文取码。 */
+function onCodePaste(event: ClipboardEvent) {
+  const pasted = event.clipboardData?.getData('text') ?? '';
+  if (!pasted || !CODE_PATTERN.test(pasted)) return;
+  event.preventDefault();
+  code.value = formatCode(pasted);
 }
 
 function finishPairing() {
@@ -96,10 +113,15 @@ async function loadState() {
     if (typeof state?.server_time === 'number') {
       clockOffset.value = state.server_time - Math.floor(Date.now() / 1000);
     }
-    error.value = '';
+    // 只清理轮询自己产生的错误：提交失败的原因要保留到下一次提交，
+    // 否则后端刚返回的「配对码无效」会在同一轮里被抹掉。
+    if (pollError.value !== null && error.value === pollError.value) error.value = '';
+    pollError.value = null;
     restoreFastPolling();
   } catch (e: any) {
-    error.value = e?.message || '无法连接服务器，正在重试…';
+    const message: string = e?.message || '无法连接服务器，正在重试…';
+    pollError.value = message;
+    error.value = message;
     slowDownPolling();
   } finally {
     polling.value = false;
@@ -184,7 +206,7 @@ onUnmounted(() => {
       <form @submit.prevent="submit">
         <div class="input-group">
           <label class="sr-only" for="pair-code">配对码</label>
-           <input id="pair-code" :value="code" @input="onCodeInput"
+           <input id="pair-code" :value="code" @input="onCodeInput" @paste="onCodePaste"
                  class="pairing-input" placeholder="XXXX-XXXX" maxlength="9" autocomplete="one-time-code"
                  spellcheck="false" :disabled="loading || paired" />
         </div>
