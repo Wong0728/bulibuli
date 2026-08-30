@@ -147,7 +147,8 @@ impl SessionRole {
         }
     }
 
-    fn as_db(self) -> &'static str {
+    /// 会话角色在数据库与 WebSocket 房间名里使用的稳定标识。
+    pub(crate) fn as_db(self) -> &'static str {
         match self {
             Self::Owner => "owner",
             Self::Operator => "operator",

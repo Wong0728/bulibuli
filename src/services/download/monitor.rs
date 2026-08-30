@@ -322,7 +322,11 @@ impl DownloadManager {
                 if !disk_full_notified {
                     if let Err(notify_error) = self
                         .ws
-                        .broadcast_system("download:disk-full", json!({ "message": error }))
+                        .broadcast_system(
+                            "download:disk-full",
+                            json!({ "message": error }),
+                            crate::ws::NoticeAudience::CanAct,
+                        )
                         .await
                     {
                         warn!("推送磁盘空间不足事件失败: {notify_error}");
@@ -334,7 +338,11 @@ impl DownloadManager {
             if disk_full_notified {
                 if let Err(error) = self
                     .ws
-                    .broadcast_system("download:disk-recovered", json!({}))
+                    .broadcast_system(
+                        "download:disk-recovered",
+                        json!({}),
+                        crate::ws::NoticeAudience::CanAct,
+                    )
                     .await
                 {
                     warn!("推送磁盘恢复事件失败: {error}");

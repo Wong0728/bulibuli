@@ -243,6 +243,7 @@ impl BiliApi {
                                     "code": 429,
                                     "message": "触发 B 站限流，请稍后再试"
                                 }),
+                                crate::ws::NoticeAudience::CanAct,
                             )
                             .await
                         {
@@ -448,7 +449,11 @@ impl BiliApi {
                 }
             }
         }
-        if let Err(notify_error) = self.ws.broadcast_system(event, payload).await {
+        if let Err(notify_error) = self
+            .ws
+            .broadcast_system(event, payload, crate::ws::NoticeAudience::CanAct)
+            .await
+        {
             warn!("推送 B站系统事件失败: {notify_error}");
         }
     }

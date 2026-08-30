@@ -8,6 +8,22 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+/// 需要"有人去处理"的系统事件（B 站风控/登录过期、磁盘满）只发给 Owner 与 Operator：
+/// Viewer 既不能重新登录也不能清理磁盘，弹窗对他们只是噪音。
+const OPERATORS_ROOM: &str = "role:operator";
+/// 审计事件包含其它设备的操作信息，只发给 Owner。
+const OWNERS_ROOM: &str = "role:owner";
+
+/// 系统事件的收件范围。所有既有的系统事件都需要"有人去处理"，因此没有
+/// "发给全部已连接设备"这一档；将来确有此类事件再加。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeAudience {
+    /// 有能力处置的会话（Owner + Operator）。
+    CanAct,
+    /// 仅 Owner。
+    OwnerOnly,
+}
+
 #[derive(Clone)]
 pub struct WebSocketManager {
     io: Arc<OnceCell<SocketIo>>,
@@ -31,18 +47,23 @@ impl WebSocketManager {
     /// 博主日志不在此推送：WS 房间链路已移除，前端统一走 /api/logs/blogger HTTP 轮询。
     pub fn setup_handlers(io: &SocketIo) {
         io.ns("/", async move |s: SocketRef| {
-            let session_id = s
-                .req_parts()
-                .extensions
-                .get::<SessionAuth>()
-                .map(|session| session.id.clone());
-            let Some(session_id) = session_id else {
+            let session = s.req_parts().extensions.get::<SessionAuth>().cloned();
+            let Some(session) = session else {
                 if let Err(error) = s.disconnect() {
                     warn!("拒绝无会话 Socket.IO 连接失败: {error}");
                 }
                 return;
             };
-            s.join(format!("session:{session_id}"));
+            s.join(format!("session:{}", session.id));
+            // 角色房间：Owner 的能力包含 Operator，因此同时加入两个房间，
+            // "需要有人处理"的事件只需投递一个房间即可覆盖两类会话。
+            s.join(format!("role:{}", session.role.as_db()));
+            if session.role.can_operate() {
+                s.join(OPERATORS_ROOM);
+            }
+            if session.role.is_owner() {
+                s.join(OWNERS_ROOM);
+            }
             info!("[WebSocket] 客户端已连接: {}", s.id);
             if let Err(e) = s.emit(
                 "connected",
@@ -110,16 +131,26 @@ impl WebSocketManager {
         Ok(())
     }
 
-    pub async fn broadcast_system(&self, event: &str, mut data: serde_json::Value) -> Result<()> {
+    /// 广播系统事件。受众由 `audience` 决定：此前一律 `io.emit`，
+    /// 手机上的 Viewer 也会被"B站登录已过期"弹窗打断，且带操作信息的审计事件
+    /// 会发给所有已连接设备。
+    pub async fn broadcast_system(
+        &self,
+        event: &str,
+        mut data: serde_json::Value,
+        audience: NoticeAudience,
+    ) -> Result<()> {
         if let Some(object) = data.as_object_mut() {
             object
                 .entry("id")
                 .or_insert_with(|| serde_json::Value::String(uuid::Uuid::new_v4().to_string()));
         }
         if let Some(io) = self.io.get().cloned() {
-            io.emit(event, &data)
-                .await
-                .map_err(|error| anyhow::anyhow!("broadcast {event} failed: {error}"))?;
+            let target = match audience {
+                NoticeAudience::CanAct => io.to(OPERATORS_ROOM).emit(event, &data).await,
+                NoticeAudience::OwnerOnly => io.to(OWNERS_ROOM).emit(event, &data).await,
+            };
+            target.map_err(|error| anyhow::anyhow!("broadcast {event} failed: {error}"))?;
         }
         Ok(())
     }
@@ -153,7 +184,10 @@ pub fn start_audit_event_bridge(
                             continue;
                         }
                     };
-                    if let Err(error) = ws.broadcast_system("audit:event", payload).await {
+                    if let Err(error) = ws
+                        .broadcast_system("audit:event", payload, NoticeAudience::OwnerOnly)
+                        .await
+                    {
                         warn!("[WebSocket] 广播审计事件失败: {error}");
                     }
                 }
@@ -171,6 +205,7 @@ pub fn start_audit_event_bridge(
 
 #[cfg(test)]
 mod tests {
+    use super::NoticeAudience;
     use super::*;
     use crate::services::audit_log::AuditEvent;
     use std::time::Duration;
@@ -191,10 +226,12 @@ mod tests {
             .disconnect_session("all")
             .await
             .expect("disconnect all");
-        manager
-            .broadcast_system("audit:event", serde_json::json!({}))
-            .await
-            .expect("broadcast_system");
+        for audience in [NoticeAudience::CanAct, NoticeAudience::OwnerOnly] {
+            manager
+                .broadcast_system("audit:event", serde_json::json!({}), audience)
+                .await
+                .expect("broadcast_system");
+        }
     }
 
     #[tokio::test]
