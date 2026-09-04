@@ -92,7 +92,7 @@ tempfile = "3"
 socket2 = "0.6"
 
 # 速率限制
-governor = "0.8"
+governor = "0.10"
 
 # 进程管理 / 路径查找
 which = "7"
