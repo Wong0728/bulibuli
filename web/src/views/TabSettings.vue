@@ -185,6 +185,16 @@ async function restartAria2() {
   }
 }
 
+/** aria2 指示点点击诊断：与看板页（TabHistory）同一入口，复用 store 的 diagnoseAria2，
+ *  未做过健康探测时静默返回，不弹无依据的结论。 */
+function onAria2DotClick() {
+  const d = download.diagnoseAria2();
+  if (!d) return;
+  if (d.type === 'success') toast.success(d.message, d.duration);
+  else if (d.type === 'info') toast.info(d.message, d.duration);
+  else toast.error(d.message, d.duration);
+}
+
 // 更新管理
 const applyingUpdate = ref(false);
 /** 老框架：loadUpdateStatus 失败静默，版本框保留"正在获取..."初始文案。 */
@@ -774,7 +784,7 @@ const downloadModeNote = computed(() => '自动启动内置 aria2c 并通过 RPC
               </div>
               <div class="form-group form-full">
                 <div class="aria2-settings-status">
-                  <span><span class="aria2-dot" :class="download.aria2DotClass" data-aria2-status :title="download.aria2Title"></span> 保存连接设置后会立即应用，无需重启应用。</span>
+                  <span><span class="aria2-dot" :class="download.aria2DotClass" data-aria2-status :title="download.aria2Title" role="button" tabindex="0" @click="onAria2DotClick" @keydown.enter.prevent="onAria2DotClick" @keydown.space.prevent="onAria2DotClick"></span> 保存连接设置后会立即应用，无需重启应用。</span>
                   <button type="button" class="btn btn-sm" data-action="restart-aria2" :disabled="restartingAria2" @click="restartAria2">
                     <i class="fa-solid fa-rotate"></i> {{ restartingAria2 ? '正在重连' : '重新连接 Aria2' }}
                   </button>

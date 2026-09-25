@@ -9,7 +9,7 @@ import type { ApiErrorHandlers } from './client';
 import type {
   AuthState, CookieStatus, QrcodeGenerate, QrcodePoll, FoundationStatus, SetupStatus, DetectResult,
   Blogger, SavedBlogger, SearchedUser, UserProfileResult, Series, VideoItem, VideoUrlsResult, VideoInfo,
-  DownloadHealth, DownloadStatusSnapshot, HistoryBoardResponse, HistoryEntry, LiveRoom, LiveRecording, LiveDashboard, LiveMergeJob,
+  DownloadHealth, DownloadStatusSnapshot, HistoryBoardResponse, HistoryEntry, LiveRoom, LiveRecording, LiveDashboard,
   SettingsPayload, Settings, FfmpegStatus,
   UpdateStatus, UpdateApplyResult,
   ManualResolveResult, TaskStatusSummary, TaskSchedule, SetupApplyResult, RawLogEntry,
@@ -211,18 +211,14 @@ export const live = {
   // （直播源写操作统一走 stores/live.ts 的 addSource/updateSource/deleteSource，
   //  字段映射 auto_record→auto_record_enabled、quality→max_qn 在那里完成）。
   history: (limit = 30) => get<{ items: LiveRecording[]; total?: number }>('/api/live/history', { limit }),
-  // 后端返回 { items }（src/api/live/history.rs::recovery）。
-  recovery: () => get<{ items: LiveRecording[] }>('/api/live/recovery'),
   events: (room_id: number, recording_id?: number, after_seq = 0, limit = 100) =>
     get<{ recording_id?: string | number; events: Array<Record<string, unknown>>; next_seq?: number }>('/api/live/events', { room_id, recording_id, after_seq, limit }),
   // 后端返回 { task_id, status: "queued" }（src/api/live/mod.rs::burn_recording_danmaku）。
   burnDanmaku: (recording_id: string | number) =>
     post<{ task_id: string; status: string }>(`/api/live/history/${encodeURIComponent(String(recording_id))}/burn-danmaku`, {}),
-  startMerge: (recording_id: string) => post<LiveMergeJob>(`/api/live/history/${recording_id}/merge`, {}),
-  mergeJob: (job_id: string) => get<LiveMergeJob>(`/api/live/merge/${job_id}`),
-  cancelMerge: (job_id: string) => post<LiveMergeJob>(`/api/live/merge/${job_id}/cancel`, {}),
-  openDirectory: (recording_id: number) =>
-    post<{ recording_id: number }>(`/api/live/history/${recording_id}/open-directory`, {}),
+  // startMerge / mergeJob / cancelMerge / openDirectory / recovery 已删除：全仓零调用点。
+  // 合并与打开目录走 stores/live.ts 的 startMerge/cancelMerge/openRecording（postFull 直连），
+  // recovery 数据由 dashboard 响应的 recovery 字段下发（stores/live.ts::refreshDashboard）。
 };
 
 /** ---------- settings ----------
