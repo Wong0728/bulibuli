@@ -71,6 +71,7 @@ const streamBlockedMessage = ref('');
 type LogLine = { time: string; level: string; msg: string; cls: 'log-error' | 'log-info' };
 const logLines = ref<LogLine[]>([]);
 const logsLoading = ref(false);
+const logsError = ref('');
 // 侧车浏览器
 type SidecarViewer = { kind: 'comments' | 'danmaku'; path: string; exists: boolean; format?: string; comments?: any[]; danmaku?: any[]; content?: string };
 const sidecarViewer = ref<SidecarViewer | null>(null);
@@ -220,7 +221,7 @@ watch(() => drawerState.video, async (v) => {
   videoInfo.value = null; liveStatsLoaded.value = false;
   urls.value = null; selectedPages.value = new Set();
   streamBlockedMessage.value = '';
-  logLines.value = []; sidecarViewer.value = null; sidecarError.value = '';
+  logLines.value = []; logsError.value = ''; sidecarViewer.value = null; sidecarError.value = '';
   selectMode.value = false; selectedFilePaths.value = new Set();
   burningTask.value = null;
   if (v.source === 'manual') {
@@ -574,6 +575,7 @@ async function loadLogs() {
   if (!target) return;
   const generation = drawerGeneration;
   logsLoading.value = true;
+  logsError.value = '';
   try {
     const r: any = await logsApi.bvid(target.bvid);
     if (generation !== drawerGeneration || drawerState.video?.bvid !== target.bvid) return;
@@ -590,7 +592,7 @@ async function loadLogs() {
         cls: ['error', 'warn', 'warning'].includes(level) ? 'log-error' : 'log-info',
       } as LogLine;
     });
-  } catch { /* 静默：日志不可用不打扰 */ }
+  } catch { logsError.value = '日志加载失败，请点击刷新重试'; }
   finally { if (generation === drawerGeneration) logsLoading.value = false; }
 }
 
@@ -1196,6 +1198,7 @@ onUnmounted(stopBurnPolling);
             </div>
             <div class="drawer-logs">
               <div v-if="logsLoading" class="drawer-logs-hint"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
+              <div v-else-if="logsError" class="drawer-logs-hint log-error"><i class="fa-solid fa-triangle-exclamation"></i> {{ logsError }}</div>
               <div v-else-if="!logLines.length" class="drawer-logs-hint">暂无该视频的日志</div>
               <div v-for="(l, i) in logLines" :key="i" class="drawer-log-item" :class="l.cls">
                 <span class="drawer-log-time">{{ l.time }}</span>
