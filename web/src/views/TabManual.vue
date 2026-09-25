@@ -473,7 +473,7 @@ function optionMeta(b: any) {
           <label for="manual-link-input">输入番剧 / 课程链接</label>
           <input id="manual-link-input" v-model="linkInput" type="text" class="form-control"
                  placeholder="支持 ep / ss / fp 链接，如 https://www.bilibili.com/bangumi/play/ep123" />
-          <div class="form-note">番剧（ep/ss）与课程（fp）链接会解析出分集列表，勾选后批量下载；普通视频（BV）链接走单视频流程，暂不支持 AV 链接，请从视频页地址栏复制 BV 链接。</div>
+          <div class="form-note">番剧（ep/ss）与课程（fp）链接解析出分集列表后批量下载；普通视频仅支持 BV 链接。</div>
         </div>
         <button type="button" class="btn btn-primary" id="manual-resolve-btn" data-action="resolve-link"
                 data-network-required="true" :disabled="resolving" @click="resolveLink">
