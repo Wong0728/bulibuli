@@ -16,11 +16,13 @@
  * - 加载更多的 total 用后端按 tab 的 data.total；徽章计数用全局 counts。
  * - 不产出 version/乐观锁（老框架一律不带）。
  *
- * 所有 action 内部自带 try/catch，**不向调用者抛 promise reject**。
+ * 看板类 action 内部自带 try/catch，**不向调用者抛 promise reject**（失败写 error）；
+ * search / openDirectory 例外：失败会抛出，调用方必须处理，不得把失败当空结果。
  */
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { history as historyApi } from '@/api';
+import { useToastStore } from './toast';
 import type { HistoryEntry, HistoryGroup, HistoryBoardResponse, HistoryCounts } from '@/api/types';
 
 export type HistoryTab = 'downloading' | 'completed' | 'failed';
@@ -91,6 +93,7 @@ function normalizeGroup(g: any): HistoryGroup {
 }
 
 export const useHistoryStore = defineStore('history', () => {
+  const toast = useToastStore();
   const activeTab = ref<HistoryTab>('completed');
   const completed = ref<HistoryEntry[]>([]);
   const failed = ref<HistoryEntry[]>([]);
@@ -114,6 +117,8 @@ export const useHistoryStore = defineStore('history', () => {
   /** per-tab 加载标记：与 requestId 守卫同粒度，避免跨子 tab 的 append 防抖误伤。 */
   const loading = ref<Record<HistoryTab, boolean>>({ downloading: false, completed: false, failed: false });
   const error = ref<string | null>(null);
+  /** 搜索专用的失败原因：与看板 error 分开，避免搜索失败被渲染成「下载管理加载失败」。 */
+  const searchError = ref<string | null>(null);
   const boardRequestIds: Record<HistoryTab, number> = { downloading: 0, completed: 0, failed: 0 };
 
   async function loadBoard(tab: HistoryTab, append = false, fresh = false) {
@@ -205,11 +210,18 @@ export const useHistoryStore = defineStore('history', () => {
 
   function selectTab(tab: HistoryTab) { activeTab.value = tab; }
 
-  async function search(keyword: string) {
+  /** 搜索历史：失败必须可区分——置 searchError、弹 toast、并把原错误抛给调用方，
+   *  调用方拿到空数组只可能是「真的没搜到」。 */
+  async function search(keyword: string): Promise<HistoryEntry[]> {
+    searchError.value = null;
     try {
       const r: any = await historyApi.search(keyword);
       return (r?.history ?? []) as HistoryEntry[];
-    } catch { return []; }
+    } catch (cause) {
+      searchError.value = cause instanceof Error ? cause.message : '历史记录搜索失败';
+      toast.error(`历史记录搜索失败：${searchError.value}`);
+      throw cause;
+    }
   }
 
   async function openDirectory(bvid: string, historyId?: number) {
@@ -224,6 +236,7 @@ export const useHistoryStore = defineStore('history', () => {
     globalCounts.value = { downloading: 0, completed: 0, failed: 0, removed: 0, pay_blocked: 0 };
     lastServerTime.value = 0;
     error.value = null;
+    searchError.value = null;
     pages.downloading = 1; pages.completed = 1; pages.failed = 1;
   }
 
@@ -240,7 +253,7 @@ export const useHistoryStore = defineStore('history', () => {
   return {
     activeTab, completed, failed, downloading,
     completedGroups, failedGroups, downloadingGroups, activeGroups,
-    completedTotal, failedTotal, downloadingTotal, boardTotals, globalCounts, loading, error, pageSize,
+    completedTotal, failedTotal, downloadingTotal, boardTotals, globalCounts, loading, error, searchError, pageSize,
     lastServerTime, boardDirty,
     loadBoard, loadMore, selectTab, search, openDirectory, reset,
   };

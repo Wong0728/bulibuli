@@ -389,6 +389,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const originalNested = ref<RuntimeSettingsNested>(JSON.parse(JSON.stringify(DEFAULT_NESTED)));
   const updateStatus = ref<UpdateStatus>({});
   const logs = ref<LogEntry[]>([]);
+  /** 全局日志最近一次拉取失败的原因（成功即清空）；面板据此区分「加载失败」与「暂无日志」。 */
+  const logsError = ref<string | null>(null);
   const ffmpegInfo = ref<FfmpegStatus | null>(null);
   /** ffmpeg-path 检测失败标记（老框架：'检测失败' 状态，而不是恒'检测中...'）。 */
   const ffmpegDetectError = ref(false);
@@ -526,7 +528,8 @@ export const useSettingsStore = defineStore('settings', () => {
 
   /** 后端日志条目是 { id, level, msg, uid, bvid, time, timestamp }（秒），
    *  归一化成 LogEntry（毫秒 ts + message + 老框架展示用的 time 字符串）；
-   *  limit 上限 100，level 前端过滤；失败静默（老框架轮询静默重试）。 */
+   *  limit 上限 100，level 前端过滤；失败置 logsError 由面板显示（老框架轮询静默重试，
+   *  但"拉不到"不能一直渲染成"暂无日志"）。 */
   async function loadLogs(limit = 100, level?: string) {
     try {
       const r: any = await logsApi.get(limit);
@@ -541,7 +544,10 @@ export const useSettingsStore = defineStore('settings', () => {
       }));
       if (level) list = list.filter(l => l.level === level);
       logs.value = list;
-    } catch { /* 静默 */ }
+      logsError.value = null;
+    } catch (cause) {
+      logsError.value = cause instanceof Error ? cause.message : '日志加载失败';
+    }
   }
 
   async function loadUpdateStatus() {
@@ -565,7 +571,7 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   return {
-    settings, updateStatus, logs, ffmpegInfo, ffmpegDetectError, loading, loadError, saving, dirty,
+    settings, updateStatus, logs, logsError, ffmpegInfo, ffmpegDetectError, loading, loadError, saving, dirty,
     nested,
     load, update, save, reset, restartAria2, testFFmpeg, refreshFfmpegPath,
     loadLogs, loadUpdateStatus, checkUpdate, applyUpdate,

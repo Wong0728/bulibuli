@@ -21,7 +21,10 @@ export default defineConfig({
   testDir: '../tests',
   testMatch: 'vue_app.spec.mjs',
   timeout: 30_000,
-  fullyParallel: true,
+  // webServer 用的是 python -m http.server（单线程），多 worker 并发请求会被中断
+  // （Windows 上表现为 WinError 10053，随机失败）。用例总数很少，串行跑代价可忽略。
+  fullyParallel: false,
+  workers: 1,
   // CI 下容忍偶发网络/时序抖动，本地保持失败立即可见
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [['dot'], ['html', { open: 'never' }]] : 'list',

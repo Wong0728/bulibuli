@@ -1336,8 +1336,11 @@ const downloadModeNote = computed(() => '自动启动内置 aria2c 并通过 RPC
                 </button>
                 <span class="form-note" id="global-logs-hint">最近 100 条监控日志（跨博主），每 15 秒自动刷新</span>
               </div>
+              <div v-if="settings.logsError" class="live-alert error" role="alert" id="global-logs-error">
+                日志加载失败，请重试：{{ settings.logsError }}
+              </div>
               <div id="global-logs-list" class="blogger-logs-panel">
-                <div v-if="logRows.length === 0" class="empty-state empty-state-padded"><i class="fa-solid fa-inbox"></i><p>暂无日志</p></div>
+                <div v-if="logRows.length === 0 && !settings.logsError" class="empty-state empty-state-padded"><i class="fa-solid fa-inbox"></i><p>暂无日志</p></div>
                 <div v-for="(l, i) in logRows" v-else :key="i" :class="['log-entry', `log-level-${l.level}`]">
                   <span class="log-time">{{ l.time }}</span>
                   <span v-if="l.uid" class="log-uid">[{{ l.uid }}]</span>

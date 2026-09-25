@@ -13,9 +13,13 @@
  *   3. style.css    ← 原版 6200+ 行完整样式表（与本文件共享同一套 :root）
  *
  * dark mode 处理：
- *   原版 style.css 中 `@media (prefers-color-scheme: dark)` 块会重新
- *   定义 :root 中的语义颜色（--bg / --text / --surface 等）；
- *   因为 --bulibuli-* 是用 `var(--xxx)` 间接引用的，所以会自动跟随主题。
+ *   本文件 :root 里的语义色（--bg / --text / --surface 等）就是**浅色值**，是唯一
+ *   一份浅色真相源。style.css 的 `@media (prefers-color-scheme: dark)` 块只对
+ *   `:root:not([data-theme="light"])` 重定义这些变量，因此：
+ *     - <html data-theme="light"> → 媒体查询让位，保持浅色（即使系统是深色）；
+ *     - <html data-theme="dark">  → style.css 末尾的同名规则回填深色；
+ *     - 无 data-theme（跟随系统）→ 由 prefers-color-scheme 决定。
+ *   --bulibuli-* 别名走 `var(--xxx)` 间接引用，跟着上面三者一起切换。
  * ============================================================ */
 
 :root {
@@ -169,8 +173,9 @@
 
     /* ============================================================
      * --bulibuli-* 别名：给新写的 Vue 组件使用。
-     * 全部走 `var(--原版名)` 间接引用；原版 dark mode 媒体查询
-     * （在 style.css 中）会重新定义 :root，bulibuli-* 也会自动跟随。
+     * 全部走 `var(--原版名)` 间接引用；深色规则与 data-theme 覆盖都在
+     * style.css 里改写原版名（--bg / --text / ...）本身，所以这些别名
+     * 会一并跟随（解析发生在 :root 上，见文件头 dark mode 说明）。
      * ============================================================ */
     --bulibuli-brand: var(--brand);
     --bulibuli-brand-dark: var(--brand-hover);

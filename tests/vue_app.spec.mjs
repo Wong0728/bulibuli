@@ -199,6 +199,49 @@ test('Vue pairing enters the main app and uses aligned request contracts', async
 });
 
 /**
+ * 主题回归门：`data-theme`（light/dark/无=跟随系统）× 系统 prefers-color-scheme
+ * 共 6 组合的解析颜色。theme 写进 localStorage 后 reload，走的是 main.ts 的
+ * applyStoredTheme() → applyThemeAttribute() 真实链路；断言取 body 的实际计算色，
+ * 因此 :root 语义变量、@media 块和 tokens.css 的 --bulibuli-* 间接引用一起被覆盖
+ * （历史缺陷：暗色媒体查询在 :root 上重定义变量，把 data-theme="light" 整个吃掉）。
+ */
+const THEME_EXPECTED = {
+  light: { bg: 'rgb(247, 248, 250)', text: 'rgb(29, 33, 41)' },
+  dark: { bg: 'rgb(17, 19, 24)', text: 'rgb(242, 243, 245)' },
+};
+
+async function probeTheme(page) {
+  return page.evaluate(() => ({
+    dataTheme: document.documentElement.getAttribute('data-theme'),
+    bg: getComputedStyle(document.body).backgroundColor,
+    text: getComputedStyle(document.body).color,
+  }));
+}
+
+/** theme: 存进 localStorage 的值；resolved: 期望落到的深色/浅色；attribute: 期望的 data-theme。 */
+async function expectRenderedTheme(page, scheme, theme, resolved, attribute) {
+  await page.evaluate(value => window.localStorage.setItem('bulibuli.theme', value), theme);
+  await page.reload();
+  const probe = await probeTheme(page);
+  expect(probe, `系统 ${scheme} + 手选 ${theme}`).toEqual({
+    dataTheme: attribute,
+    ...THEME_EXPECTED[resolved],
+  });
+}
+
+for (const scheme of ['light', 'dark']) {
+  test(`主题 ${scheme} 系统偏好下 light/dark/system 三档都正确`, async ({ page }) => {
+    await mockVueApi(page);
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.goto('/app/');
+    const system = scheme === 'dark' ? 'dark' : 'light';
+    await expectRenderedTheme(page, scheme, 'light', 'light', 'light');
+    await expectRenderedTheme(page, scheme, 'dark', 'dark', 'dark');
+    await expectRenderedTheme(page, scheme, 'system', system, null);
+  });
+}
+
+/**
  * 图标回归门：本项目用的是 Font Awesome **Free** 字体（web/public/css/lib/）。
  * Pro 专有字名（如 fa-radar、fa-message-dollar）在 CSS 里没有规则 → 渲染成空白；
  * 品牌字形（如 fa-bilibili）只存在于 Brands 字族，写成 fa-solid 会画 .notdef 缺字框。

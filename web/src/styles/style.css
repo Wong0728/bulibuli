@@ -5333,7 +5333,7 @@ tr:hover {
 }
 
 @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
         --bg: #111318;
         --surface: #1b1e25;
         --surface-hover: #252934;
@@ -5407,8 +5407,10 @@ tr:hover {
     background: var(--brand-soft);
 }
 
-/* 用户显式主题优先于系统偏好。 */
+/* 用户显式主题优先于系统偏好：dark 在此回填深色变量；light 靠上面媒体查询的
+   `:root:not([data-theme="light"])` 让位，变量回落到 tokens.css 的浅色值。 */
 :root[data-theme="dark"] {
+    color-scheme: dark;
     --bg: #111318; --surface: #1b1e25; --surface-hover: #252934;
     --border: #343946; --border-strong: #4a5161; --divider: #292e39;
     --text: #f2f3f5; --text-secondary: #c9cdd4; --text-muted: #8f959e;
