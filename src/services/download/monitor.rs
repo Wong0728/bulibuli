@@ -82,7 +82,7 @@ impl DownloadManager {
             .await
             .remove(&task_cache_key(&task.bvid, task.cid));
         self.cleanup_failed_transfer_leftovers(task).await;
-        self.mark_history_failed(&task.bvid, task.cid).await;
+        self.mark_history_failed(&task.bvid, task.cid, &task.task_type).await;
     }
 
     /// 任务进入失败终态时同步看板记录。
@@ -90,7 +90,11 @@ impl DownloadManager {
     /// 看板"失败"Tab 按 `history.state = 'failed'` 过滤，而此前没有任何代码写过该值，
     /// 失败的手动任务会从三个 Tab 同时消失（记录被删掉，产物也无人认领）。
     /// 只接管下载中的占位行：已完成/已下架/付费受限/校验异常不能被一次下载失败改写。
-    pub(super) async fn mark_history_failed(&self, bvid: &str, cid: Option<i64>) {
+    /// 例外：DASH 音视频先完成的一方会把行写成 completed，但 file_path 指向
+    /// .m4s/.m4a 中间产物（成品要等合并回写）；video 侧终态失败意味着合并
+    /// 不会再发生，这条"假完成"行回收为 failed，避免看板承诺不可播放的半成品。
+    /// audio 侧不回收——音频重试耗尽后有纯视频降级合并兜底。
+    async fn mark_history_failed(&self, bvid: &str, cid: Option<i64>, failed_task_type: &str) {
         let mut query = history::Entity::find().filter(history::Column::Bvid.eq(bvid));
         query = match cid {
             Some(c) => query.filter(history::Column::Cid.eq(c)),
@@ -108,6 +112,22 @@ impl DownloadManager {
             row.state.as_deref(),
             None | Some("pending") | Some("downloading")
         ) {
+            let reclaimable = failed_task_type == "video"
+                && row.state.as_deref() == Some("completed")
+                && row
+                    .file_path
+                    .as_deref()
+                    .is_some_and(|p| p.ends_with(".m4s") || p.ends_with(".m4a"));
+            if !reclaimable {
+                return;
+            }
+            let mut model: history::ActiveModel = row.into();
+            model.state = Set(Some("failed".to_string()));
+            // 清掉完成时间，让后续重试成功的 add_to_history 能重新接管此行。
+            model.download_time = Set(None);
+            if let Err(e) = model.update(&self.db).await {
+                warn!("回收假完成历史记录失败 {bvid}: {e}");
+            }
             return;
         }
         let mut model: history::ActiveModel = row.into();
@@ -442,7 +462,7 @@ impl DownloadManager {
                             // 终态收敛：与 queue_terminal_failure 同口径，
                             // 否则记录停在 downloading，看板三个 Tab 都不可见。
                             self.cleanup_failed_transfer_leftovers(task).await;
-                            self.mark_history_failed(&task.bvid, task.cid).await;
+                            self.mark_history_failed(&task.bvid, task.cid, &task.task_type).await;
                         }
                     }
                     aria2_fail_count = 0;
