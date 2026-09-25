@@ -194,28 +194,42 @@ export interface VideoItem {
   pages?: Array<{ cid: number; part: string; duration?: number }>;
 }
 
+/** `/api/video/resolve` 响应（src/api/video/stream.rs::resolve_video）。
+ *  分支差异是这里全部按可选字段声明的原因：
+ *  - ep/ss/fp 成功：media + media_type + season_title + cover + default_quality + episodes（ep 链接另带 current_ep_id）；
+ *  - ep/ss/fp 拉取失败：media + media_type + pay_blocked + pay_reason + message（**没有** episodes）；
+ *  - 普通 BV/AV：只有 media —— 既不下发 media_type（不是 null），也不下发 pay_blocked，
+ *    前端据此走单视频卡片流程。 */
 export interface ManualResolveResult {
-  media_type: 'pgc' | 'cheese' | 'video' | null;
-  season_id?: number;
+  /** 解析出的媒体标识，所有分支都下发。后端 ResolvedMedia 用 serde tag="type" content="id"
+   *  序列化（src/services/url_parser.rs），BV 号是字符串、AV/ep/ss/fp 是数字。 */
+  media?: {
+    type: 'video_bv' | 'video_av' | 'episode' | 'season' | 'course' | string;
+    id?: string | number | null;
+  };
+  /** 仅番剧/课程分支出现；普通 BV/AV 链接不下发该字段（也不是 null）。 */
+  media_type?: 'pgc' | 'cheese';
   season_title?: string;
   cover?: string;
   pay_blocked?: boolean;
   pay_reason?: string;
   message?: string;
+  /** 仅 ep 链接下发：前端据此默认勾选当前集。 */
   current_ep_id?: number;
   default_quality?: number;
+  /** 番剧分集带 long_title/badge，课程分集带 section_title/status。 */
   episodes?: Array<{
-    ep_id?: number;
+    ep_id: number;
     bvid: string;
-    aid?: number;
-    cid?: number;
+    aid: number;
+    cid: number;
     title: string;
+    display_title: string;
+    duration: number;
     long_title?: string;
-    display_title?: string;
-    duration?: number;
-    section_title?: string;
-    pic?: string;
     badge?: string;
+    section_title?: string;
+    status?: number;
   }>;
 }
 

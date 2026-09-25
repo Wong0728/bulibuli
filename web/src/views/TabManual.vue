@@ -230,13 +230,15 @@ async function resolveLink() {
   resultMessage.value = '正在解析链接...';
   resultHint.value = '';
   try {
-    const r: any = await videoApi.resolveLink(linkInput.value);
+    // 契约见 types.ts 的 ManualResolveResult：后端普通 BV/AV 分支只回 media，
+    // 既没有 episodes 也没有 media_type，靠 `any` 会把这套分支差异藏掉。
+    const r: ManualResolveResult | null = await videoApi.resolveLink(linkInput.value);
     if (!r) throw new Error('解析结果为空');
     // 普通 BV 链接沿用旧版的单视频卡片流程，不再只提示“请直接下载”却不给操作入口。
     if (!r.episodes || r.episodes.length === 0) {
-      const media = r.media || {};
-      if (media.type === 'video_bv' && media.id) {
-        const info: any = await videoApi.info(String(media.id));
+      const media = r.media;
+      if (media?.type === 'video_bv' && media.id) {
+        const info = await videoApi.info(String(media.id));
         if (!info?.bvid) throw new Error('获取视频信息失败');
         videoList.value = [normalizeVideo({ ...info, created: info.pub_timestamp })];
         totalCount.value = 1;
@@ -253,22 +255,23 @@ async function resolveLink() {
           : '该课程可能需要购买后才能下载';
       } else {
         resultState.value = 'empty';
-        resultMessage.value = media.type === 'video_av'
+        resultMessage.value = media?.type === 'video_av'
           ? '暂不支持 AV 链接，请使用 BV 链接（可在视频页地址栏复制）'
           : '未能识别的链接类型';
       }
       linkResult.value = null;
       return;
     }
-    linkResult.value = r as ManualResolveResult;
+    linkResult.value = r;
     selectedQuality.value = Number(r.default_quality) || 80;
     // 默认勾选 current_ep_id（如果是 ep 链接）
-    const cur = (r as any).current_ep_id;
+    const cur = r.current_ep_id;
+    const episodes = r.episodes;
     if (cur != null) {
-      const hit = (r.episodes || []).find((e: any) => e.ep_id === cur);
-      selectedEpisodes.value = new Set(hit ? [hit.bvid] : (r.episodes || []).map((e: any) => e.bvid));
+      const hit = episodes.find(e => e.ep_id === cur);
+      selectedEpisodes.value = new Set(hit ? [hit.bvid] : episodes.map(e => e.bvid));
     } else {
-      selectedEpisodes.value = new Set((r.episodes || []).map((e: any) => e.bvid));
+      selectedEpisodes.value = new Set(episodes.map(e => e.bvid));
     }
     resultState.value = 'success';
   } catch (e: any) {

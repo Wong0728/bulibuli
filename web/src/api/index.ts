@@ -4,14 +4,13 @@
  * - POST 用 body
  * - 二进制流/下载直接用 fetch 返回的 Response
  */
-import { get, post, put, request, QUIET_UNAUTHORIZED } from './client';
+import { get, post, request, QUIET_UNAUTHORIZED } from './client';
 import type { ApiErrorHandlers } from './client';
 import type {
   AuthState, CookieStatus, QrcodeGenerate, QrcodePoll, FoundationStatus, SetupStatus, DetectResult,
   Blogger, SavedBlogger, SearchedUser, UserProfileResult, Series, VideoItem, VideoUrlsResult, VideoInfo,
   DownloadHealth, DownloadStatusSnapshot, HistoryBoardResponse, HistoryEntry, LiveRoom, LiveRecording, LiveDashboard,
-  SettingsPayload, Settings, FfmpegStatus,
-  UpdateStatus, UpdateApplyResult,
+  SettingsPayload,
   ManualResolveResult, TaskStatusSummary, TaskSchedule, SetupApplyResult, RawLogEntry,
 } from './types';
 
@@ -91,8 +90,8 @@ export const blogger = {
  *   - 没有 /api/video/resolve-link —— 用 /api/video/resolve + { input } 替代
  */
 export const video = {
-  // resolve 同时承接单视频/番剧/课程链接解析，返回 ManualResolveResult（见 types.ts）。
-  resolve: (bvid: string) => post<ManualResolveResult>('/api/video/resolve', { input: bvid }),
+  // resolve 走同一后端路由（POST /api/video/resolve + { input }），resolveLink 是它的唯一入口：
+  // 此前 resolve(bvid) 与 resolveLink(link) 是两个完全等价的副本，现只留被调用的那个。
   getVideos: (uid: number | string, opts: { limit?: number; offset?: number } = {}) =>
     post<{ videos: VideoItem[]; has_more?: boolean; total?: number }>('/api/video/get-videos', { uid: String(uid), ...opts }),
   getVideoUrls: (bvid: string, cid?: number, qn?: number) =>
@@ -228,16 +227,15 @@ export const live = {
  *     响应是裸 RuntimeSettings；reset 同型。
  *   - ffmpeg-path / ffmpeg-test 都返回 { available, path, source, version }。
  *   - path-preview body 是扁平变量字段 { template, title?, uid?, ... }，响应 { path }。
+ *
+ * 写路径只保留一份实现：save / reset / aria2-restart / ffmpeg-path / ffmpeg-test
+ * 以及 /api/update/* 三个写读接口此前在这里和 stores/settings.ts 各有一份，且 api 层
+ * 用的是 post/put（拿不到 envelope.message，store 保存后要展示后端文案就必须绕过它）。
+ * 现统一在 stores/settings.ts（那里负责 revision 回写、脏值比对与主题落地），
+ * 这里只留读接口，避免两处对同一契约各自演进。
  */
 export const settings = {
   get: () => get<SettingsPayload>('/api/settings'),
-  save: (nestedSettings: Record<string, unknown>) =>
-    put<Settings>('/api/settings', { ...nestedSettings, expected_revision: nestedSettings.revision }),
-  reset: () => post<Settings>('/api/settings/reset'),
-  aria2Restart: () => post<{ restarted: boolean; error?: string | null; aria2_diagnostics?: unknown }>('/api/settings/aria2-restart'),
-  ffmpegPath: () => get<FfmpegStatus>('/api/settings/ffmpeg-path'),
-  ffmpegTest: (opts: { mode?: string; custom_path?: string }) => post<FfmpegStatus>('/api/settings/ffmpeg-test', opts),
-  // pathPreview 已删除：路径预览是纯前端 replaceAll（TabSettings 的 pathPreviewText），无组件调用。
 };
 
 /** ---------- logs ----------
@@ -264,13 +262,10 @@ export const refresh = {
     ),
 };
 
-/** ---------- update ---------- */
-export const update = {
-  status: () => get<UpdateStatus>('/api/update/status'),
-  check: () => post<UpdateStatus>('/api/update/check'),
-  // 后端响应 { applied, version }（或 applied:false + current_version）。
-  apply: () => post<UpdateApplyResult>('/api/update/apply'),
-};
+/** ---------- update ----------
+ * status / check / apply 已删除：写读逻辑只在 stores/settings.ts 有一份实现
+ * （loadUpdateStatus / checkUpdate / applyUpdate），api 层那几个是零调用点的副本。
+ */
 
 /** ---------- setup ----------
  * 后端约定（src/api/setup.rs）：
@@ -309,5 +304,5 @@ export const health = {
 /** ---------- default export for convenience ---------- */
 export default {
   auth, foundation, cookies, blogger, video, download, history,
-  task, live, settings, logs, refresh, update, setup, cover, health,
+  task, live, settings, logs, refresh, setup, cover, health,
 };

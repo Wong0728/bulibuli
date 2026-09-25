@@ -307,3 +307,92 @@ test('app only uses Font Awesome glyphs present in the bundled free stylesheet',
     .map(({ token, where }) => `${token} @ ${where}`);
   expect(solidWithBrands, `非品牌图标不能写成 fa-brands：${solidWithBrands.join(', ')}`).toEqual([]);
 });
+
+/**
+ * 手动查询「按链接」的两条分支。后端 `/api/video/resolve`（src/api/video/stream.rs::resolve_video）
+ * 对普通 BV/AV **只回 `{ media }`**——既没有 `media_type` 也没有 `episodes`；只有 ep/ss/fp
+ * 才带 `media_type` + `episodes`（季信息拉取失败时另带 pay_blocked + pay_reason）。
+ * web/src/api/types.ts 的 ManualResolveResult 就是按这个真实形状收紧的：此前 `media_type`
+ * 被声明成必有字段（还包含后端从不下发的 'video' / null），调用点靠 `any` 把差异藏掉。
+ * 这里钉住收紧后的两条行为：BV 走单视频卡片，ep 走分集批量下载并原样携带 media_type。
+ */
+test('手动查询按链接：普通 BV 走单视频卡片，不误判为"未能识别的链接类型"', async ({ page }) => {
+  const state = await mockVueApi(page);
+  await page.route('**/api/video/resolve', route => route.fulfill({ json: envelope({
+    media: { type: 'video_bv', id: 'BV1LINK0001' },
+  }) }));
+  let infoQuery = '';
+  await page.route('**/api/video/info*', route => {
+    infoQuery = new URL(route.request().url()).search;
+    return route.fulfill({ json: envelope({
+      bvid: 'BV1LINK0001',
+      title: '链接解析测试视频',
+      duration: 60,
+      pub_timestamp: 1700000000,
+      pages: [],
+    }) });
+  });
+
+  await page.goto('/app/');
+  await page.locator('#pair-code').fill('ABCD-EFGH');
+  await page.getByRole('button', { name: '确认配对' }).click();
+  state.cookies = true;
+  await page.reload();
+  await expect(page.locator('#main-content')).toBeVisible();
+  await page.locator('#tab-manual-label').click();
+  await page.locator('#tab-manual [data-mode="link"]').click();
+  await page.locator('#manual-link-input').fill('https://www.bilibili.com/video/BV1LINK0001');
+  await page.locator('#manual-resolve-btn').click();
+
+  const grid = page.locator('#manual-video-grid');
+  await expect(grid).toBeVisible();
+  await expect(grid).toContainText('链接解析测试视频');
+  await expect(page.locator('#manual-result')).not.toContainText('未能识别的链接类型');
+  // BV 分支不下发分集列表，前端必须改用 /api/video/info 拉单视频信息。
+  expect(infoQuery).toContain('bvid=BV1LINK0001');
+});
+
+test('手动查询按链接：番剧分集批量下载携带 media_type 与原始页号', async ({ page }) => {
+  const state = await mockVueApi(page);
+  await page.route('**/api/video/resolve', route => route.fulfill({ json: envelope({
+    media: { type: 'episode', id: 123 },
+    media_type: 'pgc',
+    season_title: '测试番剧',
+    cover: '',
+    current_ep_id: 123,
+    default_quality: 80,
+    episodes: [
+      { ep_id: 123, cid: 11, bvid: 'BV1EP0001', aid: 1, title: '第1话', display_title: '第1话 开端', duration: 60, badge: '' },
+      { ep_id: 124, cid: 12, bvid: 'BV1EP0002', aid: 2, title: '第2话', display_title: '第2话', duration: 60, badge: '' },
+    ],
+  }) }));
+  let startBody = null;
+  await page.route('**/api/download/start', route => {
+    startBody = route.request().postDataJSON();
+    return route.fulfill({ json: envelope({ ok_count: 1, total: 1 }) });
+  });
+
+  await page.goto('/app/');
+  await page.locator('#pair-code').fill('ABCD-EFGH');
+  await page.getByRole('button', { name: '确认配对' }).click();
+  state.cookies = true;
+  await page.reload();
+  await expect(page.locator('#main-content')).toBeVisible();
+  await page.locator('#tab-manual-label').click();
+  await page.locator('#tab-manual [data-mode="link"]').click();
+  await page.locator('#manual-link-input').fill('https://www.bilibili.com/bangumi/play/ep123');
+  await page.locator('#manual-resolve-btn').click();
+
+  const result = page.locator('.manual-season-result');
+  await expect(result).toBeVisible();
+  await expect(result).toContainText('番剧');
+  // ep 链接带 current_ep_id：只默认勾选当前集，按钮文案是「下载本集」。
+  await page.getByRole('button', { name: '下载本集' }).click();
+  expect(startBody).toEqual({
+    bvid: 'BV1EP0001',
+    qn: 80,
+    media_type: 'pgc',
+    season_title: '测试番剧',
+    pages: [{ cid: 11, page: 1, part: '第1话 开端', ep_id: 123, aid: 1, bvid: 'BV1EP0001' }],
+  });
+});
