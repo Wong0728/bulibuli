@@ -18,6 +18,7 @@ use super::{
 };
 
 impl VideoProcessor {
+    #[allow(clippy::too_many_arguments)]
     pub async fn merge_audio_video(
         &self,
         video_path: &Path,

@@ -394,6 +394,7 @@ pub mod child_lifetime {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+    #[cfg(windows)]
     use tokio::process::Command;
 
     #[tokio::test]
