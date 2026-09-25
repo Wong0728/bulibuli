@@ -419,7 +419,9 @@ export const useLiveStore = defineStore('live', () => {
     if (!opts.force && roomInfoCache.value.has(room_id) && Date.now() - cachedAt < 5 * 60 * 1000) {
       return roomInfoCache.value.get(room_id)!;
     }
-    if (roomInfoLoading.value.has(room_id)) return null;
+    // in-flight 守卫只拦普通拉取：force 刷新被它吞成 null 的话，
+    // 调用方会把已展示的实时信息卡整卡清空且不再回填（generation 已前移）。
+    if (!opts.force && roomInfoLoading.value.has(room_id)) return null;
     roomInfoLoading.value.add(room_id);
     roomInfoLoading.value = new Set(roomInfoLoading.value);
     try {
