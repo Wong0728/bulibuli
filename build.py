@@ -300,13 +300,14 @@ def stage_test_runtime(exe_path):
             shutil.copytree(source, resources_dst / name, dirs_exist_ok=True)
             copied.append(f"{name}/")
     # AI Skill 依赖 <app_root>/docs/skill.md，测试模式同样需要。
+    # docs/dev/ 是内部审计与整改记录，不随发布包分发。
     docs_src = ROOT / "docs"
     if docs_src.is_dir():
         shutil.copytree(
             docs_src,
             exe_path.parent / "docs",
             dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "dev"),
         )
         copied.append("docs/")
     if copied:
@@ -667,13 +668,14 @@ def assemble_package(exe_path, platform_name, target=None, variant="portable"):
 
     # docs/ 目录必须随包分发：/api/foundation/status 与 /api/setup/status
     # 返回的 ai_skill_path 指向 <app_root>/docs/skill.md，缺失会让 AI Skill 失效。
+    # docs/dev/ 是内部审计与整改记录，不随发布包分发。
     docs_src = ROOT / "docs"
     if docs_src.is_dir():
         docs_dst = package_dir / "docs"
         shutil.copytree(
             docs_src,
             docs_dst,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "dev"),
         )
         print("  已复制: docs/")
 

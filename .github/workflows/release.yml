@@ -45,6 +45,8 @@ jobs:
   portable-artifacts:
     name: Portable artifact (${{ matrix.platform }} / ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
+    # 质量门禁未过就不产出资产：否则门禁红依然会生成可上传的发布包。
+    needs: quality
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -220,6 +222,8 @@ jobs:
   termux-portable:
     name: Portable artifact (termux / arm64)
     runs-on: ubuntu-latest
+    # 与 portable-artifacts 同理：质量门禁红不得产出资产。
+    needs: quality
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -237,6 +241,15 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           key: aarch64-linux-android
+      # 与 portable-artifacts / linux-artifacts 同款闸门：tag 与 Cargo.toml 版本
+      # 不一致时立刻失败，不要产出一个名字对不上内容的 Termux 包。
+      - name: Verify tag matches package version
+        if: startsWith(env.RELEASE_TAG, 'v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="v$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)"
+          test "${package_version}" = "${RELEASE_TAG}"
       - name: Build platform-neutral frontend bundle
         working-directory: web
         run: |
@@ -360,13 +373,22 @@ jobs:
                   "checksum_name": f"{archive.name}.sha256",
                   "checksum_url": f"{base_url}/{archive.name}.sha256",
               })
-          Path("dist/latest.json").write_text(json.dumps({
+          manifest = json.dumps({
               "schema_version": 1,
               "version": tag,
               "assets": assets,
-          }, indent=2) + "\n", encoding="utf-8")
+          }, indent=2) + "\n"
+          Path("dist/latest.json").write_text(manifest, encoding="utf-8")
+          # docs/user/RELEASES.md 承诺"latest.json 和同名校验文件"：更新清单本身也
+          # 必须可校验，否则下载方无法证明清单未被替换。格式与 build.py 的
+          # write_checksum 一致（"<digest>  <文件名>"），发布前的 `sha256sum -c`
+          # 循环会连同各归档的 .sha256 一起核对，两边都靠它兜住。
+          digest = hashlib.sha256(manifest.encode("utf-8")).hexdigest()
+          Path("dist/latest.json.sha256").write_text(
+              f"{digest}  latest.json\n", encoding="utf-8"
+          )
           PY
-      - name: Create or update GitHub Release
+      - name: Create draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -374,18 +396,35 @@ jobs:
         run: |
           set -euo pipefail
           tag="${RELEASE_TAG}"
+          # 正文落在 RUNNER_TEMP 下；后面的 "Refresh release title and notes"
+          # 步骤会自己重新生成同一份，不依赖本步骤的 shell 变量。
           notes_file="${RUNNER_TEMP}/bulibuli-release-notes.md"
           sed "s|__TAG__|${tag}|g" .github/release-body.md > "${notes_file}"
           prerelease_flag=()
           [[ "${tag}" == *-alpha* || "${tag}" == *-beta* || "${tag}" == *-rc* ]] && prerelease_flag+=(--prerelease)
 
-          # Create metadata separately from asset upload. This makes a retry
-          # safe when GitHub returns a transient 5xx during a large upload.
-          if ! gh release view "${tag}" >/dev/null 2>&1; then
+          # draft-then-publish：Release 先以 draft 建出来，资产全部上传并通过
+          # 校验后才在最后一步置为公开。draft 不进 releases/latest、不被三平台
+          # 安装器与应用内更新读取，所以任一构建/上传步骤失败只会留下一个对外
+          # 不可见的半成品，重跑同一 tag 即可续传，不会出现"公开的 0 资产正式版"。
+          if gh release view "${tag}" --json isDraft >/dev/null 2>&1; then
+            is_draft="$(gh release view "${tag}" --json isDraft --jq '.isDraft')"
+            if [[ "${is_draft}" == "true" ]]; then
+              echo "Reusing the existing draft release for ${tag}."
+            else
+              # 已由上一轮完整发布过：原地刷新资产，不回退成 draft——把一个已公开
+              # 的 tag 重新藏回 draft 会让 releases/latest 在重跑期间直接 404。
+              echo "Release ${tag} is already published; refreshing assets in place."
+            fi
+          else
             for attempt in 1 2 3 4 5; do
-              if gh release create "${tag}" --title "bulibuli ${tag}" --notes-file "${notes_file}" "${prerelease_flag[@]}"; then
+              # --verify-tag：tag 必须已存在于远端。否则 workflow_dispatch 打错
+              # tag 名时会由 gh 顺手建出一个指向默认分支的新 tag（对外动作，
+              # 且违反"一个 tag 只对应一个 commit"），宁可直接失败。
+              if gh release create "${tag}" --draft --verify-tag --title "bulibuli ${tag}" --notes-file "${notes_file}" "${prerelease_flag[@]}"; then
                 break
               fi
+              # 大响应体上传可能被 GitHub 5xx 截断但实际已建成，存在即视为成功。
               if gh release view "${tag}" >/dev/null 2>&1; then
                 break
               fi
@@ -393,7 +432,14 @@ jobs:
               sleep $((attempt * 10))
             done
           fi
-
+      - name: Upload release assets to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
           expected_assets="$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)"
           release_assets_match() {
             local actual_assets
@@ -415,7 +461,18 @@ jobs:
             [[ "${attempt}" -eq 5 ]] && exit 1
             sleep $((attempt * 15))
           done
-
+      # 正文单独刷新：notes_file 由本步骤自己生成，不依赖前一步的 shell 变量
+      # （跨步骤只共享 RUNNER_TEMP 下的文件，不共享变量）。
+      - name: Refresh release title and notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          notes_file="${RUNNER_TEMP}/bulibuli-release-notes.md"
+          sed "s|__TAG__|${tag}|g" .github/release-body.md > "${notes_file}"
           for attempt in 1 2 3 4 5; do
             if gh release edit "${tag}" --title "bulibuli ${tag}" --notes-file "${notes_file}"; then
               break
@@ -423,7 +480,7 @@ jobs:
             [[ "${attempt}" -eq 5 ]] && exit 1
             sleep $((attempt * 10))
           done
-      - name: Verify published release assets
+      - name: Verify draft release assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -446,3 +503,26 @@ jobs:
           for manifest in dist/*.sha256; do
             (cd dist && sha256sum -c "$(basename "${manifest}")")
           done
+      # 资产与校验全部就绪后，才把 Release 从 draft 置为公开可见。
+      # 这一步之前任何失败都只会留下一个 draft：不进 releases/latest、不被三平台
+      # 安装器与应用内更新读取，releases/latest 仍指向上一版，用户侧无感。
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          # 已经是公开状态时（补发一个此前已完整发布的 tag）不再改动可见性，
+          # 只保留下面的终态断言。
+          if [[ "$(gh release view "${tag}" --json isDraft --jq '.isDraft')" == "true" ]]; then
+            for attempt in 1 2 3 4 5; do
+              if gh release edit "${tag}" --draft=false; then
+                break
+              fi
+              [[ "${attempt}" -eq 5 ]] && exit 1
+              sleep $((attempt * 10))
+            done
+          fi
+          test "$(gh release view "${tag}" --json isDraft --jq '.isDraft')" = "false"

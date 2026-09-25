@@ -37,7 +37,8 @@ For a release-affecting change, build the local platform package with `python bu
 1. `cargo fmt --all -- --check`（CI 第一关就会拦，但本地先跑可以省一整轮等待）。
 2. 若改动了任何 `#[cfg(unix)]` 代码：本机是 Windows 时无法编译到这些代码。没有 WSL/交叉 C 工具链时 `cargo check --target x86_64-unknown-linux-gnu` 会因依赖的 cc build script 失败，此时依赖 CI quality gates 的 ubuntu `rust` job 兜底——务必走下述 dry-run 流程，不要直接打 tag。
 3. **发版 dry-run**：提交并推送 main 后，用 `workflow_dispatch` 触发 Release workflow，`checkout_ref` 填 main、`publish=false`。全绿且 artifact 齐全后，再在同一 commit 上打 tag 正式发布。不要删 tag 重打；一个 tag 只对应一个 commit。
-4. Linux 包的最低 glibc = Release 构建容器版本（当前 ubuntu:22.04，glibc ≤ 2.35）。升级容器镜像前要意识到这会同步抬高所有用户的兼容基线。
+4. **打 tag 前再核对三件事**：一是重写 `.github/release-body.md` 的"本版要点"与门禁数字——它是发布正文模板，工作流只替换 `__TAG__`，沿用旧文案会把上一版的变更摘要原样发给用户；二是待打 tag 的 commit 必须就是刚 dry-run 验证通过的那个 commit（`git rev-parse main^{commit}` 与 dry-run run 的 `head_sha` 逐字一致；dry-run 之后又推过提交就要重新 dry-run）；三是仓库不存在同名的已发布 Release（`gh release view vX.Y.Z` 应报 not found，且 `Cargo.toml` 的 `package.version` 与该 tag 去掉 `v` 后完全相等）。Release 工作流是 draft-then-publish：资产上传并校验通过后才置为公开，中途失败只会留下一个对外不可见的 draft，修好后重跑同一 tag 即可续传；若确实需要放弃，去 Releases 页面删掉那个 draft，不要动 tag。
+5. Linux 包的最低 glibc = Release 构建容器版本（当前 ubuntu:22.04，glibc ≤ 2.35）。升级容器镜像前要意识到这会同步抬高所有用户的兼容基线。
 
 ## Commit and review expectations
 
