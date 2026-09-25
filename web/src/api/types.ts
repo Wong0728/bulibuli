@@ -217,7 +217,8 @@ export interface ManualResolveResult {
   /** 仅 ep 链接下发：前端据此默认勾选当前集。 */
   current_ep_id?: number;
   default_quality?: number;
-  /** 番剧分集带 long_title/badge，课程分集带 section_title/status。 */
+  /** 番剧分集带 long_title/badge，课程分集带 section_title/status。
+   *  downloaded：该分集在本机 history 中已有完成下载记录（对照下载库）。 */
   episodes?: Array<{
     ep_id: number;
     bvid: string;
@@ -230,7 +231,10 @@ export interface ManualResolveResult {
     badge?: string;
     section_title?: string;
     status?: number;
+    downloaded?: boolean;
   }>;
+  /** 已下载分集数（对照本机 history）；仅番剧/课程分支下发，前端据此区分"新后端"与旧响应。 */
+  downloaded_count?: number;
 }
 
 export interface VideoUrlsResult {

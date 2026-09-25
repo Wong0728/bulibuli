@@ -1,6 +1,7 @@
 //! 视频解析与取流：链接解析、投稿列表、视频/音频流获取、视频信息与下载权限校验。
 
 use crate::error::{ApiResponse, AppError};
+use crate::models::history;
 use crate::services::url_parser::{resolve_media_input, ResolvedMedia};
 use crate::state::SharedState;
 use axum::extract::State;
@@ -12,6 +13,33 @@ use tracing::info;
 #[derive(Deserialize)]
 pub(super) struct ResolveVideoRequest {
     input: String,
+}
+
+/// 查询已下载分集的 bvid 集合：对照 history 中存在完成时间的记录。
+/// 分块查询：SQLite 默认变量上限 999，长季（上千集）一次 is_in 会超限。
+async fn downloaded_bvids(
+    db: &sea_orm::DatabaseConnection,
+    bvids: &[String],
+) -> std::collections::HashSet<String> {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    const CHUNK_SIZE: usize = 400;
+    let mut downloaded = std::collections::HashSet::new();
+    for chunk in bvids.chunks(CHUNK_SIZE) {
+        let rows = history::Entity::find()
+            .filter(history::Column::Bvid.is_in(chunk.to_vec()))
+            .filter(history::Column::DownloadTime.is_not_null())
+            .all(db)
+            .await;
+        match rows {
+            Ok(rows) => downloaded.extend(rows.into_iter().map(|h| h.bvid)),
+            Err(e) => {
+                // 查询失败不阻塞解析：downloaded 标记缺失只影响默认勾选体验
+                info!("[API] /api/video/resolve 查询已下载分集失败: {e}");
+                return downloaded;
+            }
+        }
+    }
+    downloaded
 }
 
 /// 解析用户输入的媒体链接：BV/AV/ep/ss/fp/b23.tv。
@@ -48,6 +76,14 @@ pub(super) async fn resolve_video(
                     }))));
                 }
             };
+            let episode_bvids: Vec<String> =
+                season.episodes.iter().map(|e| e.bvid.clone()).collect();
+            let downloaded = downloaded_bvids(&state.infra.db, &episode_bvids).await;
+            let downloaded_count = season
+                .episodes
+                .iter()
+                .filter(|e| downloaded.contains(&e.bvid))
+                .count();
             Ok(Json(ApiResponse::success(json!({
                 "media": resolved,
                 "media_type": "pgc",
@@ -55,6 +91,7 @@ pub(super) async fn resolve_video(
                 "cover": season.cover,
                 "current_ep_id": ep_id,
                 "default_quality": state.infra.settings_service.current().query.video_quality,
+                "downloaded_count": downloaded_count,
                 "episodes": season.episodes.iter().map(|e| json!({
                     "ep_id": e.ep_id,
                     "cid": e.cid,
@@ -65,6 +102,7 @@ pub(super) async fn resolve_video(
                     "display_title": e.display_title(),
                     "duration": e.duration,
                     "badge": e.badge,
+                    "downloaded": downloaded.contains(&e.bvid),
                 })).collect::<Vec<_>>(),
             }))))
         }
@@ -88,12 +126,21 @@ pub(super) async fn resolve_video(
                     }))));
                 }
             };
+            let episode_bvids: Vec<String> =
+                season.episodes.iter().map(|e| e.bvid.clone()).collect();
+            let downloaded = downloaded_bvids(&state.infra.db, &episode_bvids).await;
+            let downloaded_count = season
+                .episodes
+                .iter()
+                .filter(|e| downloaded.contains(&e.bvid))
+                .count();
             Ok(Json(ApiResponse::success(json!({
                 "media": resolved,
                 "media_type": "pgc",
                 "season_title": season.title(),
                 "cover": season.cover,
                 "default_quality": state.infra.settings_service.current().query.video_quality,
+                "downloaded_count": downloaded_count,
                 "episodes": season.episodes.iter().map(|e| json!({
                     "ep_id": e.ep_id,
                     "cid": e.cid,
@@ -104,6 +151,7 @@ pub(super) async fn resolve_video(
                     "display_title": e.display_title(),
                     "duration": e.duration,
                     "badge": e.badge,
+                    "downloaded": downloaded.contains(&e.bvid),
                 })).collect::<Vec<_>>(),
             }))))
         }
@@ -128,8 +176,13 @@ pub(super) async fn resolve_video(
                 }
             };
             // 课程分集嵌套在 sections 中，这里展平为统一列表，并保留 section_title 供前端分组展示
+            let flat_episodes = season.flatten_episodes();
             let mut episodes: Vec<Value> = Vec::new();
-            for (section_title, ep) in season.flatten_episodes() {
+            let episode_bvids: Vec<String> =
+                flat_episodes.iter().map(|(_, e)| e.bvid.clone()).collect();
+            let downloaded = downloaded_bvids(&state.infra.db, &episode_bvids).await;
+            let downloaded_count = downloaded.len();
+            for (section_title, ep) in flat_episodes {
                 episodes.push(json!({
                     "ep_id": ep.ep_id,
                     "cid": ep.cid,
@@ -140,6 +193,7 @@ pub(super) async fn resolve_video(
                     "display_title": if ep.title.is_empty() { format!("ep{}", ep.ep_id) } else { ep.title.clone() },
                     "duration": ep.duration,
                     "status": ep.status,
+                    "downloaded": downloaded.contains(&ep.bvid),
                 }));
             }
             Ok(Json(ApiResponse::success(json!({
@@ -148,6 +202,7 @@ pub(super) async fn resolve_video(
                 "season_title": season.title,
                 "cover": season.cover,
                 "default_quality": state.infra.settings_service.current().query.video_quality,
+                "downloaded_count": downloaded_count,
                 "episodes": episodes,
             }))))
         }

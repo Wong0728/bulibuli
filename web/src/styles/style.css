@@ -4677,6 +4677,35 @@ tr:hover {
     font-size: var(--size-11);
 }
 
+/* 分集长列表工具栏：搜索 + 快捷勾选 */
+#tab-manual .manual-episode-toolbar {
+    display: flex;
+    gap: var(--size-8);
+    align-items: center;
+    margin: var(--size-8) 0;
+}
+
+#tab-manual .manual-episode-search {
+    flex: 1;
+    min-width: 0;
+}
+
+/* 已下载分集标记：与画质/地区类 badge（warning 色）区分 */
+#tab-manual .manual-episode-badge.manual-episode-downloaded {
+    background: var(--success-soft);
+    color: var(--success-text);
+}
+
+#tab-manual .manual-episode-pagebar {
+    display: flex;
+    gap: var(--size-12);
+    align-items: center;
+    justify-content: center;
+    margin-top: var(--size-8);
+    font-size: var(--size-12);
+    color: var(--text-muted);
+}
+
 #tab-manual .manual-season-actions .drawer-btn {
     grid-column: 1 / -1;
     width: 100%;

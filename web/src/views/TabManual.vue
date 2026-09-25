@@ -282,14 +282,36 @@ async function resolveLink() {
     }
     linkResult.value = r;
     selectedQuality.value = Number(r.default_quality) || 80;
-    // 默认勾选 current_ep_id（如果是 ep 链接）
+    // 默认勾选口径（借鉴 Bili23：绝不默认全选长列表）：
+    // - ep 链接：链接对应的那一集，且该集未下载时才勾；
+    // - ss/fp：只勾未下载的分集（需后端下发 downloaded 标记）；全部已下载则空选并提示；
+    // - 无 downloaded 标记（旧后端响应）：退化为只勾第一集。
     const cur = r.current_ep_id;
     const episodes = r.episodes;
+    const hasDownloadInfo = typeof r.downloaded_count === 'number';
+    const missing = episodes.filter(e => !e.downloaded).map(e => e.bvid);
+    let defaults: string[];
     if (cur != null) {
       const hit = episodes.find(e => e.ep_id === cur);
-      selectedEpisodes.value = new Set(hit ? [hit.bvid] : episodes.map(e => e.bvid));
+      defaults = hit && !hit.downloaded ? [hit.bvid] : [];
+    } else if (hasDownloadInfo) {
+      defaults = missing;
     } else {
-      selectedEpisodes.value = new Set(episodes.map(e => e.bvid));
+      defaults = episodes.length ? [episodes[0].bvid] : [];
+    }
+    selectedEpisodes.value = new Set(defaults);
+    episodePage.value = 1;
+    episodeFilter.value = '';
+    if (hasDownloadInfo) {
+      const downloadedCount = episodes.length - missing.length;
+      resultHint.value = downloadedCount === 0
+        ? ''
+        : `本机已下载 ${downloadedCount} 集，默认勾选未下载的 ${missing.length} 集`;
+      if (missing.length === 0 && episodes.length > 0) {
+        resultHint.value = `本机已下载全部 ${episodes.length} 集，如需重下请手动勾选`;
+      }
+    } else {
+      resultHint.value = '';
     }
     resultState.value = 'success';
   } catch (e: any) {
@@ -308,12 +330,62 @@ function toggleEpisode(bvid: string) {
   selectedEpisodes.value = new Set(selectedEpisodes.value);
 }
 
-function toggleAllEpisodes() {
-  if (!linkResult.value?.episodes) return;
-  const allBvs = linkResult.value.episodes.map(e => e.bvid);
-  const allSelected = allBvs.every(bv => selectedEpisodes.value.has(bv));
-  if (allSelected) selectedEpisodes.value = new Set();
-  else selectedEpisodes.value = new Set(allBvs);
+// ===== 分集长列表：搜索过滤 + 分页渲染（1000+ 集全量渲染会卡顿）=====
+const EPISODE_PAGE_SIZE = 50;
+const episodePage = ref(1);
+const episodeFilter = ref('');
+
+const filteredEpisodes = computed(() => {
+  const episodes = linkResult.value?.episodes || [];
+  const kw = episodeFilter.value.trim().toLowerCase();
+  if (!kw) return episodes.map((ep, idx) => ({ ep, idx }));
+  return episodes
+    .map((ep, idx) => ({ ep, idx }))
+    .filter(({ ep, idx }) => {
+      const haystack = `${idx + 1} ${ep.display_title || ''} ${ep.title || ''} ${ep.long_title || ''} ${ep.section_title || ''}`.toLowerCase();
+      return haystack.includes(kw);
+    });
+});
+
+const episodePageCount = computed(() =>
+  Math.max(1, Math.ceil(filteredEpisodes.value.length / EPISODE_PAGE_SIZE)));
+
+const pagedEpisodes = computed(() => {
+  const start = (episodePage.value - 1) * EPISODE_PAGE_SIZE;
+  return filteredEpisodes.value.slice(start, start + EPISODE_PAGE_SIZE);
+});
+
+const downloadedEpisodeCount = computed(() =>
+  (linkResult.value?.episodes || []).filter(e => e.downloaded).length);
+
+function gotoEpisodePage(delta: number) {
+  const next = episodePage.value + delta;
+  if (next >= 1 && next <= episodePageCount.value) episodePage.value = next;
+}
+
+function onEpisodeFilterInput() {
+  episodePage.value = 1;
+}
+
+function toggleAllFilteredEpisodes() {
+  const filtered = filteredEpisodes.value;
+  if (!filtered.length) return;
+  const allSelected = filtered.every(({ ep }) => selectedEpisodes.value.has(ep.bvid));
+  const next = new Set(selectedEpisodes.value);
+  for (const { ep } of filtered) {
+    if (allSelected) next.delete(ep.bvid);
+    else next.add(ep.bvid);
+  }
+  selectedEpisodes.value = next;
+}
+
+function clearEpisodeSelection() {
+  selectedEpisodes.value = new Set();
+}
+
+function selectUndownloadedEpisodes() {
+  const episodes = linkResult.value?.episodes || [];
+  selectedEpisodes.value = new Set(episodes.filter(e => !e.downloaded).map(e => e.bvid));
 }
 
 function selectQuality(qn: number) {
@@ -324,7 +396,11 @@ async function batchAddDownload() {
   if (batching.value) return;
   if (!linkResult.value?.episodes) return;
   const mediaType = linkResult.value.media_type;
-  if (!mediaType) return;
+  if (!mediaType) {
+    // 曾是静默 return：整季已下载等场景下用户点下载毫无反应（KNOWN_ISSUES 记账项）。
+    toast.warn('未能确定内容类型，请重新解析链接后再试');
+    return;
+  }
   // 对齐老框架 startSeasonDownload：page 用完整分集列表的原始序号（勾选第 3、5 集仍提交 page:3,5），
   // 不按筛选后顺序重编号。
   const pages = (linkResult.value.episodes || [])
@@ -578,16 +654,31 @@ function optionMeta(b: any) {
       <div class="drawer-section">
         <div class="drawer-pages" id="season-episodes-section">
           <div class="drawer-pages-header">
-            <span class="drawer-pages-label">分集选择（共 {{ linkResult.episodes.length }} 集）</span>
-            <button type="button" class="btn btn-ghost btn-sm" @click="toggleAllEpisodes">全选/全不选</button>
+            <span class="drawer-pages-label">
+              分集选择（共 {{ linkResult.episodes.length }} 集<template v-if="linkResult.downloaded_count != null">，本机已下载 {{ downloadedEpisodeCount }} 集</template>，已选 {{ selectedEpisodeCount }} 集）
+            </span>
+            <button type="button" class="btn btn-ghost btn-sm" @click="toggleAllFilteredEpisodes">全选/取消当前筛选</button>
+          </div>
+          <p v-if="resultHint" class="form-note">{{ resultHint }}</p>
+          <div class="manual-episode-toolbar">
+            <input v-model="episodeFilter" type="text" class="form-control manual-episode-search"
+                   placeholder="按集数或标题筛选" @input="onEpisodeFilterInput" />
+            <button type="button" class="btn btn-ghost btn-sm" @click="clearEpisodeSelection">清空勾选</button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="selectUndownloadedEpisodes">只选未下载</button>
           </div>
           <div class="drawer-pages-list">
-            <label v-for="(ep, index) in linkResult.episodes" :key="ep.bvid || ep.ep_id || index" class="drawer-page-item manual-episode-item">
+            <label v-for="{ ep, idx } in pagedEpisodes" :key="ep.bvid || ep.ep_id || idx" class="drawer-page-item manual-episode-item">
               <input type="checkbox" :checked="selectedEpisodes.has(ep.bvid)" @change="toggleEpisode(ep.bvid)" />
-              <span class="drawer-page-index">{{ ep.section_title || `P${index + 1}` }}</span>
-              <span class="drawer-page-title" :title="ep.display_title || ep.title">{{ ep.display_title || ep.title || `ep${ep.ep_id || index + 1}` }}</span>
-              <span v-if="ep.badge" class="manual-episode-badge">{{ ep.badge }}</span>
+              <span class="drawer-page-index">{{ ep.section_title || `P${idx + 1}` }}</span>
+              <span class="drawer-page-title" :title="ep.display_title || ep.title">{{ ep.display_title || ep.title || `ep${ep.ep_id || idx + 1}` }}</span>
+              <span v-if="ep.downloaded" class="manual-episode-badge manual-episode-downloaded">已下载</span>
+              <span v-else-if="ep.badge" class="manual-episode-badge">{{ ep.badge }}</span>
             </label>
+          </div>
+          <div v-if="episodePageCount > 1" class="manual-episode-pagebar">
+            <button type="button" class="btn btn-ghost btn-sm" :disabled="episodePage <= 1" @click="gotoEpisodePage(-1)">上一页</button>
+            <span>第 {{ episodePage }} / {{ episodePageCount }} 页（当前筛选 {{ filteredEpisodes.length }} 集）</span>
+            <button type="button" class="btn btn-ghost btn-sm" :disabled="episodePage >= episodePageCount" @click="gotoEpisodePage(1)">下一页</button>
           </div>
         </div>
         <div class="drawer-actions manual-season-actions">
