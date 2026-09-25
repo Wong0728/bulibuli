@@ -4,7 +4,15 @@ use url::{Host, Url};
 
 /// B 站自有资源域白名单。`bilivideo.cn` 与 `bilivideo.com` 同属 B 站 CDN 域族，
 /// playurl 的 MCDN 兜底候选用它，缺该域会让 `cdn_registry::choose_url` 的兜底必然被拒。
-const ALLOWED_ROOTS: &[&str] = &["bilibili.com", "bilivideo.com", "bilivideo.cn", "hdslb.com"];
+/// `akamaized.net` 是 B 站长期使用的 Akamai 镜像（upos-hz-mirrorakam），playurl
+/// 会间歇性返回该域作为取流地址，缺它会让入队校验把正常任务整体拒掉。
+const ALLOWED_ROOTS: &[&str] = &[
+    "bilibili.com",
+    "bilivideo.com",
+    "bilivideo.cn",
+    "hdslb.com",
+    "akamaized.net",
+];
 
 /// 在服务端边界规范化 B 站资源 URL。
 /// B 站 API 可能返回协议相对地址或旧版 HTTP 图片地址，统一升级为 HTTPS 后
@@ -169,9 +177,12 @@ mod tests {
     fn accepts_bilivideo_cn_cdn_family_for_mcdn_candidates() {
         assert!(validate_syntax("https://xy1x2xy.mcdn.bilivideo.cn/v1/a.m4s").is_ok());
         assert!(validate_syntax("https://bilivideo.cn/v1/a.m4s").is_ok());
+        // Akamai 镜像域（与 client.rs::is_cdn_host 测试覆盖同一域族）
+        assert!(validate_syntax("https://upos-hz-mirrorakam.akamaized.net/v1/a.m4s").is_ok());
         // 后缀混淆与端口边界不因新增域放宽
         assert!(validate_syntax("https://bilivideo.cn.evil.example/v1/a.m4s").is_err());
         assert!(validate_syntax("https://evil-bilivideo.cn/v1/a.m4s").is_err());
+        assert!(validate_syntax("https://evil.akamaized.net.evil.example/v1/a.m4s").is_err());
         assert!(validate_syntax("https://xy.mcdn.bilivideo.cn:8082/v1/a.m4s").is_err());
     }
 
