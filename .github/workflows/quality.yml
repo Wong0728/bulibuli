@@ -72,7 +72,8 @@ jobs:
         working-directory: web
       - run: npm run test:smoke
         working-directory: web
-      - run: python build.py --check
+      # Rust 门禁已由上方 "Rust quality gates" job 全量执行，此处跳过避免冷缓存重复编译
+      - run: python build.py --check --skip-rust-gates
       - shell: bash
         run: bash -n deploy/linux/install.sh deploy/termux/install.sh
 
