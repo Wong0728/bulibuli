@@ -2116,23 +2116,13 @@ impl RecordingWorker {
         self.close_finalize_merge_job(merge_job_id.as_deref(), &merge_result, merge_cancellation)
             .await;
         let (final_path, merge_error) = match merge_result {
-            Ok(path) => {
-                for segment in &self.segments {
-                    if let Err(error) = tokio::fs::remove_file(segment).await {
-                        debug!(path = %segment.display(), "删除已合并的直播分段失败: {error}");
-                    }
-                }
-                (path, None)
-            }
+            Ok(path) => (path, None),
             Err(error) => (
-                self.segments
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| self.live_dir.join(&self.base_prefix)),
+                merge_fallback_output_path(&self.segments, &self.live_dir, &self.base_prefix),
                 Some(error.to_string()),
             ),
         };
-        if let Some(error) = merge_error {
+        if let Some(error) = &merge_error {
             self.mark_failure(format!("直播分段合并失败: {error}"))
                 .await;
         }
@@ -2165,8 +2155,12 @@ impl RecordingWorker {
         }
         // 数据库落盘失败时保留最终文件并立即重试一次，避免出现“磁盘有文件、
         // 数据库无记录”的单点瞬时不一致；后续启动恢复仍会扫描可恢复记录。
-        if !self.persist_recording(&info, true).await {
-            let _ = self.persist_recording(&info, true).await;
+        let persisted =
+            self.persist_recording(&info, true).await || self.persist_recording(&info, true).await;
+        // 分段只能在记录认领成品之后删除：先删后落库一旦失败，成品就成了孤儿，
+        // 而重试合并因分段已删恒报 no segments，不可恢复。
+        if persisted && merge_error.is_none() {
+            remove_merged_segments(&self.segments).await;
         }
         *self.snapshot.lock().await = info.clone();
         info!(
@@ -2324,6 +2318,25 @@ impl RecordingWorker {
 
 fn segment_path(live_dir: &Path, base_prefix: &str, index: u32) -> PathBuf {
     live_dir.join(format!("{base_prefix}_segment_{index:04}.flv"))
+}
+
+/// 合并失败时的路径回落：保留「分段前缀」让 retry_merge 还能找回分段，但指向
+/// 不存在的合并目标而非分段本身——把 `.flv` 分段当成品路径落库会让烧录入口误认
+/// 整场已录好，用户拿到的却只有单个分段。
+fn merge_fallback_output_path(segments: &[PathBuf], live_dir: &Path, base_prefix: &str) -> PathBuf {
+    segments
+        .first()
+        .map(|segment| segment.with_extension("mp4"))
+        .unwrap_or_else(|| live_dir.join(base_prefix))
+}
+
+/// 删除已合并的分段；失败只告警——删不掉不该推翻已经成功的合并。
+async fn remove_merged_segments(segments: &[PathBuf]) {
+    for segment in segments {
+        if let Err(error) = tokio::fs::remove_file(segment).await {
+            debug!(path = %segment.display(), "删除已合并的直播分段失败: {error}");
+        }
+    }
 }
 
 /// 读取每个直播源的清晰度上限；未配置或非法时返回 None，交给 B 站默认原画。
@@ -2623,6 +2636,30 @@ async fn prune_persisted_merge_jobs(db: &DatabaseConnection) -> Result<()> {
     Ok(())
 }
 
+/// 合并成功后的收尾顺序：先落库认领成品，落库成功才删分段。
+/// 先删后落库一旦失败，成品就成了孤儿——记录仍显示产物缺失，而重试合并因
+/// 分段已被删除恒报 no segments，用户再也救不回来。
+async fn persist_merge_result(
+    db: &DatabaseConnection,
+    recording_id: i32,
+    segments: &[PathBuf],
+    output: &Path,
+) -> Result<()> {
+    let update = live_recording::ActiveModel {
+        id: Set(recording_id),
+        status: Set("stopped".to_owned()),
+        output_path: Set(Some(output.to_string_lossy().to_string())),
+        error_msg: Set(None),
+        is_recoverable: Set(false),
+        updated_at: Set(chrono::Utc::now().to_rfc3339()),
+        ..Default::default()
+    };
+    update.update(db).await?;
+    persist_closed_segments(db, recording_id, segments).await;
+    remove_merged_segments(segments).await;
+    Ok(())
+}
+
 async fn run_merge_job(
     inner: Arc<LiveRecorderInner>,
     job_id: String,
@@ -2635,23 +2672,11 @@ async fn run_merge_job(
     let result = merge_segments_to_mp4_cancelable(&ffmpeg_path, &segments, &cancellation).await;
     match result {
         Ok(output) => {
-            persist_closed_segments(&inner.db, recording_id, &segments).await;
-            for segment in &segments {
-                let _ = tokio::fs::remove_file(segment).await;
-            }
-            let update = live_recording::ActiveModel {
-                id: Set(recording_id),
-                status: Set("stopped".to_owned()),
-                output_path: Set(Some(output.to_string_lossy().to_string())),
-                error_msg: Set(None),
-                is_recoverable: Set(false),
-                updated_at: Set(chrono::Utc::now().to_rfc3339()),
-                ..Default::default()
-            };
-            if let Err(error) = update.update(&inner.db).await {
-                update_merge_job(&inner, &job_id, "failed", 90, Some(error.to_string())).await;
-            } else {
-                update_merge_job(&inner, &job_id, "completed", 100, None).await;
+            match persist_merge_result(&inner.db, recording_id, &segments, &output).await {
+                Ok(()) => update_merge_job(&inner, &job_id, "completed", 100, None).await,
+                Err(error) => {
+                    update_merge_job(&inner, &job_id, "failed", 90, Some(error.to_string())).await;
+                }
             }
         }
         Err(error) => {
@@ -3088,6 +3113,117 @@ mod tests {
             .await
             .is_none());
         assert!(jobs.lock().await.is_empty());
+    }
+
+    async fn insert_recording(db: &DatabaseConnection, output_path: &str) -> i32 {
+        let now = chrono::Utc::now().to_rfc3339();
+        let row = live_recording::ActiveModel {
+            room_id: Set(8178490),
+            title: Set("深夜点歌台".to_owned()),
+            status: Set("failed".to_owned()),
+            output_path: Set(Some(output_path.to_owned())),
+            started_at: Set(now.clone()),
+            created_at: Set(now.clone()),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .expect("插入录制记录");
+        row.id
+    }
+
+    #[tokio::test]
+    async fn merge_failure_fallback_does_not_promise_a_finished_output() {
+        let dir = tempfile::tempdir().expect("temp directory");
+        let first = dir.path().join("room_segment_0001.flv");
+        let second = dir.path().join("room_segment_0002.flv");
+        std::fs::write(&first, b"segment").expect("write segment");
+        std::fs::write(&second, b"segment").expect("write segment");
+
+        let fallback =
+            merge_fallback_output_path(&[first.clone(), second.clone()], dir.path(), "room");
+        // 回落到不存在的合并目标：记录不再声称自己握着整场成品。
+        assert_eq!(fallback, dir.path().join("room_segment_0001.mp4"));
+        assert!(!fallback.exists(), "合并失败不得落库一个被当成成品的路径");
+        // 但分段前缀必须仍可被找回，抢救能力不能被一并砍掉。
+        assert_eq!(
+            find_recording_segments(dir.path(), fallback.to_str()).await,
+            vec![first.clone(), second.clone()]
+        );
+        // 没有分段时沿用目录前缀回落。
+        assert_eq!(
+            merge_fallback_output_path(&[], dir.path(), "room"),
+            dir.path().join("room")
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_result_persisted_before_segments_are_removed() {
+        let db = migrated_merge_job_db().await;
+        let dir = tempfile::tempdir().expect("temp directory");
+        let segments = vec![
+            dir.path().join("room_segment_0001.flv"),
+            dir.path().join("room_segment_0002.flv"),
+        ];
+        for segment in &segments {
+            std::fs::write(segment, b"segment").expect("write segment");
+        }
+        let output = dir.path().join("room_segment_0001.mp4");
+        std::fs::write(&output, b"merged").expect("write merged output");
+        let recording_id = insert_recording(&db, segments[0].to_str().expect("utf8")).await;
+
+        persist_merge_result(&db, recording_id, &segments, &output)
+            .await
+            .expect("合并结果落库");
+        let row = live_recording::Entity::find_by_id(recording_id)
+            .one(&db)
+            .await
+            .expect("查询记录")
+            .expect("记录存在");
+        assert_eq!(row.status, "stopped");
+        assert_eq!(
+            row.output_path.as_deref(),
+            Some(output.to_str().expect("utf8"))
+        );
+        assert!(
+            segments.iter().all(|segment| !segment.exists()),
+            "落库成功后分段才应被清理"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_merge_persist_keeps_segments_for_retry() {
+        let db = migrated_merge_job_db().await;
+        let dir = tempfile::tempdir().expect("temp directory");
+        let segments = vec![
+            dir.path().join("room_segment_0001.flv"),
+            dir.path().join("room_segment_0002.flv"),
+        ];
+        for segment in &segments {
+            std::fs::write(segment, b"segment").expect("write segment");
+        }
+        let output = dir.path().join("room_segment_0001.mp4");
+        std::fs::write(&output, b"merged").expect("write merged output");
+        let recording_id = insert_recording(&db, segments[0].to_str().expect("utf8")).await;
+        // 模拟落库失败（记录已被删除 / 写入被拒）。
+        live_recording::Entity::delete_by_id(recording_id)
+            .exec(&db)
+            .await
+            .expect("删除记录");
+
+        let error = persist_merge_result(&db, recording_id, &segments, &output)
+            .await
+            .expect_err("记录不存在时落库必须失败");
+        assert!(
+            segments.iter().all(|segment| segment.exists()),
+            "落库失败不得删除分段：否则成品成孤儿且重试恒报 no segments，实际: {error}"
+        );
+        assert_eq!(
+            find_recording_segments(dir.path(), Some(segments[0].to_str().expect("utf8"))).await,
+            segments,
+            "分段必须还能被 retry_merge 找回"
+        );
     }
 
     #[test]

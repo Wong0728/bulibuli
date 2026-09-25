@@ -20,6 +20,9 @@ const MERGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MERGE_FREE_SPACE_MARGIN_BYTES: u64 = 1024 * 1024 * 1024;
 /// 校验失败时保留的合并产物后缀：不匹配 `*.mp4`，也不被启动清扫删除。
 const UNVERIFIED_SUFFIX: &str = ".unverified";
+/// 探测挂起（损坏文件/异常 IO）会让 finalize 永久停留在 Finalizing：
+/// ffprobe 与回退的 ffmpeg 探测都按此超时收口，量级与合并超时对齐。
+const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug)]
 struct MediaProbe {
@@ -355,22 +358,17 @@ async fn verify_merged_output(
     segments: &[PathBuf],
 ) -> Result<()> {
     let output_probe = probe_media(ffmpeg_path, output).await?;
-    if !output_probe.has_video || !output_probe.has_audio {
-        return Err(anyhow!(
-            "合并输出缺少{}轨道",
-            if !output_probe.has_video {
-                "视频"
-            } else {
-                "音频"
-            }
-        ));
+    if !output_probe.has_video {
+        return Err(anyhow!("合并输出缺少视频轨道"));
     }
     let mut input_duration = 0.0;
+    let mut input_has_audio = false;
     let mut untimestamped = Vec::new();
     for segment in segments {
         let probe = probe_media(ffmpeg_path, segment)
             .await
             .with_context(|| format!("校验合并输入分段失败: {}", segment.display()))?;
+        input_has_audio |= probe.has_audio;
         let size = tokio::fs::metadata(segment)
             .await
             .map(|metadata| metadata.len())
@@ -382,6 +380,11 @@ async fn verify_merged_output(
                 return Err(anyhow!("输入分段无效（{reason}）: {}", segment.display()))
             }
         }
+    }
+    // 纯视频直播流（房间无音频轨）合并后本就无声：只有输入带音频时才要求输出含
+    // 音频，否则这类房间每一场都会被判成合并失败。
+    if input_has_audio && !output_probe.has_audio {
+        return Err(anyhow!("合并输出缺少音频轨道"));
     }
     if !untimestamped.is_empty() {
         warn!(
@@ -419,9 +422,6 @@ fn classify_segment_probe(probe: &MediaProbe, size_bytes: u64) -> SegmentProbe {
 
 async fn probe_media(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
     let probe = ffprobe_path(ffmpeg_path);
-    // ffprobe 挂起（损坏文件/异常 IO）会让 finalize 永久停留在 Finalizing：
-    // 与合并的 15 分钟超时对齐设一个探测超时。
-    const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
     let mut cmd = Command::new(&probe);
     cmd.args([
         "-v",
@@ -503,9 +503,18 @@ async fn probe_media_with_ffmpeg(ffmpeg_path: &Path, input: &Path) -> Result<Med
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let result = probe_output(&mut cmd)
-        .await
-        .with_context(|| format!("使用 FFmpeg 读取媒体信息失败: {}", ffmpeg_path.display()))?;
+    // 没有 ffprobe 时回退到 ffmpeg 探测，同样必须可超时：挂住的 ffmpeg 会让
+    // 收尾永久停在 Finalizing，且这条路径上没有任何其它超时兜底。
+    let result = match timeout(PROBE_TIMEOUT, probe_output(&mut cmd)).await {
+        Ok(result) => result,
+        Err(_) => {
+            return Err(anyhow!(
+                "FFmpeg 媒体探测超时（{} 秒）",
+                PROBE_TIMEOUT.as_secs()
+            ));
+        }
+    }
+    .with_context(|| format!("使用 FFmpeg 读取媒体信息失败: {}", ffmpeg_path.display()))?;
     let text = String::from_utf8_lossy(&result.stderr);
     let duration_secs = text
         .lines()
@@ -1128,40 +1137,78 @@ mod tests {
         output
     }
 
+    /// 只含一种媒体轨道的 FLV 分段：`video` 决定保留视频轨还是音频轨。
+    async fn generate_single_track_fixture(ffmpeg: &Path, output: &Path, video: bool) {
+        let mut command = Command::new(ffmpeg);
+        command.args(["-y", "-v", "error", "-f", "lavfi", "-i"]);
+        if video {
+            command
+                .arg("testsrc=size=160x90:rate=25")
+                .args(["-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p"]);
+        } else {
+            command
+                .arg("sine=frequency=1000:sample_rate=44100")
+                .args(["-t", "1", "-c:a", "aac"]);
+        }
+        let result = command
+            .args(["-f", "flv"])
+            .arg(output)
+            .output()
+            .await
+            .expect("run ffmpeg single-track fixture generation");
+        assert!(
+            result.status.success(),
+            "fixture generation failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_video_only_segments_produces_complete_output() {
+        // 无音频轨的直播间（纯视频流）真实存在：合并必须走仅视频轨的 remux，
+        // 不得因为输出没有音轨就被校验判成失败、把整场留给分段。
+        let ffmpeg = required_ffmpeg_bin();
+        let temp = tempdir().expect("temporary directory");
+        let first = temp.path().join("room_segment_0001.flv");
+        let second = temp.path().join("room_segment_0002.flv");
+        generate_single_track_fixture(&ffmpeg, &first, true).await;
+        generate_single_track_fixture(&ffmpeg, &second, true).await;
+
+        let output = merge_segments_to_mp4(&ffmpeg, &[first.clone(), second.clone()])
+            .await
+            .expect("纯视频分段应能合并为成品");
+        let probe = probe_media(&ffmpeg, &output)
+            .await
+            .expect("probe merged output");
+        assert!(probe.has_video, "合并输出必须保留视频轨");
+        assert!(!probe.has_audio, "夹具本就无音轨");
+        assert!(
+            probe.duration_secs >= 1.8,
+            "merged duration: {}",
+            probe.duration_secs
+        );
+        assert!(
+            first.exists() && second.exists(),
+            "merger must not remove source segments"
+        );
+    }
+
     #[tokio::test]
     async fn failed_validation_preserves_merged_output_for_rescue() {
         let ffmpeg = required_ffmpeg_bin();
         let temp = tempdir().expect("temporary directory");
-        // 无音轨的分段：合并能跑完，但输出缺音频轨道，校验必然失败。
-        let silent = temp.path().join("room_segment_0001.flv");
-        let result = Command::new(&ffmpeg)
-            .args([
-                "-y",
-                "-v",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                "testsrc=size=160x90:rate=25",
-                "-t",
-                "1",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-f",
-                "flv",
-            ])
-            .arg(&silent)
-            .output()
-            .await
-            .expect("generate audio-less fixture");
-        assert!(result.status.success());
+        // 无视频轨的分段：合并能跑完，但输出缺视频轨道，校验必然失败。
+        let voice_only = temp.path().join("room_segment_0001.flv");
+        generate_single_track_fixture(&ffmpeg, &voice_only, false).await;
 
-        let error = merge_segments_to_mp4(&ffmpeg, &[silent.clone(), silent])
+        let error = merge_segments_to_mp4(&ffmpeg, &[voice_only.clone(), voice_only])
             .await
-            .expect_err("缺音轨的输出必须校验失败");
+            .expect_err("缺视频轨的输出必须校验失败");
         let message = error.to_string();
+        assert!(
+            message.contains("缺少视频轨道"),
+            "错误文案需说明失败原因: {message}"
+        );
         assert!(
             message.contains("已保留未通过校验的合并产物") && message.contains(".mp4.unverified"),
             "错误文案需说明保留了什么: {message}"

@@ -15,7 +15,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn router() -> Router<SharedState> {
     Router::new()
@@ -561,6 +561,23 @@ async fn start_merge(
     )))
 }
 
+/// 烧录只认可「已合并成品」。合并失败时 finalize 仍会把分段前缀留在 output_path
+/// 里供 retry_merge 找回分段，只按文件存在性放行会让用户以为整场都录了下来，
+/// 实际烧到的只有一个分段。
+fn burnable_output_path(output_path: Option<&str>) -> Result<PathBuf, String> {
+    let Some(raw) = output_path else {
+        return Err("该录制没有可烧录的输出视频".to_owned());
+    };
+    let path = Path::new(raw);
+    if path.extension().and_then(|ext| ext.to_str()) != Some("mp4") {
+        return Err("直播分段尚未合并成功，请先重试合并后再烧录".to_owned());
+    }
+    if !path.is_file() {
+        return Err("该录制没有可烧录的输出视频".to_owned());
+    }
+    Ok(path.to_path_buf())
+}
+
 async fn burn_recording_danmaku(
     State(state): State<SharedState>,
     axum::extract::Path(recording_id): axum::extract::Path<i32>,
@@ -571,13 +588,7 @@ async fn burn_recording_danmaku(
         .history_item(recording_id)
         .await?
         .ok_or_else(|| AppError::NotFound("录制历史不存在".into()))?;
-    let output = row
-        .output_path
-        .as_deref()
-        .map(Path::new)
-        .filter(|path| path.exists())
-        .ok_or_else(|| AppError::BadRequest("该录制没有可烧录的输出视频".into()))?
-        .to_path_buf();
+    let output = burnable_output_path(row.output_path.as_deref()).map_err(AppError::BadRequest)?;
     let events_path = row
         .event_path
         .as_deref()
@@ -920,5 +931,35 @@ mod tests {
         assert_eq!(items[1].mode, "TOP");
         assert!(items[1].text.contains("SC ¥30"));
         assert!(items[1].text.contains("唱得好"));
+    }
+
+    #[tokio::test]
+    async fn burn_gate_only_accepts_merged_output() {
+        let dir =
+            std::env::temp_dir().join(format!("live-burn-gate-{}", uuid::Uuid::new_v4().simple()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        // 合并失败时落库的分段路径：文件真实存在，但不是整场成品。
+        let segment = dir.join("room_segment_0002.flv");
+        tokio::fs::write(&segment, b"segment").await.unwrap();
+        let unverified = dir.join("room_segment_0001.mp4.unverified");
+        tokio::fs::write(&unverified, b"salvage").await.unwrap();
+        let merged = dir.join("room_segment_0001.mp4");
+        tokio::fs::write(&merged, b"merged").await.unwrap();
+        let missing = dir.join("room_segment_0009.mp4");
+
+        assert!(burnable_output_path(None)
+            .unwrap_err()
+            .contains("没有可烧录的输出视频"));
+        assert!(burnable_output_path(segment.to_str())
+            .unwrap_err()
+            .contains("尚未合并"));
+        assert!(burnable_output_path(unverified.to_str())
+            .unwrap_err()
+            .contains("尚未合并"));
+        assert!(burnable_output_path(missing.to_str())
+            .unwrap_err()
+            .contains("没有可烧录的输出视频"));
+        assert_eq!(burnable_output_path(merged.to_str()).unwrap(), merged);
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

@@ -10,6 +10,20 @@ use super::VideoProcessor;
 
 const LIVE_FFMPEG_UNAVAILABLE: &str =
     "未找到支持直播录制的 FFmpeg（需支持 http 协议、FLV 封装与 concat 拼接）：请安装完整版 FFmpeg 或在设置中指定路径";
+/// 能力探测超时，与 `check_ffmpeg` 的 `-version` 探测同量级。
+const CAPABILITY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 带超时收集探测进程输出：进程挂起或启动失败返回 None（子进程由 kill_on_drop 回收）。
+async fn run_probe_with_timeout(
+    command: &mut Command,
+    limit: Duration,
+) -> Option<std::process::Output> {
+    let child = child_lifetime::spawn(command).ok()?;
+    tokio::time::timeout(limit, child.wait_with_output())
+        .await
+        .ok()?
+        .ok()
+}
 
 fn windows_exe_name() -> &'static str {
     if cfg!(windows) {
@@ -107,6 +121,7 @@ impl VideoProcessor {
     }
 
     /// 依次校验 http 协议、FLV muxer/demuxer 与 concat demuxer 是否存在。
+    /// 每次探测都必须带超时：卡住的 ffmpeg 候选会让录制永久停在 Starting。
     async fn supports_live_capture(path: &Path) -> bool {
         for (arg, needle) in [
             ("-protocols", "http"),
@@ -117,9 +132,12 @@ impl VideoProcessor {
             command
                 .args(["-hide_banner", arg])
                 .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
                 .kill_on_drop(true);
             child_lifetime::configure(&mut command);
-            let Ok(output) = command.output().await else {
+            let Some(output) = run_probe_with_timeout(&mut command, CAPABILITY_TIMEOUT).await
+            else {
                 return false;
             };
             if !output.status.success() {
@@ -278,5 +296,38 @@ mod tests {
         let (path, source) = processor.detect_ffmpeg("auto", custom.to_str()).await;
         assert_eq!(source, "custom");
         assert_eq!(path.as_deref(), Some(custom.as_path()));
+    }
+
+    #[tokio::test]
+    async fn capability_probe_gives_up_on_hanging_process() {
+        // 挂起的能力探测必须超时返回，否则 detect_ffmpeg_for_live 会把任务永久
+        // 卡在 Starting/Finalizing。
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = tokio::process::Command::new("cmd.exe");
+            command.args(["/C", "ping 127.0.0.1 -n 30 > nul"]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = tokio::process::Command::new("sh");
+            command.args(["-c", "sleep 30"]);
+            command
+        };
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        crate::services::spawn_util::child_lifetime::configure(&mut command);
+
+        let started = std::time::Instant::now();
+        assert!(
+            super::run_probe_with_timeout(&mut command, std::time::Duration::from_millis(300))
+                .await
+                .is_none(),
+            "挂起的探测进程应超时返回 None"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 }
