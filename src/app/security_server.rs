@@ -65,6 +65,12 @@ pub async fn serve(
             "收到关闭信号，开始 {} 秒优雅关停宽限期",
             SHUTDOWN_GRACE.as_secs()
         );
+        // 主动断开 Socket.IO 连接：浏览器页面开着时 WS 连接永不结束，
+        // 优雅关停只能等满宽限期（Ctrl+C 后进程要多挂最长 10 秒才能退出）。
+        // 主动断开后连接随即收敛，宽限期退化为兜底上限。
+        if let Err(error) = state.infra.ws.disconnect_session("all").await {
+            warn!("关停时主动断开 Socket.IO 连接失败: {error}");
+        }
         tokio::time::sleep(SHUTDOWN_GRACE).await;
     };
     tokio::pin!(grace_after_signal);
