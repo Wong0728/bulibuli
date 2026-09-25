@@ -44,6 +44,9 @@ interface BloggerLogEntry {
   message?: string;
 }
 const bloggerLogs = ref<BloggerLogEntry[]>([]);
+// 日志接口失败要可见，否则会把失败伪装成"该博主暂无日志"（与抽屉日志同类问题）。
+// 2 秒自动刷新会自愈，成功后即清除。
+const bloggerLogsError = ref(false);
 const logsPanel = ref<HTMLElement | null>(null);
 let logTimer: number | null = null;
 let logRequestInFlight = false;
@@ -196,8 +199,10 @@ async function loadBloggerLogs(uid: number | string) {
       if (ta && tb) return ta - tb;
       return String(a.time || '').localeCompare(String(b.time || ''));
     });
+    bloggerLogsError.value = false;
   } catch (e) {
     console.error('加载日志失败:', e);
+    bloggerLogsError.value = true;
   } finally {
     logRequestInFlight = false;
   }
@@ -241,6 +246,7 @@ watch(() => blogger.selectedBloggerId, async (id) => {
   const b = blogger.bloggers.find(x => x.id === id);
   if (b) {
     bloggerLogs.value = [];
+    bloggerLogsError.value = false;
     await loadBloggerLogs(b.uid);
     await blogger.refreshStatus(b.uid);
   }
@@ -597,7 +603,11 @@ useModalFocus(showAddModal, addModalRoot, closeAddModal);
               <i class="fa-solid fa-terminal"></i> 博主日志
             </div>
             <div class="blogger-logs-panel" id="detail-blogger-logs" ref="logsPanel">
-              <div v-if="bloggerLogs.length === 0" class="empty-state empty-state-padded">
+              <div v-if="bloggerLogsError" class="empty-state empty-state-padded">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <p>日志加载失败，等待自动重试</p>
+              </div>
+              <div v-else-if="bloggerLogs.length === 0" class="empty-state empty-state-padded">
                 <i class="fa-solid fa-info-circle"></i>
                 <p>暂无日志</p>
               </div>
