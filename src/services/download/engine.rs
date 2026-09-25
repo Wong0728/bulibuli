@@ -333,6 +333,10 @@ impl DownloadManager {
                         Some(&message),
                     )
                     .await;
+                    // 终态收敛：与 queue_terminal_failure 同口径，
+                    // 否则记录停在 downloading，看板三个 Tab 都不可见。
+                    self.cleanup_failed_transfer_leftovers(&task).await;
+                    self.mark_history_failed(&task.bvid, task.cid).await;
                 }
             }
         }

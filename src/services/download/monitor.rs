@@ -90,7 +90,7 @@ impl DownloadManager {
     /// 看板"失败"Tab 按 `history.state = 'failed'` 过滤，而此前没有任何代码写过该值，
     /// 失败的手动任务会从三个 Tab 同时消失（记录被删掉，产物也无人认领）。
     /// 只接管下载中的占位行：已完成/已下架/付费受限/校验异常不能被一次下载失败改写。
-    async fn mark_history_failed(&self, bvid: &str, cid: Option<i64>) {
+    pub(super) async fn mark_history_failed(&self, bvid: &str, cid: Option<i64>) {
         let mut query = history::Entity::find().filter(history::Column::Bvid.eq(bvid));
         query = match cid {
             Some(c) => query.filter(history::Column::Cid.eq(c)),
@@ -119,7 +119,7 @@ impl DownloadManager {
 
     /// aria2 任务判失败后清理 `.downloading` 临时文件与对应 `.aria2` 控制文件，
     /// 与 native 路径"失败即删残片"的行为对齐，避免反复失败在下载目录累积垃圾文件。
-    async fn cleanup_failed_transfer_leftovers(&self, task: &download_task::Model) {
+    pub(super) async fn cleanup_failed_transfer_leftovers(&self, task: &download_task::Model) {
         let Some(filename) = task
             .filename
             .as_deref()
@@ -439,6 +439,10 @@ impl DownloadManager {
                                 Some("Aria2 下载器不可用"),
                             )
                             .await;
+                            // 终态收敛：与 queue_terminal_failure 同口径，
+                            // 否则记录停在 downloading，看板三个 Tab 都不可见。
+                            self.cleanup_failed_transfer_leftovers(task).await;
+                            self.mark_history_failed(&task.bvid, task.cid).await;
                         }
                     }
                     aria2_fail_count = 0;
