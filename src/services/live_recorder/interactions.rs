@@ -7,10 +7,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
 
@@ -303,7 +303,12 @@ async fn archive_legacy_and_xml(
     // ponytail：限制归档输出，避免损坏的 JSONL 耗尽内存；
     // 如果未来需要更大规模采集，再迁移到外部流式处理器。
     let mut input = BufReader::new(tokio::fs::File::open(&paths.events).await?).lines();
-    let mut legacy = tokio::fs::File::create(&paths.legacy).await?;
+    // 两个归档都先写 *.archive-part，完整收尾后才改名到位：收尾超时被 abort 时，
+    // 最终文件名上不会出现半截 JSON/XML（半截文件语法不完整，用户事后打不开）。
+    let legacy_target = paths.legacy.clone();
+    let xml_target = paths.xml.clone();
+    let mut legacy =
+        BufWriter::new(tokio::fs::File::create(archive_staging_path(&legacy_target)).await?);
     let title_json = serde_json::to_string(title)?;
     legacy
         .write_all(
@@ -315,7 +320,7 @@ async fn archive_legacy_and_xml(
         )
         .await?;
 
-    let mut xml = tokio::fs::File::create(&paths.xml).await?;
+    let mut xml = BufWriter::new(tokio::fs::File::create(archive_staging_path(&xml_target)).await?);
     xml.write_all(
         format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<live_archive schema_version=\"2\" room_id=\"{}\" title=\"{}\">\n<metadata><source>jsonl-archive</source><uid_policy>redacted</uid_policy></metadata>\n",
@@ -366,9 +371,34 @@ async fn archive_legacy_and_xml(
         format!("<metadata><event_count>{count}</event_count><truncated>{truncated}</truncated></metadata>\n</live_archive>\n").as_bytes(),
     )
     .await?;
+    legacy.flush().await?;
+    xml.flush().await?;
+    // 先关闭句柄再改名：Windows 上文件仍被打开时 rename 会失败。
+    drop(legacy);
+    drop(xml);
+    publish_staged_archive(&legacy_target).await?;
+    publish_staged_archive(&xml_target).await?;
     // 同时生成标准 B 站弹幕 XML（PotPlayer 可识别）
     write_standard_bilibili_xml(paths).await?;
     Ok(truncated)
+}
+
+/// 归档中间文件后缀：正常收尾后会改名去掉；中止/报错残留的由启动清理扫除。
+pub(crate) const ARCHIVE_STAGING_SUFFIX: &str = ".archive-part";
+
+/// 归档目标对应的中间文件路径。
+fn archive_staging_path(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("interaction-archive");
+    target.with_file_name(format!("{name}{ARCHIVE_STAGING_SUFFIX}"))
+}
+
+/// 把写满并 flush 过的中间文件改名成最终文件。
+async fn publish_staged_archive(target: &Path) -> Result<()> {
+    tokio::fs::rename(archive_staging_path(target), target).await?;
+    Ok(())
 }
 
 /// 将 events.jsonl 中的弹幕/SC 事件转换为标准 B 站弹幕 XML 格式，供 PotPlayer 挂载。
@@ -380,7 +410,9 @@ async fn write_standard_bilibili_xml(paths: &InteractionPaths) -> Result<()> {
     let file = tokio::fs::File::open(&paths.events).await?;
     let mut reader = BufReader::new(file).lines();
 
-    let mut xml = tokio::fs::File::create(&paths.standard_xml).await?;
+    // 与 legacy/XML 归档同口径：写中间文件，收尾后改名，abort 时不会留下半截 XML。
+    let target = paths.standard_xml.clone();
+    let mut xml = BufWriter::new(tokio::fs::File::create(archive_staging_path(&target)).await?);
     xml.write_all(
         b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<i>\n\
           <chatserver>chat.bilibili.com</chatserver>\n\
@@ -480,6 +512,9 @@ async fn write_standard_bilibili_xml(paths: &InteractionPaths) -> Result<()> {
         }
     }
     xml.write_all(b"</i>\n").await?;
+    xml.flush().await?;
+    drop(xml);
+    publish_staged_archive(&target).await?;
     info!(
         standard_xml = %paths.standard_xml.display(),
         count,
@@ -698,6 +733,39 @@ mod tests {
         assert!(jsonl.contains("tail event"));
         assert!(legacy.contains("tail event"));
         assert!(xml.contains("tail event"));
+        // 归档必须语法完整：收尾超时被 abort 时留下的半截 JSON/XML 用户事后打不开。
+        let parsed: Value = serde_json::from_str(&legacy).expect("legacy 归档必须是完整 JSON");
+        assert_eq!(parsed["events"].as_array().map(Vec::len), Some(1));
+        assert_eq!(parsed["truncated"], Value::Bool(false));
+        assert!(xml.trim_end().ends_with("</live_archive>"), "XML 必须闭合");
+        let leftovers: Vec<_> = std::fs::read_dir(temp.path())
+            .expect("读取归档目录")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.to_string_lossy().ends_with(ARCHIVE_STAGING_SUFFIX))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "收尾成功后不应留下中间文件: {leftovers:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn partial_archive_never_occupies_the_final_file_name() {
+        // 中止/报错留在磁盘上的只能是中间名：最终文件名要么承载完整文件，要么不存在。
+        let temp = tempdir().expect("temporary directory");
+        let target = temp.path().join("room_danmu.json");
+        tokio::fs::write(archive_staging_path(&target), b"{\"events\":[tru")
+            .await
+            .expect("写入中间文件");
+        assert!(!target.exists(), "半截归档不得占用最终文件名");
+
+        publish_staged_archive(&target).await.expect("改名到位");
+        assert_eq!(
+            tokio::fs::read_to_string(&target).await.expect("读取归档"),
+            "{\"events\":[tru"
+        );
+        assert!(!archive_staging_path(&target).exists());
     }
 
     #[tokio::test]

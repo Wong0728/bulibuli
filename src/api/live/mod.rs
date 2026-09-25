@@ -16,6 +16,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 pub fn router() -> Router<SharedState> {
     Router::new()
@@ -384,20 +385,29 @@ async fn dashboard(
         "server_timezone": chrono::Local::now().format("%Z %:z").to_string(), "poll_interval_secs": 30,
         "merge_jobs": merge_jobs,
         "recovery": recovery,
-        "disk": disk_status(&state.infra.paths.download_dir),
+        "disk": disk_status(&state.infra.paths.download_dir).await,
     }))))
 }
 
 /// 录制目录所在磁盘的余量；读取失败时返回 null，前端按“未知”降级展示。
-fn disk_status(dir: &Path) -> serde_json::Value {
-    match (fs2::available_space(dir), fs2::total_space(dir)) {
-        (Ok(available), Ok(total)) => json!({
-            "available_bytes": available,
-            "total_bytes": total,
-            "path_hidden": true,
-        }),
-        _ => serde_json::Value::Null,
-    }
+///
+/// 走 spawn_blocking：fs2 是同步系统调用，网络盘/休眠中的磁盘可以把一次查询卡住数秒，
+/// 而 dashboard 是直播页 30 秒一次的常驻轮询，不能占用 runtime worker。
+async fn disk_status(dir: &Path) -> serde_json::Value {
+    let dir = dir.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        match (fs2::available_space(&dir), fs2::total_space(&dir)) {
+            (Ok(available), Ok(total)) => json!({
+                "available_bytes": available,
+                "total_bytes": total,
+                "path_hidden": true,
+            }),
+            _ => serde_json::Value::Null,
+        }
+    })
+    .await;
+    // 阻塞任务 panic（含应用关闭期被强杀）同样降级为"未知"，不让 dashboard 失败。
+    result.unwrap_or(serde_json::Value::Null)
 }
 
 async fn add_source(
@@ -747,83 +757,103 @@ async fn burn_recording_danmaku(
 }
 
 /// 从直播互动 JSONL 归档提取可烧录条目：弹幕保留归档中的模式、字号和颜色，SC 走顶部固定轨道。
+///
+/// 逐行流式解析，不整文件读入内存：长场次的 `events.jsonl` 可达数百 MB，
+/// `read_to_string` 会在烧录瞬间打出一个与录制时长成正比的内存尖峰（且遇到
+/// 非 UTF-8 字节直接整体失败，而现在只跳过坏行）。
 async fn load_live_burn_items(events_path: &Path) -> anyhow::Result<Vec<DanmakuItem>> {
-    let content = tokio::fs::read_to_string(events_path).await?;
+    const MAX_BURN_ITEMS: usize = 200_000;
+    let file = tokio::fs::File::open(events_path).await?;
+    let mut reader = BufReader::new(file);
+    let mut raw: Vec<u8> = Vec::new();
     let mut items = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    loop {
+        raw.clear();
+        // read_until 而不是 lines()：后者会整条流地校验 UTF-8，一个坏字节就报废全场归档
+        if reader.read_until(b'\n', &mut raw).await? == 0 {
+            break;
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Ok(line) = std::str::from_utf8(&raw) else {
             continue;
         };
-        let time_secs = value
-            .get("media_time_ms")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0) as f64
-            / 1000.0;
-        let data = value
-            .get("data")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        match value.get("event_type").and_then(serde_json::Value::as_str) {
-            Some("danmaku") => {
-                let text = data
-                    .get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                if text.is_empty() {
-                    continue;
-                }
-                let source_mode = data.get("mode").and_then(live_json_i64).unwrap_or(1);
-                let (mode, bottom) = live_danmaku_mode(source_mode);
-                let size = data
-                    .get("font_size")
-                    .and_then(live_json_i64)
-                    .unwrap_or(25)
-                    .clamp(1, 100) as i32;
-                let color = live_danmaku_color(data.get("color"));
-                items.push(DanmakuItem {
-                    text,
-                    time: time_secs,
-                    mode: mode.to_string(),
-                    size,
-                    color,
-                    bottom,
-                });
+        if let Some(item) = live_burn_item_from_jsonl_line(line) {
+            items.push(item);
+            if items.len() >= MAX_BURN_ITEMS {
+                break;
             }
-            Some("super_chat") => {
-                let uname = data
-                    .get("uname")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("匿名");
-                let message = data
-                    .get("message")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
-                let price = data
-                    .get("price")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0);
-                items.push(DanmakuItem {
-                    text: format!("SC ¥{price} {uname}: {message}"),
-                    time: time_secs,
-                    mode: "TOP".to_string(),
-                    size: 30,
-                    color: "FFB300".to_string(),
-                    bottom: false,
-                });
-            }
-            _ => {}
-        }
-        if items.len() >= 200_000 {
-            break;
         }
     }
     Ok(items)
+}
+
+/// 解析单行事件；非 JSON、空行与不可烧录的事件类型返回 `None`（跳过而非中断）。
+fn live_burn_item_from_jsonl_line(line: &str) -> Option<DanmakuItem> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    let time_secs = value
+        .get("media_time_ms")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0) as f64
+        / 1000.0;
+    let data = value
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    match value.get("event_type").and_then(serde_json::Value::as_str) {
+        Some("danmaku") => {
+            let text = data
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if text.is_empty() {
+                return None;
+            }
+            let source_mode = data.get("mode").and_then(live_json_i64).unwrap_or(1);
+            let (mode, bottom) = live_danmaku_mode(source_mode);
+            let size = data
+                .get("font_size")
+                .and_then(live_json_i64)
+                .unwrap_or(25)
+                .clamp(1, 100) as i32;
+            let color = live_danmaku_color(data.get("color"));
+            Some(DanmakuItem {
+                text,
+                time: time_secs,
+                mode: mode.to_string(),
+                size,
+                color,
+                bottom,
+            })
+        }
+        Some("super_chat") => {
+            let uname = data
+                .get("uname")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("匿名");
+            let message = data
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let price = data
+                .get("price")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            Some(DanmakuItem {
+                text: format!("SC ¥{price} {uname}: {message}"),
+                time: time_secs,
+                mode: "TOP".to_string(),
+                size: 30,
+                color: "FFB300".to_string(),
+                bottom: false,
+            })
+        }
+        _ => None,
+    }
 }
 
 fn live_json_i64(value: &serde_json::Value) -> Option<i64> {
@@ -931,6 +961,44 @@ mod tests {
         assert_eq!(items[1].mode, "TOP");
         assert!(items[1].text.contains("SC ¥30"));
         assert!(items[1].text.contains("唱得好"));
+    }
+
+    #[tokio::test]
+    async fn live_burn_items_skip_unparsable_lines_without_losing_the_rest() {
+        // 归档里混入坏行（截断 JSON / 非法 UTF-8）时：整文件 read_to_string 会直接
+        // 报 "stream did not contain valid UTF-8"，一场好归档就此烧不了；
+        // 逐行读取只跳过坏行。
+        let dir =
+            std::env::temp_dir().join(format!("live-burn-utf8-{}", uuid::Uuid::new_v4().simple()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("events.jsonl");
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(b"{\"seq\":1,\"broken\n");
+        bytes.extend_from_slice(&[0xFF, 0xFE, b'\n']);
+        let good = r#"{"seq":2,"media_time_ms":2500,"event_type":"danmaku","data":{"text":"还在","mode":1}}"#;
+        bytes.extend_from_slice(good.as_bytes());
+        bytes.push(b'\n');
+        tokio::fs::write(&path, &bytes).await.unwrap();
+        let items = load_live_burn_items(&path)
+            .await
+            .expect("坏行不应让整场归档不可用");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "还在");
+        assert!((items[0].time - 2.5).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn disk_status_reports_unknown_for_unreadable_directory() {
+        assert_eq!(
+            disk_status(Path::new("Z:\\definitely-not-a-real-drive-path")).await,
+            serde_json::Value::Null
+        );
+        let known = disk_status(&std::env::temp_dir()).await;
+        assert!(
+            known.get("available_bytes").is_some(),
+            "可读目录应给出可用字节数，实际: {known}"
+        );
     }
 
     #[tokio::test]

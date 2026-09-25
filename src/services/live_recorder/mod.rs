@@ -1571,6 +1571,8 @@ impl RecordingWorker {
         let max_duration = chrono::Duration::hours(live_limits.max_duration_hours as i64);
         let mut refresh_failures = 0usize;
         let mut next_refresh_retry = Instant::now();
+        // 磁盘可用空间探测失败只提示一次，避免 2 秒一次的健康检查刷日志
+        let mut disk_probe_warned = false;
 
         loop {
             tokio::select! {
@@ -1687,20 +1689,34 @@ impl RecordingWorker {
                 _ = health_tick.tick() => {
                     // spawn_blocking：fs2 是同步系统调用，Windows 网络盘可能阻塞 runtime 线程
                     let live_dir = self.live_dir.clone();
-                    let available = tokio::task::spawn_blocking(move || fs2::available_space(&live_dir))
+                    let probe = tokio::task::spawn_blocking(move || fs2::available_space(&live_dir))
                         .await
                         .ok()
-                        .and_then(|result| result.ok())
-                        .unwrap_or(0);
-                    if available < min_free_bytes {
-                        self.mark_failure(format!(
-                            "可用磁盘空间低于 {} GiB 安全阈值，已安全停录",
-                            live_limits.min_free_space_gib
-                        ))
-                        .await;
-                        let _ = self.finalize(None).await;
-                        self.sessions.lock().await.remove(&self.room_id);
-                        return;
+                        .and_then(|result| result.ok());
+                    match disk_gate(probe, min_free_bytes) {
+                        DiskGate::Ok => {}
+                        DiskGate::ProbeFailed => {
+                            // 探测失败不等于空间不足：权限、临时 IO 错误、网络盘抖动都会
+                            // 让 available_space 报错，按 0 处理会停掉本来能正常录的场次。
+                            // 这里继续录制，真写满时由 FFmpeg 异常退出路径收尾；只提示一次。
+                            if !disk_probe_warned {
+                                disk_probe_warned = true;
+                                warn!(
+                                    room_id = self.room_id,
+                                    "磁盘可用空间探测失败，本次录制不再以空间阈值停录，写满时按进程异常处理"
+                                );
+                            }
+                        }
+                        DiskGate::BelowThreshold => {
+                            self.mark_failure(format!(
+                                "可用磁盘空间低于 {} GiB 安全阈值，已安全停录",
+                                live_limits.min_free_space_gib
+                            ))
+                            .await;
+                            let _ = self.finalize(None).await;
+                            self.sessions.lock().await.remove(&self.room_id);
+                            return;
+                        }
                     }
                     if total_file_size(&self.segments).await >= MAX_RECORDING_FILE_SIZE {
                         self.mark_failure("recording file size limit reached".to_owned()).await;
@@ -2161,6 +2177,7 @@ impl RecordingWorker {
         // 而重试合并因分段已删恒报 no segments，不可恢复。
         if persisted && merge_error.is_none() {
             remove_merged_segments(&self.segments).await;
+            cleanup_recording_segments(&self.db, self.recording_id).await;
         }
         *self.snapshot.lock().await = info.clone();
         info!(
@@ -2398,6 +2415,27 @@ async fn total_file_size(paths: &[PathBuf]) -> u64 {
     total
 }
 
+/// 健康检查的磁盘闸门判定结果。
+#[derive(Debug, PartialEq, Eq)]
+enum DiskGate {
+    /// 空间充足
+    Ok,
+    /// 实测可用空间低于阈值
+    BelowThreshold,
+    /// 探测本身失败（权限、临时 IO 错误、网络盘离线）
+    ProbeFailed,
+}
+
+/// 把"探测失败"与"确实不足"分开：`probe` 为 `None` 时绝不能当成 0 字节可用，
+/// 否则一次 `available_space` 报错就会停掉本来能正常录的场次。
+fn disk_gate(probe: Option<u64>, min_free_bytes: u64) -> DiskGate {
+    match probe {
+        Some(available) if available < min_free_bytes => DiskGate::BelowThreshold,
+        Some(_) => DiskGate::Ok,
+        None => DiskGate::ProbeFailed,
+    }
+}
+
 async fn mark_startup_recording(
     db: &DatabaseConnection,
     recording_id: i32,
@@ -2486,6 +2524,22 @@ async fn persist_closed_segments(db: &DatabaseConnection, recording_id: i32, pat
                 "persist closed recording segment failed: {error}"
             );
         }
+    }
+}
+
+/// 合并成功且分段文件已删除后清理分段行：`live_recording_segments` 表没有外键级联，
+/// 也没有任何读取方（抢救路径靠 `find_recording_segments` 扫目录），不清理就是只增不减。
+/// 只在合并成功路径调用——合并失败时保留分段行与分段文件，供 retry_merge 与启动续跑使用。
+async fn cleanup_recording_segments(db: &DatabaseConnection, recording_id: i32) {
+    let result = db
+        .execute_raw(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "DELETE FROM live_recording_segments WHERE recording_id = ?".to_owned(),
+            [recording_id.into()],
+        ))
+        .await;
+    if let Err(error) = result {
+        warn!(recording_id, "清理已合并的直播分段记录失败: {error}");
     }
 }
 
@@ -2657,6 +2711,7 @@ async fn persist_merge_result(
     update.update(db).await?;
     persist_closed_segments(db, recording_id, segments).await;
     remove_merged_segments(segments).await;
+    cleanup_recording_segments(db, recording_id).await;
     Ok(())
 }
 
@@ -2791,9 +2846,10 @@ fn recovery_state(status: &str, has_output: bool, segment_count: usize) -> &'sta
     }
 }
 
-/// 合并临时文件：FFmpeg 的中间输出与分段清单。
+/// 合并临时文件：FFmpeg 的中间输出、分段清单，以及互动归档中止时残留的中间文件。
 fn is_merge_leftover_name(name: &str) -> bool {
     name.ends_with(".mp4.partial")
+        || name.ends_with(interactions::ARCHIVE_STAGING_SUFFIX)
         || (name.starts_with('.') && name.contains(".concat-") && name.ends_with(".txt"))
 }
 
@@ -2863,6 +2919,76 @@ fn count_residual_segments(root: &Path) -> usize {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn disk_gate_separates_probe_failure_from_genuine_shortage() {
+        let threshold = 10 * 1024 * 1024 * 1024;
+        // 探测失败绝不能等价为 0 字节可用：否则一次 IO 错误就停掉正常场次
+        assert_eq!(disk_gate(None, threshold), DiskGate::ProbeFailed);
+        assert_eq!(
+            disk_gate(Some(threshold - 1), threshold),
+            DiskGate::BelowThreshold
+        );
+        assert_eq!(disk_gate(Some(threshold), threshold), DiskGate::Ok);
+        assert_eq!(disk_gate(Some(0), 0), DiskGate::Ok);
+    }
+
+    #[tokio::test]
+    async fn merged_recording_segment_rows_are_removed_and_others_kept() {
+        let db = migrated_merge_job_db().await;
+        let dir = tempfile::tempdir().expect("temp directory");
+        let merged =
+            insert_recording(&db, dir.path().join("merged.flv").to_str().expect("utf8")).await;
+        let pending =
+            insert_recording(&db, dir.path().join("pending.flv").to_str().expect("utf8")).await;
+        for index in 0..2 {
+            persist_segment(
+                &db,
+                merged,
+                index,
+                &dir.path().join(format!("merged_segment_{index:04}.flv")),
+                "closed",
+            )
+            .await
+            .expect("写入分段行");
+        }
+        persist_segment(
+            &db,
+            pending,
+            0,
+            &dir.path().join("pending_segment_0000.flv"),
+            "open",
+        )
+        .await
+        .expect("写入分段行");
+
+        cleanup_recording_segments(&db, merged).await;
+
+        assert_eq!(
+            count_segment_rows(&db, merged).await,
+            0,
+            "合并成功的分段行应清理"
+        );
+        assert_eq!(
+            count_segment_rows(&db, pending).await,
+            1,
+            "未合并录制的分段行不能受影响"
+        );
+    }
+
+    async fn count_segment_rows(db: &DatabaseConnection, recording_id: i32) -> i64 {
+        let row = db
+            .query_one_raw(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT COUNT(*) AS total FROM live_recording_segments WHERE recording_id = ?"
+                    .to_owned(),
+                [recording_id.into()],
+            ))
+            .await
+            .expect("统计分段行")
+            .expect("统计结果");
+        row.try_get("", "total").expect("total 列")
+    }
 
     #[test]
     fn unexpected_exit_state_machine_requires_offline_confirmation_for_completion() {
@@ -3232,6 +3358,9 @@ mod tests {
         assert!(is_merge_leftover_name(
             ".room_segment_0001.concat-9f3a1b.txt"
         ));
+        assert!(is_merge_leftover_name(
+            "深夜点歌台_20260925_013200_ab12cd34_danmaku.xml.archive-part"
+        ));
         assert!(!is_merge_leftover_name("room_segment_0001.flv"));
         assert!(!is_merge_leftover_name("room_segment_0001.mp4"));
         assert!(!is_merge_leftover_name("room_segment_0001.mp4.unverified"));
@@ -3255,11 +3384,20 @@ mod tests {
         }
         std::fs::write(root.path().join("room_segment_0002.mp4.partial"), b"x")
             .expect("write nested leftover");
+        let staging = room.join(format!(
+            "room_danmaku.xml{}",
+            interactions::ARCHIVE_STAGING_SUFFIX
+        ));
+        std::fs::write(&staging, b"x").expect("write aborted archive staging");
 
-        assert_eq!(sweep_merge_leftovers(root.path()), 3);
+        assert_eq!(sweep_merge_leftovers(root.path()), 4);
         assert!(!room.join("room_segment_0001.mp4.partial").exists());
         assert!(!room.join(".room_segment_0001.concat-ab12.txt").exists());
         assert!(!root.path().join("room_segment_0002.mp4.partial").exists());
+        assert!(
+            !staging.exists(),
+            "收尾被 abort 留下的归档中间文件也要被扫掉"
+        );
         assert!(room.join("room_segment_0001.flv").exists());
         assert!(room.join("room_segment_0001.mp4").exists());
         assert!(room.join("room_segment_0001.mp4.unverified").exists());
