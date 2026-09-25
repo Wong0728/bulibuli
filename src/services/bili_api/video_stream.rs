@@ -3,7 +3,7 @@
 use crate::services::wbi;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::models::playurl::{
     AudioQuality, AudioStreams, PlayurlData, StreamQuality, VideoStreams,
@@ -114,7 +114,15 @@ impl BiliApi {
             .and_then(|s| s.get("subtitles"))
             .cloned()
             .unwrap_or_else(|| serde_json::Value::Array(vec![]));
-        let list: Vec<SubtitleInfo> = serde_json::from_value(subtitles_value).unwrap_or_default();
+        let list: Vec<SubtitleInfo> = match serde_json::from_value(subtitles_value) {
+            Ok(list) => list,
+            Err(error) => {
+                // 结构漂移、或风控页伪装成正常 200 时，静默返回空列表会让前端显示
+                // "暂无字幕"，用户与排查者都无从分辨"确实没有"和"解析失败"。
+                warn!("字幕列表解析失败，按空列表处理: {error}");
+                Vec::new()
+            }
+        };
         Ok(list)
     }
 

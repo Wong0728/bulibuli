@@ -4,6 +4,7 @@ use crate::services::spawn_util::child_lifetime;
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::fs;
 use tokio::process::Command;
 use tracing::{error, info, warn};
@@ -26,17 +27,25 @@ fn listing_has_named_entry(text: &str, name: &str) -> bool {
         .any(|line| line.split_whitespace().nth(1) == Some(name))
 }
 
+/// 能力探测的挂起上限：与 `ffmpeg_detect::CAPABILITY_TIMEOUT` 同量级。
+const LISTING_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub(super) async fn ffmpeg_listing_contains(ffmpeg: &Path, flag: &str, name: &str) -> bool {
     let mut command = Command::new(ffmpeg);
     command
         .arg("-hide_banner")
         .arg(flag)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
     child_lifetime::configure(&mut command);
-    let output = match command.output().await {
-        Ok(output) => output,
-        Err(_) => return false,
+    let output = match tokio::time::timeout(LISTING_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(_)) => return false,
+        Err(_) => {
+            warn!("FFmpeg 能力探测超时（{flag} 查询 {name}），按不具备该能力处理");
+            return false;
+        }
     };
     listing_has_named_entry(&String::from_utf8_lossy(&output.stdout), name)
 }
