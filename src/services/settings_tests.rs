@@ -1,5 +1,7 @@
+use super::persistence::migrate_legacy_path_display_mode;
 use super::*;
-use sea_orm::{ConnectionTrait, Database, Statement};
+use crate::models::setting;
+use sea_orm::{ConnectionTrait, Database, EntityTrait, Statement};
 
 #[test]
 fn defaults_are_valid_and_versioned() {

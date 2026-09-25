@@ -638,7 +638,7 @@ function describeFailure(failure?: { message?: string; kind?: string; fallback_r
             </div>
           </div>
         </div>
-        <div v-if="loadedCount < currentTotal" style="text-align: center; margin-top: 12px;">
+        <div v-if="loadedCount < currentTotal" class="history-load-more-wrap">
           <button class="btn btn-secondary history-load-more" @click="history.loadMore">加载更多（{{ loadedCount }}/{{ currentTotal }}）</button>
         </div>
       </div>

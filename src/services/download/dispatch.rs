@@ -1,17 +1,21 @@
-//! aria2 任务投递：并发闸门、Cookie 富化与 aria2 选项组装。
+//! aria2 任务投递：并发闸门、Cookie 富化与 aria2 选项组装；
+//! 以及既有任务（重复入队/重试）在清理旧传输后的状态重置与重新派发。
 
+use crate::models::download_task;
 use crate::services::cdn_registry::is_mcdn_url;
 use crate::services::concurrency_gate::ConcurrencyPermit;
 use crate::services::file_safety::{
     ensure_disk_space, ensure_existing_within_root, sanitize_filename,
 };
 use anyhow::{anyhow, Result};
+use sea_orm::{ActiveModelTrait, Set};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
-use super::DownloadManager;
+use super::engine::TransferEngine;
+use super::{DownloadManager, TaskOutcome};
 
 impl DownloadManager {
     /// 向 aria2 投递下载任务并获取并发许可。
@@ -126,5 +130,103 @@ impl DownloadManager {
             .await
             .map_err(|e| anyhow!("添加 Aria2 任务失败: {e}"))?;
         Ok((gid, permit))
+    }
+
+    /// 既有任务（completed 缺产物、来源切换、失败重试等）的重置与重新派发：
+    /// 先收掉上一轮仍在跑的传输（native 取消令牌 + aria2 旧 gid），
+    /// 再重置任务行状态并重新投递引擎。
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn reset_and_dispatch_existing_task(
+        &self,
+        existing: download_task::Model,
+        engine: TransferEngine,
+        url: &str,
+        cookies: &str,
+        uid: Option<&str>,
+        source: &str,
+        dir: &Path,
+        filename: String,
+        bump_generation: bool,
+        message: &str,
+    ) -> Result<TaskOutcome> {
+        let filename = sanitize_filename(&filename);
+        self.cleanup_task_caches(&existing.bvid, existing.cid).await;
+        let download_id = existing.id;
+        // 重新派发前先收掉上一轮仍在跑的传输：cleanup_task_caches 只清内存缓存，不碰外部
+        // 引擎，否则同一个 dir/out 上会挂两个任务并发写同一份文件。
+        if let Some(token) = self.native_tasks.lock().await.remove(&download_id) {
+            token.cancel();
+        }
+        if let Some(stale_gid) = existing.gid.as_deref() {
+            if let Err(error) = self.aria2.remove(stale_gid).await {
+                warn!("重新派发前移除旧 Aria2 任务失败 gid={stale_gid}: {error}");
+            }
+        }
+        let (gid, permit) = self
+            .dispatch_transfer(
+                engine,
+                download_id,
+                url,
+                &existing.bvid,
+                cookies,
+                dir,
+                &filename,
+            )
+            .await?;
+        let next_generation = if bump_generation {
+            existing.generation.saturating_add(1)
+        } else {
+            existing.generation
+        };
+        let priority = if source == "manual" {
+            300
+        } else if matches!(existing.status.as_str(), "failed" | "retrying") {
+            200
+        } else {
+            100
+        };
+        // retry_task 已把任务置为 retrying 并写好 attempts / 退避时间，此处不能再清零，
+        // 否则自动重试计数被抹平、MAX_VIDEO_RETRIES 永不触顶（失败任务会 30 秒一轮无限重打）。
+        let is_retry_dispatch = existing.status == "retrying";
+        let mut model: download_task::ActiveModel = existing.into();
+        model.status = Set("downloading".to_string());
+        model.error = Set(None);
+        model.url = Set(Some(url.to_string()));
+        model.progress_percent = Set(0);
+        model.downloaded_size = Set(0);
+        model.total_size = Set(0);
+        model.speed = Set(0);
+        model.gid = Set(gid.clone());
+        model.filename = Set(Some(filename));
+        model.download_dir = Set(Some(dir.to_string_lossy().to_string()));
+        model.source = Set(Some(source.to_string()));
+        model.priority = Set(priority);
+        model.generation = Set(next_generation);
+        model.completion_triggered = Set(false);
+        model.stage = Set("transferring".to_string());
+        if !is_retry_dispatch {
+            // 用户重新添加同一链接视为新的失败回合，重置自动重试额度。
+            model.attempts = Set(0);
+            model.next_retry_at = Set(None);
+        }
+        model.error_kind = Set(None);
+        if let Err(e) = model.update(&self.db).await {
+            if let Some(gid) = gid.as_deref() {
+                if let Err(remove_error) = self.aria2.remove(gid).await {
+                    error!("回滚 Aria2 任务失败 gid={gid}: {remove_error}");
+                }
+            }
+            return Err(anyhow!(
+                "下载任务状态持久化失败，已取消外部传输: task_id={}, error={}",
+                download_id,
+                e
+            ));
+        }
+        if engine == TransferEngine::Native {
+            // permit 转移至 spawned task；spawn 失败时 permit 自动 Drop 释放
+            self.spawn_native_transfer(download_id, url, cookies, uid, permit)
+                .await?;
+        }
+        Ok(TaskOutcome::accepted(message, download_id))
     }
 }

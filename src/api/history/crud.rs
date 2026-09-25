@@ -186,13 +186,17 @@ pub(super) async fn delete_history(
         }
         Ok(None) => {
             if let Some(guard) = guard {
-                let _ = guard.rollback().await;
+                if let Err(rollback_error) = guard.rollback().await {
+                    tracing::warn!(%rollback_error, "历史记录版本守卫回滚失败");
+                }
             }
             Err(AppError::NotFound("未找到该视频记录".to_string()))
         }
         Err(error) => {
             if let Some(guard) = guard {
-                let _ = guard.rollback().await;
+                if let Err(rollback_error) = guard.rollback().await {
+                    tracing::warn!(%rollback_error, "历史记录版本守卫回滚失败");
+                }
             }
             Err(error)
         }

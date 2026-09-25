@@ -181,17 +181,11 @@ impl ConflictGuardService {
     }
 
     /// 读取目标资源当前的 version（不修改）。供 `dl status` 等只读场景返回版本号给调用方。
-    #[allow(dead_code)]
+    ///
+    /// 当前仅在乐观锁守卫的单元测试中使用（验证 bump / 回滚后的 DB 状态），
+    /// 生产读路径尚未接线，因此对非测试构建显式标注 test-only。
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn current_version(
-        &self,
-        target: OperationTarget,
-        target_id: &str,
-    ) -> AppResult<Option<i32>> {
-        self.fetch_current_version(target, target_id).await
-    }
-
-    #[allow(dead_code)]
-    async fn fetch_current_version(
         &self,
         target: OperationTarget,
         target_id: &str,

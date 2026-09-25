@@ -1,9 +1,16 @@
 [advisories]
 version = 2
-# These are transitive upstream issues with no safe replacement in the current
-# dependency graph; keep the exception explicit and revisit on dependency updates.
+# advisory 扫描统一由 cargo-deny 承担（CI 不再并行跑 cargo-audit），
+# 所有豁免集中在本清单，新增豁免必须带"为什么豁免 + 何时回收"的说明。
 ignore = [
-    "RUSTSEC-2026-0173", # proc-macro-error2 is pulled by SeaORM macros.
+    # proc-macro-error2 is pulled by SeaORM macros; transitive upstream issue
+    # with no safe replacement in the current dependency graph. Revisit on
+    # dependency updates.
+    "RUSTSEC-2026-0173",
+    # rust_decimal keeps rkyv 0.7 as an optional lockfile dependency; the
+    # application does not enable that feature. Track until the upstream
+    # crate removes the optional edge.
+    "RUSTSEC-2026-0235",
 ]
 
 [bans]

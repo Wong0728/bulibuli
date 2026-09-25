@@ -305,18 +305,20 @@ impl MigrationTrait for Migration {
             )
             .await;
         if fts_result.is_ok() {
-            let _ = conn
-                .execute_unprepared("INSERT INTO history_fts(history_fts) VALUES('rebuild')")
-                .await;
-            let _ = conn.execute_unprepared(
+            // FTS5 可选特性的尽力初始化：rebuild / 触发器创建失败（如条目已存在、
+            // SQLite 构建限制）不影响基础 history 表使用，保留 LIKE 降级路径。
+            conn.execute_unprepared("INSERT INTO history_fts(history_fts) VALUES('rebuild')")
+                .await
+                .ok();
+            conn.execute_unprepared(
                 "CREATE TRIGGER IF NOT EXISTS history_fts_ai AFTER INSERT ON history BEGIN INSERT INTO history_fts(rowid, title, bvid, uid) VALUES (new.id, new.title, new.bvid, new.uid); END;",
-            ).await;
-            let _ = conn.execute_unprepared(
+            ).await.ok();
+            conn.execute_unprepared(
                 "CREATE TRIGGER IF NOT EXISTS history_fts_au AFTER UPDATE ON history BEGIN INSERT INTO history_fts(history_fts, rowid, title, bvid, uid) VALUES('delete', old.id, old.title, old.bvid, old.uid); INSERT INTO history_fts(rowid, title, bvid, uid) VALUES (new.id, new.title, new.bvid, new.uid); END;",
-            ).await;
-            let _ = conn.execute_unprepared(
+            ).await.ok();
+            conn.execute_unprepared(
                 "CREATE TRIGGER IF NOT EXISTS history_fts_ad AFTER DELETE ON history BEGIN INSERT INTO history_fts(history_fts, rowid, title, bvid, uid) VALUES('delete', old.id, old.title, old.bvid, old.uid); END;",
-            ).await;
+            ).await.ok();
         }
 
         Ok(())

@@ -73,17 +73,23 @@ async fn start_task(
     {
         Ok(toggle) => toggle,
         Err(error) => {
-            let _ = guard.rollback().await;
+            if let Err(rollback_error) = guard.rollback().await {
+                tracing::warn!(%rollback_error, "监控任务版本守卫回滚失败");
+            }
             return Err(error.into());
         }
     };
     match toggle {
         MonitorToggle::NotFound => {
-            let _ = guard.rollback().await;
+            if let Err(rollback_error) = guard.rollback().await {
+                tracing::warn!(%rollback_error, "监控任务版本守卫回滚失败");
+            }
             return Err(AppError::NotFound("未找到该博主，请先添加".to_string()));
         }
         MonitorToggle::AlreadyInState => {
-            let _ = guard.rollback().await;
+            if let Err(rollback_error) = guard.rollback().await {
+                tracing::warn!(%rollback_error, "监控任务版本守卫回滚失败");
+            }
             return Err(AppError::Conflict("该博主监控已在运行中".to_string()));
         }
         MonitorToggle::Updated => {}
@@ -160,17 +166,23 @@ async fn stop_task(
     {
         Ok(toggle) => toggle,
         Err(error) => {
-            let _ = guard.rollback().await;
+            if let Err(rollback_error) = guard.rollback().await {
+                tracing::warn!(%rollback_error, "监控任务版本守卫回滚失败");
+            }
             return Err(error.into());
         }
     };
     match toggle {
         MonitorToggle::NotFound => {
-            let _ = guard.rollback().await;
+            if let Err(rollback_error) = guard.rollback().await {
+                tracing::warn!(%rollback_error, "监控任务版本守卫回滚失败");
+            }
             return Err(AppError::NotFound("未找到该博主".to_string()));
         }
         MonitorToggle::AlreadyInState => {
-            let _ = guard.rollback().await;
+            if let Err(rollback_error) = guard.rollback().await {
+                tracing::warn!(%rollback_error, "监控任务版本守卫回滚失败");
+            }
             return Err(AppError::Conflict("该博主监控未在运行".to_string()));
         }
         MonitorToggle::Updated => {}

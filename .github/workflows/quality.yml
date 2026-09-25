@@ -36,8 +36,8 @@ jobs:
       - name: Install media test dependency
         run: sudo apt-get update && sudo apt-get install -y aria2 ffmpeg
       - run: cargo fmt --all -- --check
+      # clippy 是 check 的超集（check + lints），不单独跑 cargo check 重复编译
       # --locked：Cargo.toml 与 Cargo.lock 漂移的 PR 必须在此失败，而不是拖到发版
-      - run: cargo check --all-targets --locked
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --all-targets --locked
 
@@ -72,8 +72,9 @@ jobs:
         working-directory: web
       - run: npm run test:smoke
         working-directory: web
-      # Rust 门禁已由上方 "Rust quality gates" job 全量执行，此处跳过避免冷缓存重复编译
-      - run: python build.py --check --skip-rust-gates
+      # Rust 门禁已由上方 "Rust quality gates" job 全量执行，此处跳过避免冷缓存重复编译；
+      # 前端产物由上方 npm run build 产出，--skip-frontend-vue 直接复用，不再二次构建。
+      - run: python build.py --check --skip-rust-gates --skip-frontend-vue
       - shell: bash
         run: bash -n deploy/linux/install.sh deploy/termux/install.sh
 
@@ -96,6 +97,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      # 缓存 Playwright 浏览器，避免每次冷下载 chromium（与 frontend-and-policy job 同 key 共享）
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
       - run: npm ci --ignore-scripts
         working-directory: web
       # e2e 必须测当前源码重建的前端产物，而不是仓库里可能过期的提交产物
@@ -118,12 +124,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: taiki-e/install-action@bf5592ad9d327ccd561adbb048dedbc4b5e0c2a2 # cargo-audit
       - uses: taiki-e/install-action@cf9eb3f4625079c8224b5fc0cb30d35b8897d2c5 # cargo-deny
-      # rust_decimal keeps rkyv 0.7 as an optional lockfile dependency; the
-      # application does not enable that feature, so track but do not block on
-      # this advisory until the upstream crate removes the optional edge.
-      - run: cargo audit --ignore RUSTSEC-2026-0235
+      # advisory / bans / licenses / sources 全部由 cargo-deny 单一工具覆盖，
+      # ignore 豁免统一维护在 deny.toml 的 [advisories] 段，避免双工具双清单。
       - run: cargo deny check
 
   windows-build:
@@ -151,6 +154,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: cargo build --locked --release
-      # Rust 门禁已由上方 rust job 全量覆盖；这里只跑 Windows 特有的打包/产物检查，
-      # 避免 --check 重复执行 fmt/check/clippy/test 造成冷缓存双份全量编译。
-      - run: python build.py --check --skip-rust-gates
+      # Rust 门禁已由上方 rust job 全量覆盖；这里只跑 Windows 特有的打包侧检查
+      # （安装脚本编码、内置资源哈希），平台无关的源码策略与前端契约检查
+      # 由 frontend-and-policy job 独立覆盖，避免同一 workflow 内重复执行。
+      - run: python build.py --check --skip-rust-gates --windows-only

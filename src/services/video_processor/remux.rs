@@ -26,10 +26,14 @@ impl VideoProcessor {
         let cb: Option<MergeCallback> = callback.map(|user_cb| {
             let background_tasks = background_tasks.clone();
             Box::new(move |result: MergeResult| {
-                if result.success {
-                    let _ = background_tasks.spawn("merge_source_cleanup", async move {
+                if result.success
+                    && !background_tasks.spawn("merge_source_cleanup", async move {
                         Self::cleanup_source_files(&v_path, &a_path).await;
-                    });
+                    })
+                {
+                    // 登记器已停止接收（应用正在关机）：清理任务不再运行，
+                    // 源文件由用户手动清理或下次合并兜底，无需额外处理。
+                    warn!("合并源文件清理任务未能登记（应用正在关机）");
                 }
                 user_cb(result);
             }) as MergeCallback
@@ -136,7 +140,8 @@ impl VideoProcessor {
                 }
                 child.wait().await.ok();
                 stderr_task.abort();
-                let _ = stderr_task.await;
+                // 任务已被 abort，Err(JoinError) 属预期结果，仅回收任务
+                stderr_task.await.ok();
                 tokio::fs::remove_file(&tmp_output).await.ok();
                 return Err(anyhow!("ffmpeg remux 超时（30 分钟），已终止"));
             }

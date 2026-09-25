@@ -227,7 +227,10 @@ pub async fn sync_bili_uid(state: &SharedState, paths: &AppPaths) {
             let mut s = StartupState::load(&paths.data_dir);
             if s.bili_logged_in_uid != Some(nav.mid) {
                 s.bili_logged_in_uid = Some(nav.mid);
-                let _ = s.save(&paths.data_dir);
+                // 落盘失败只影响下次启动摘要里展示的 UID，主流程不应因此中断。
+                if let Err(error) = s.save(&paths.data_dir) {
+                    tracing::debug!(%error, "刷新 startup_state.json 中的 B 站 UID 失败");
+                }
             }
         }
     }

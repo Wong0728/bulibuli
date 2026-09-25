@@ -9,10 +9,12 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // FTS5 is optional. Existing databases need a rebuild, but a build without
         // FTS5 must continue to use the LIKE fallback in HistoryService.
-        let _ = manager
+        // rebuild 失败（如 SQLite 构建未编译 FTS5）按可选特性降级，不阻断迁移。
+        manager
             .get_connection()
             .execute_unprepared("INSERT INTO history_fts(history_fts) VALUES('rebuild')")
-            .await;
+            .await
+            .ok();
         Ok(())
     }
 

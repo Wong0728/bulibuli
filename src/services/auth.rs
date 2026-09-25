@@ -1,15 +1,18 @@
-use crate::error::{AppError, AppResult};
+//! Web 会话认证：设备配对码换会话 token、token 轮换与撤销、会话角色，
+//! 以及登录/配对的速率限制与失败退避。
+//!
+//! 子模块分工：`pairing` 配对窗口与配对握手（含 GeoIP 区域判定），
+//! `session` 会话 token 的认证、轮换、查询与撤销，`rate_limit` 每 IP/全局限流。
+
 use crate::services::security_config::{can_open_directory, AccessMode, SecurityConfigService};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use chrono::Utc;
+use base64::Engine;
 use rand::{Rng, RngCore};
-use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, TransactionTrait};
+use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::Arc;
-use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 
 const PAIR_TTL_SECONDS: i64 = 600;
@@ -79,43 +82,6 @@ struct FailedAttempts {
     failures: u32,
     blocked_until: i64,
     last_seen: i64,
-}
-
-/// 记录一次失败尝试：封禁过期后的首个失败重置计数；连续失败达到 5 次后
-/// 按指数退避封禁，封顶 1 小时（持续爆破者每小时最多获得一次尝试机会）。
-fn apply_failure(failed: &mut FailedAttempts, now: i64) {
-    if failed.blocked_until > 0 && failed.blocked_until <= now {
-        failed.failures = 0;
-        failed.blocked_until = 0;
-    }
-    failed.last_seen = now;
-    failed.failures = failed.failures.saturating_add(1);
-    if failed.failures >= 5 {
-        let delay = 1i64
-            .checked_shl((failed.failures - 5).min(12))
-            .unwrap_or(3600)
-            .min(3600);
-        failed.blocked_until = now + delay;
-    }
-}
-
-/// 每 IP 跟踪表容量上限：两处限流 map 的条目此前永不删除，
-/// IPv6 源地址轮换可无限耗尽内存。
-const MAX_TRACKED_IPS: usize = 10_000;
-
-/// 总量达到上限时淘汰最久未活动的 IP 条目（近似 LRU；仅在超限时执行，
-/// 全局限流约束下触发频率低，O(n) 扫描可接受）。
-fn evict_stalest_ip<V>(map: &mut HashMap<IpAddr, V>, last_seen_of: impl Fn(&V) -> i64) {
-    while map.len() >= MAX_TRACKED_IPS {
-        let Some(stalest) = map
-            .iter()
-            .min_by_key(|(ip, value)| (last_seen_of(value), *ip))
-            .map(|(ip, _)| *ip)
-        else {
-            return;
-        };
-        map.remove(&stalest);
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -201,545 +167,13 @@ pub struct PairingState {
     pub expires_at: Option<i64>,
 }
 
-impl AuthService {
-    pub async fn new(
-        db: DatabaseConnection,
-        security: Arc<SecurityConfigService>,
-        login_rate_limit_global: usize,
-    ) -> AppResult<(Self, Option<String>)> {
-        let geo_reader = security.effective_geo_db().and_then(|path| {
-            match maxminddb::Reader::open_readfile(path) {
-                Ok(reader) => Some(reader),
-                Err(error) => {
-                    tracing::warn!(%error, "GeoIP 数据库加载失败，新配对将被拒绝");
-                    None
-                }
-            }
-        });
-        let service = Self {
-            db,
-            security,
-            geo_reader: Arc::new(geo_reader),
-            pairing: Arc::new(Mutex::new(None)),
-            attempts: Arc::new(Mutex::new(AttemptBook::default())),
-            authentication_locks: Arc::new(Mutex::new(HashMap::new())),
-            login_attempts: Arc::new(Mutex::new(HashMap::new())),
-            state_probes: Arc::new(Mutex::new(HashMap::new())),
-            login_rate_limit_global: login_rate_limit_global.max(1),
-        };
-        let initial = if service.bootstrap_needed().await? {
-            let code = service.open_pairing().await;
-            service.mark_bootstrapped().await?;
-            Some(code)
-        } else {
-            None
-        };
-        Ok((service, initial))
-    }
-
-    pub async fn pairing_state(&self) -> PairingState {
-        let now = Utc::now().timestamp();
-        let mut guard = self.pairing.lock().await;
-        if guard
-            .as_ref()
-            .is_some_and(|window| window.expires_at <= now)
-        {
-            *guard = None;
-        }
-        PairingState {
-            open: guard.is_some(),
-            expires_at: guard.as_ref().map(|window| window.expires_at),
-        }
-    }
-
-    pub async fn open_pairing(&self) -> String {
-        self.open_pairing_for_role(SessionRole::Owner).await
-    }
-
-    /// Owner-only 调用方用此方法创建受限的设备邀请。
-    /// 新邀请会替换旧的未使用码，保持配对码一次性且短时有效。
-    pub async fn open_operator_invitation(&self) -> String {
-        self.open_pairing_for_role(SessionRole::Operator).await
-    }
-
-    async fn open_pairing_for_role(&self, role: SessionRole) -> String {
-        let code = generate_code();
-        *self.pairing.lock().await = Some(PairWindow {
-            code: code.clone(),
-            expires_at: Utc::now().timestamp() + PAIR_TTL_SECONDS,
-            role,
-        });
-        code
-    }
-
-    pub async fn close_pairing(&self) {
-        *self.pairing.lock().await = None;
-    }
-
-    pub async fn pair(
-        &self,
-        submitted: &str,
-        device_name: &str,
-        ip: IpAddr,
-        user_agent: &str,
-        explicit_allow: bool,
-    ) -> AppResult<String> {
-        let now = Utc::now().timestamp();
-        if let Err(error) = self.check_attempt_allowed(ip, now).await {
-            tracing::warn!(%ip, %error, "配对请求被限流拒绝");
-            return Err(error);
-        }
-        if !explicit_allow && self.security.current().geo_cn {
-            match self.ip_is_cn(ip) {
-                Ok(true) => {}
-                Ok(false) => {
-                    tracing::warn!(%ip, "配对失败：来源网络不在允许区域");
-                    self.record_attempt(ip, now).await;
-                    return Err(AppError::Unauthorized(
-                        "当前网络区域不允许发起新设备配对".to_string(),
-                    ));
-                }
-                Err(error) => {
-                    tracing::warn!(%ip, %error, "配对失败：GeoIP 判定不可用");
-                    self.record_attempt(ip, now).await;
-                    return Err(error);
-                }
-            }
-        }
-        let normalized = submitted.replace('-', "").trim().to_ascii_uppercase();
-        let attempt = {
-            let mut window = self.pairing.lock().await;
-            let outcome = match window.as_ref() {
-                None => PairAttempt::WindowUnavailable,
-                Some(current) if current.expires_at <= now => PairAttempt::WindowUnavailable,
-                Some(current) => {
-                    let equal = normalized.len() == current.code.len()
-                        && normalized.as_bytes().ct_eq(current.code.as_bytes()).into();
-                    if equal {
-                        PairAttempt::Granted(current.role)
-                    } else {
-                        PairAttempt::CodeMismatch
-                    }
-                }
-            };
-            // 过期与成功都要作废窗口（一次性码不得重复使用）；码不匹配时保留窗口供重试。
-            if !matches!(outcome, PairAttempt::CodeMismatch) {
-                *window = None;
-            }
-            outcome
-        };
-        match attempt {
-            PairAttempt::Granted(role) => {
-                self.attempts.lock().await.per_ip.remove(&ip);
-                self.create_session(device_name, ip, user_agent, role).await
-            }
-            PairAttempt::WindowUnavailable => {
-                tracing::warn!(%ip, "配对失败：当前未开放设备配对或配对码已过期");
-                Err(AppError::Unauthorized("当前未开放设备配对".to_string()))
-            }
-            PairAttempt::CodeMismatch => {
-                tracing::warn!(%ip, "配对失败：配对码不匹配");
-                self.record_attempt(ip, now).await;
-                self.record_failure(ip, now).await;
-                Err(AppError::Unauthorized("配对码无效，请稍后重试".to_string()))
-            }
-        }
-    }
-
-    pub async fn authenticate(&self, token: &str, ip: IpAddr) -> AppResult<Option<SessionAuth>> {
-        if token.is_empty() {
-            return Ok(None);
-        }
-        let now = Utc::now().timestamp();
-        let hash = token_hash(token);
-        let Some(candidate) = self.find_session(&hash, now).await? else {
-            return Ok(None);
-        };
-        let session_lock = self.session_lock(&candidate.id).await;
-        let _guard = session_lock.lock().await;
-        let Some(row) = self.find_session(&hash, now).await? else {
-            return Ok(None);
-        };
-        if row.expires_at <= now || row.absolute_expires_at <= now {
-            return Ok(None);
-        }
-        let next_expiry = (now + self.session_idle_seconds()).min(row.absolute_expires_at);
-        let rotated_token = if now - row.last_rotated_at >= ROTATE_AFTER_SECONDS {
-            Some(random_token())
-        } else {
-            None
-        };
-        let statement = if let Some(new_token) = rotated_token.as_ref() {
-            Statement::from_sql_and_values(
-                self.db.get_database_backend(),
-                "UPDATE auth_sessions SET
-                   previous_token_hash = token_hash,
-                   previous_valid_until = ?,
-                   token_hash = ?,
-                   expires_at = ?,
-                   last_used_at = ?,
-                   last_rotated_at = ?,
-                   last_ip = ?
-                 WHERE id = ?"
-                    .to_string(),
-                [
-                    sea_orm::Value::from(now + PREVIOUS_TOKEN_GRACE_SECONDS),
-                    bytes_value(token_hash(new_token)),
-                    sea_orm::Value::from(next_expiry),
-                    sea_orm::Value::from(now),
-                    sea_orm::Value::from(now),
-                    sea_orm::Value::from(ip.to_string()),
-                    sea_orm::Value::from(row.id.clone()),
-                ],
-            )
-        } else {
-            Statement::from_sql_and_values(
-                self.db.get_database_backend(),
-                "UPDATE auth_sessions SET expires_at = ?, last_used_at = ?, last_ip = ? WHERE id = ?"
-                    .to_string(),
-                [
-                    sea_orm::Value::from(next_expiry),
-                    sea_orm::Value::from(now),
-                    sea_orm::Value::from(ip.to_string()),
-                    sea_orm::Value::from(row.id.clone()),
-                ],
-            )
-        };
-        self.db.execute_raw(statement).await?;
-        Ok(Some(SessionAuth {
-            id: row.id,
-            csrf_token: row.csrf_token,
-            rotated_token,
-            role: row.role,
-        }))
-    }
-
-    async fn find_session(&self, hash: &[u8], now: i64) -> AppResult<Option<AuthSessionRow>> {
-        let row = self
-            .db
-            .query_one_raw(Statement::from_sql_and_values(
-                self.db.get_database_backend(),
-                "SELECT id, csrf_token, role, expires_at, absolute_expires_at, last_rotated_at
-                 FROM auth_sessions
-                 WHERE revoked_at IS NULL
-                   AND (token_hash = ? OR (previous_token_hash = ? AND previous_valid_until > ?))
-                 LIMIT 1"
-                    .to_string(),
-                [
-                    bytes_value(hash.to_vec()),
-                    bytes_value(hash.to_vec()),
-                    sea_orm::Value::from(now),
-                ],
-            ))
-            .await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        Ok(Some(AuthSessionRow {
-            id: row.try_get("", "id")?,
-            csrf_token: row.try_get("", "csrf_token")?,
-            role: SessionRole::from_db(&row.try_get::<String>("", "role")?),
-            expires_at: row.try_get("", "expires_at")?,
-            absolute_expires_at: row.try_get("", "absolute_expires_at")?,
-            last_rotated_at: row.try_get("", "last_rotated_at")?,
-        }))
-    }
-
-    async fn session_lock(&self, id: &str) -> Arc<Mutex<()>> {
-        let mut locks = self.authentication_locks.lock().await;
-        if locks.len() >= MAX_AUTHENTICATION_LOCKS {
-            // Only evict entries held solely by the map. An active lock must stay
-            // in place or concurrent authentication for the same session can race.
-            let idle_key = locks
-                .iter()
-                .find(|(_, lock)| Arc::strong_count(lock) == 1)
-                .map(|(key, _)| key.clone());
-            if let Some(key) = idle_key {
-                locks.remove(&key);
-            }
-        }
-        locks
-            .entry(id.to_owned())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    }
-
-    pub async fn list_sessions(&self) -> AppResult<Vec<SessionSummary>> {
-        let rows = self
-            .db
-            .query_all_raw(Statement::from_string(
-                self.db.get_database_backend(),
-                "SELECT id, device_name, created_at, last_used_at, last_ip, expires_at, role
-                 FROM auth_sessions
-                 WHERE revoked_at IS NULL
-                 ORDER BY last_used_at DESC"
-                    .to_string(),
-            ))
-            .await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(SessionSummary {
-                    id: row.try_get("", "id")?,
-                    device_name: row.try_get("", "device_name")?,
-                    created_at: row.try_get("", "created_at")?,
-                    last_used_at: row.try_get("", "last_used_at")?,
-                    last_ip: row.try_get("", "last_ip")?,
-                    expires_at: row.try_get("", "expires_at")?,
-                    role: SessionRole::from_db(&row.try_get::<String>("", "role")?),
-                })
-            })
-            .collect()
-    }
-
-    pub async fn revoke(&self, id: &str) -> AppResult<u64> {
-        let now = Utc::now().timestamp();
-        let result = if id == "all" {
-            self.db
-                .execute_raw(Statement::from_sql_and_values(
-                    self.db.get_database_backend(),
-                    "UPDATE auth_sessions SET revoked_at = ? WHERE revoked_at IS NULL".to_string(),
-                    [sea_orm::Value::from(now)],
-                ))
-                .await?
-        } else {
-            self.db
-                .execute_raw(Statement::from_sql_and_values(
-                    self.db.get_database_backend(),
-                    "UPDATE auth_sessions SET revoked_at = ?
-                     WHERE id = ? AND revoked_at IS NULL"
-                        .to_string(),
-                    [sea_orm::Value::from(now), sea_orm::Value::from(id)],
-                ))
-                .await?
-        };
-        Ok(result.rows_affected())
-    }
-
-    async fn create_session(
-        &self,
-        device_name: &str,
-        ip: IpAddr,
-        user_agent: &str,
-        role: SessionRole,
-    ) -> AppResult<String> {
-        let now = Utc::now().timestamp();
-        let token = random_token();
-        let id = uuid::Uuid::new_v4().to_string();
-        let csrf = random_token();
-        let device = summarize_device(device_name, user_agent);
-        self.db
-            .execute_raw(Statement::from_sql_and_values(
-                self.db.get_database_backend(),
-                "INSERT INTO auth_sessions (
-                   id, token_hash, csrf_token, device_name, created_at, expires_at,
-                   absolute_expires_at, last_used_at, last_rotated_at, last_ip,
-                   user_agent_summary, role
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                    .to_string(),
-                [
-                    sea_orm::Value::from(id),
-                    bytes_value(token_hash(&token)),
-                    sea_orm::Value::from(csrf),
-                    sea_orm::Value::from(device),
-                    sea_orm::Value::from(now),
-                    sea_orm::Value::from(now + self.session_idle_seconds()),
-                    sea_orm::Value::from(now + SESSION_ABSOLUTE_SECONDS),
-                    sea_orm::Value::from(now),
-                    sea_orm::Value::from(now),
-                    sea_orm::Value::from(ip.to_string()),
-                    sea_orm::Value::from(summarize_user_agent(user_agent)),
-                    sea_orm::Value::from(role.as_db()),
-                ],
-            ))
-            .await?;
-        Ok(token)
-    }
-
-    async fn check_attempt_allowed(&self, ip: IpAddr, now: i64) -> AppResult<()> {
-        // 检查每 IP 登录速率限制（每分钟最多 LOGIN_RATE_LIMIT_PER_IP 次失败）。
-        // 只读不记账：成功配对不该消耗额度，否则连配几台设备就会被 409 锁住。
-        {
-            let login_attempts = self.login_attempts.lock().await;
-            let recent = login_attempts
-                .get(&ip)
-                .map(|timestamps| {
-                    timestamps
-                        .iter()
-                        .filter(|timestamp| **timestamp > now - 60)
-                        .count()
-                })
-                .unwrap_or(0);
-            if recent >= LOGIN_RATE_LIMIT_PER_IP {
-                return Err(AppError::Conflict(
-                    "该 IP 登录尝试过于频繁（每 IP 每分钟限 5 次），请稍后重试".to_string(),
-                ));
-            }
-        }
-
-        // 检查全局速率限制（每分钟最多 LOGIN_RATE_LIMIT_GLOBAL 次失败）
-        let attempts = self.attempts.lock().await;
-        let recent_global = attempts
-            .global
-            .iter()
-            .filter(|timestamp| **timestamp > now - 60)
-            .count();
-        if recent_global >= self.login_rate_limit_global {
-            return Err(AppError::Conflict(
-                "登录尝试过于频繁，请稍后重试".to_string(),
-            ));
-        }
-        if attempts
-            .per_ip
-            .get(&ip)
-            .is_some_and(|failed| failed.blocked_until > now)
-        {
-            return Err(AppError::Conflict(
-                "该 IP 因多次失败已被临时封禁，请稍后重试".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// 登记一次失败的登录/配对尝试（每 IP 与全局每分钟额度各 +1）。
-    /// `/api/auth/pair` 是公开端点：攻击者轮换 IPv6 源地址可让 map 无限增长，
-    /// 插入前先淘汰最久未活动的 IP，总量有上界。
-    async fn record_attempt(&self, ip: IpAddr, now: i64) {
-        {
-            let mut login_attempts = self.login_attempts.lock().await;
-            evict_stalest_ip(&mut login_attempts, |timestamps| {
-                timestamps.back().copied().unwrap_or(0)
-            });
-            let timestamps = login_attempts.entry(ip).or_default();
-            timestamps.retain(|timestamp| *timestamp > now - 60);
-            timestamps.push_back(now);
-        }
-        let mut attempts = self.attempts.lock().await;
-        attempts.global.retain(|timestamp| *timestamp > now - 60);
-        attempts.global.push_back(now);
-    }
-
-    /// `/api/auth/state` 未认证探测限流：每 IP 每分钟最多 STATE_PROBE_LIMIT_PER_IP 次。
-    /// 已认证会话不消耗配额（由调用方判断）。抑制未认证访问者定向探测配对窗口。
-    pub async fn check_state_probe_allowed(&self, ip: IpAddr) -> AppResult<()> {
-        let now = Utc::now().timestamp();
-        let mut probes = self.state_probes.lock().await;
-        evict_stalest_ip(&mut probes, |timestamps| {
-            timestamps.back().copied().unwrap_or(0)
-        });
-        let timestamps = probes.entry(ip).or_default();
-        while timestamps
-            .front()
-            .is_some_and(|timestamp| *timestamp <= now - 60)
-        {
-            timestamps.pop_front();
-        }
-        if timestamps.len() >= STATE_PROBE_LIMIT_PER_IP {
-            return Err(AppError::Conflict("请求过于频繁，请稍后重试".to_string()));
-        }
-        timestamps.push_back(now);
-        Ok(())
-    }
-
-    /// LAN 模式下会话空闲 TTL：明文 HTTP 暴露面更大，收紧到 7 天。
-    fn session_idle_seconds(&self) -> i64 {
-        if self.security.current().mode == AccessMode::Lan {
-            LAN_SESSION_IDLE_SECONDS
-        } else {
-            SESSION_IDLE_SECONDS
-        }
-    }
-
-    async fn record_failure(&self, ip: IpAddr, now: i64) {
-        let mut attempts = self.attempts.lock().await;
-        evict_stalest_ip(&mut attempts.per_ip, |failed| failed.last_seen);
-        let failed = attempts.per_ip.entry(ip).or_default();
-        apply_failure(failed, now);
-    }
-
-    fn ip_is_cn(&self, ip: IpAddr) -> AppResult<bool> {
-        let reader =
-            self.geo_reader.as_ref().as_ref().ok_or_else(|| {
-                AppError::Unauthorized("GeoIP 数据不可用，已拒绝新配对".to_string())
-            })?;
-        let country: maxminddb::geoip2::Country = reader
-            .lookup(ip)
-            .map_err(|_| AppError::Unauthorized("无法判断网络区域，已拒绝新配对".to_string()))?
-            .decode()
-            .map_err(|_| AppError::Unauthorized("无法判断网络区域，已拒绝新配对".to_string()))?
-            .ok_or_else(|| AppError::Unauthorized("无法判断网络区域，已拒绝新配对".to_string()))?;
-        Ok(country.country.iso_code.is_some_and(|code| code == "CN"))
-    }
-
-    async fn bootstrap_needed(&self) -> AppResult<bool> {
-        let row = self
-            .db
-            .query_one_raw(Statement::from_string(
-                self.db.get_database_backend(),
-                "SELECT value FROM security_meta WHERE key = 'pairing_bootstrapped'".to_string(),
-            ))
-            .await?;
-        Ok(row.is_none())
-    }
-
-    async fn mark_bootstrapped(&self) -> AppResult<()> {
-        let transaction = self.db.begin().await?;
-        transaction
-            .execute_raw(Statement::from_string(
-                transaction.get_database_backend(),
-                "INSERT OR REPLACE INTO security_meta (key, value)
-                 VALUES ('pairing_bootstrapped', 'true')"
-                    .to_string(),
-            ))
-            .await?;
-        transaction.commit().await?;
-        Ok(())
-    }
-}
-
-fn generate_code() -> String {
-    let mut rng = rand::rng();
-    (0..8)
-        .map(|_| CODE_ALPHABET[rng.random_range(0..CODE_ALPHABET.len())] as char)
-        .collect()
-}
-
-fn random_token() -> String {
-    let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
-}
-
-fn token_hash(token: &str) -> Vec<u8> {
-    Sha256::digest(token.as_bytes()).to_vec()
-}
-
-fn bytes_value(value: Vec<u8>) -> sea_orm::Value {
-    sea_orm::Value::Bytes(Some(value))
-}
-
-fn summarize_device(requested: &str, user_agent: &str) -> String {
-    let trimmed = requested.trim();
-    if !trimmed.is_empty() {
-        return safe_truncate(trimmed, 80);
-    }
-    if user_agent.contains("Windows") {
-        "浏览器 / Windows".to_string()
-    } else if user_agent.contains("Android") {
-        "浏览器 / Android".to_string()
-    } else if user_agent.contains("Linux") {
-        "浏览器 / Linux".to_string()
-    } else {
-        "浏览器设备".to_string()
-    }
-}
-
-fn summarize_user_agent(user_agent: &str) -> String {
-    safe_truncate(user_agent, 160)
-}
+mod pairing;
+mod rate_limit;
+mod session;
 
 /// 在字符边界处安全截断，避免切到组合字符中间。
 /// `max_chars` 为最多保留的字符数（按 Unicode 标量值计数）。
-fn safe_truncate(input: &str, max_chars: usize) -> String {
+pub(super) fn safe_truncate(input: &str, max_chars: usize) -> String {
     if input.chars().count() <= max_chars {
         return input.to_string();
     }
@@ -753,24 +187,67 @@ fn safe_truncate(input: &str, max_chars: usize) -> String {
     input[..end].to_string()
 }
 
+/// 记录一次失败尝试：封禁过期后的首个失败重置计数；连续失败达到 5 次后
+/// 按指数退避封禁，封顶 1 小时（持续爆破者每小时最多获得一次尝试机会）。
+fn apply_failure(failed: &mut FailedAttempts, now: i64) {
+    if failed.blocked_until > 0 && failed.blocked_until <= now {
+        failed.failures = 0;
+        failed.blocked_until = 0;
+    }
+    failed.last_seen = now;
+    failed.failures = failed.failures.saturating_add(1);
+    if failed.failures >= 5 {
+        let delay = 1i64
+            .checked_shl((failed.failures - 5).min(12))
+            .unwrap_or(3600)
+            .min(3600);
+        failed.blocked_until = now + delay;
+    }
+}
+
+/// 每 IP 跟踪表容量上限：两处限流 map 的条目此前永不删除，
+/// IPv6 源地址轮换可无限耗尽内存。
+const MAX_TRACKED_IPS: usize = 10_000;
+
+/// 总量达到上限时淘汰最久未活动的 IP 条目（近似 LRU；仅在超限时执行，
+/// 全局限流约束下触发频率低，O(n) 扫描可接受）。
+fn evict_stalest_ip<V>(map: &mut HashMap<IpAddr, V>, last_seen_of: impl Fn(&V) -> i64) {
+    while map.len() >= MAX_TRACKED_IPS {
+        let Some(stalest) = map
+            .iter()
+            .min_by_key(|(ip, value)| (last_seen_of(value), *ip))
+            .map(|(ip, _)| *ip)
+        else {
+            return;
+        };
+        map.remove(&stalest);
+    }
+}
+
+fn token_hash(token: &str) -> Vec<u8> {
+    Sha256::digest(token.as_bytes()).to_vec()
+}
+
+fn bytes_value(value: Vec<u8>) -> sea_orm::Value {
+    sea_orm::Value::Bytes(Some(value))
+}
+
+fn random_token() -> String {
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_code() -> String {
+    let mut rng = rand::rng();
+    (0..8)
+        .map(|_| CODE_ALPHABET[rng.random_range(0..CODE_ALPHABET.len())] as char)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pairing_code_uses_unambiguous_alphabet() {
-        for _ in 0..100 {
-            let code = generate_code();
-            assert_eq!(code.len(), 8);
-            assert!(code.bytes().all(|byte| CODE_ALPHABET.contains(&byte)));
-        }
-    }
-
-    #[test]
-    fn tokens_are_256_bits_and_url_safe() {
-        let token = random_token();
-        assert_eq!(URL_SAFE_NO_PAD.decode(token).expect("decode").len(), 32);
-    }
 
     #[test]
     fn known_roles_round_trip_and_invalid_roles_fail_closed() {
@@ -781,40 +258,5 @@ mod tests {
         assert!(SessionRole::Owner.can_operate());
         assert!(SessionRole::Operator.can_operate());
         assert!(!SessionRole::Viewer.can_operate());
-    }
-
-    #[test]
-    fn failure_backoff_caps_at_one_hour() {
-        let mut failed = FailedAttempts::default();
-        for _ in 0..4 {
-            apply_failure(&mut failed, 1000);
-            assert_eq!(failed.blocked_until, 0, "前 4 次失败不封禁");
-        }
-        // 同一时刻连续失败（封禁未过期不触发重置）：第 5 次起指数退避 1s, 2s, 4s ... 封顶 3600s。
-        let mut delays = Vec::new();
-        for failures in 5..=20 {
-            apply_failure(&mut failed, 1000);
-            assert_eq!(failed.failures, failures);
-            delays.push(failed.blocked_until - 1000);
-        }
-        assert_eq!(delays[0], 1);
-        assert_eq!(delays[1], 2);
-        assert_eq!(delays[2], 4);
-        assert!(delays.iter().all(|delay| *delay <= 3600));
-        assert_eq!(*delays.last().unwrap(), 3600, "退避必须封顶 1 小时");
-    }
-
-    #[test]
-    fn failure_counter_resets_after_block_expires() {
-        let mut failed = FailedAttempts::default();
-        for _ in 0..6 {
-            apply_failure(&mut failed, 1000);
-        }
-        assert!(failed.blocked_until > 1000);
-        // 封禁过期后的首个失败：计数从 1 重新开始，而不是在旧值上继续累加。
-        let expired_at = failed.blocked_until + 1;
-        apply_failure(&mut failed, expired_at);
-        assert_eq!(failed.failures, 1);
-        assert_eq!(failed.blocked_until, 0);
     }
 }

@@ -936,12 +936,21 @@ def check_windows_installer_encoding():
     return True
 
 
-def run_quality_checks(skip_rust_gates=False):
-    """Run the mandatory formatting, lint, test and source-policy gates."""
+def run_quality_checks(
+    skip_rust_gates: bool = False,
+    skip_frontend: bool = False,
+    windows_only: bool = False,
+):
+    """Run the mandatory formatting, lint, test and source-policy gates.
+
+    skip_frontend：复用已有的 static/app/ 产物（CI 先行 npm run build 的场景）。
+    windows_only：只跑 Windows 打包侧专属检查；平台无关的源码策略/前端契约
+    由 CI 的 frontend-and-policy job 覆盖，避免同一 workflow 内重复执行。
+    """
     print("[check] running mandatory quality gates")
     commands = [
         (["cargo", "fmt", "--all", "--", "--check"], ROOT),
-        (["cargo", "check", "--all-targets", "--locked"], ROOT),
+        # clippy 是 check 的超集（check + lints），不单独跑 cargo check 重复编译
         (
             [
                 "cargo",
@@ -973,21 +982,31 @@ def run_quality_checks(skip_rust_gates=False):
         # Windows build smoke 等 CI job 已独立跑过完整 Rust 门禁，这里只做打包侧检查
         print("  [跳过] cargo fmt/check/clippy/test（--skip-rust-gates：由 CI 独立 Rust job 覆盖）")
         commands = []
+
+    if windows_only:
+        if skip_rust_gates is False:
+            print("  [提示] --windows-only 未搭配 --skip-rust-gates，Rust 门禁仍会全量执行")
+        ok = check_resource_hashes()
+        ok = check_windows_installer_encoding() and ok
+        if not ok:
+            raise SystemExit(1)
+        print("[check] windows-only gates passed")
+        return
+
+    # 先产出/校验前端产物，再跑测试命令：冒烟测试必须测当前源码的产物，
+    # 而不是 static/app/ 里可能过期的上次构建。
+    vue_bundle = build_frontend_bundle(skip=skip_frontend)
+
     for command, cwd in commands:
         run(command, cwd=str(cwd))
 
     ok = True
-    advisory_warnings = []
-
-    def advisory(message):
-        advisory_warnings.append(message)
-        print(f"  [WARN][advisory] {message}")
 
     rust_files = sorted((ROOT / "src").rglob("*.rs"))
     for path in rust_files:
         line_count = len(path.read_text(encoding="utf-8").splitlines())
         if line_count > 500:
-            advisory(f"{path.relative_to(ROOT)} has {line_count} lines (limit 500)")
+            ok = _quality_error(f"{path.relative_to(ROOT)} has {line_count} lines (limit 500)") and ok
 
     frontend_sources = [
         path for path in sorted((ROOT / "web" / "src").rglob("*"))
@@ -996,9 +1015,8 @@ def run_quality_checks(skip_rust_gates=False):
     for path in frontend_sources:
         line_count = len(path.read_text(encoding="utf-8").splitlines())
         if line_count > 800:
-            advisory(f"{path.relative_to(ROOT)} has {line_count} lines (limit 800)")
+            ok = _quality_error(f"{path.relative_to(ROOT)} has {line_count} lines (limit 800)") and ok
 
-    vue_bundle = build_frontend_bundle()
     ok = check_resource_hashes() and ok
     ok = check_vue_bundle_contract(vue_bundle) and ok
     ok = check_windows_installer_encoding() and ok
@@ -1007,11 +1025,12 @@ def run_quality_checks(skip_rust_gates=False):
     js_source = "\n".join(path.read_text(encoding="utf-8") for path in frontend_sources)
     html_source = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     css_files = sorted((ROOT / "web" / "src" / "styles").glob("*.css"))
-    css_lines = [
-        line
-        for path in dict.fromkeys(css_files)
-        for line in path.read_text(encoding="utf-8").splitlines()
-    ]
+    # 先剥离 /* */ 注释再扫描：注释里提到规则字样（如"禁止 var() 兜底"）不应被门禁误判。
+    css_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in dict.fromkeys(css_files)
+    )
+    css_text = re.sub(r"/\*.*?\*/", " ", css_text, flags=re.DOTALL)
+    css_lines = css_text.splitlines()
     api_source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "src" / "api").rglob("*.rs"))
@@ -1026,11 +1045,14 @@ def run_quality_checks(skip_rust_gates=False):
         and not re.match(r"\s*(?:--[a-z0-9-]+\s*:|@media\b)", line)
         for line in css_lines
     )
-    # 源码规范门禁分两级：
-    # - 硬失败（blocking）：当前代码库已满足的项，回归即构建失败；
-    # - advisory：当前仍存在历史违规、且清理需要改动 web/src 与 src/（不在本脚本
-    #   职责内）的项。违规明细与数量会在结尾汇总输出，待逐项清零后上移为硬失败。
-    hard_policy_checks = [
+    # 源码规范门禁统一为硬失败。历史上一度分 blocking/advisory 两级，advisory
+    # 常年违规却从不阻断，输出一屏 WARN 纯属噪音；2026-09 整改将历史违规全部
+    # 清零后合并为阻断级，此后任何回归都应在此失败。
+    blocking_checks = [
+        (
+            "CSS empty var()",
+            re.search(r"var\(\s*\)", "\n".join(css_lines)) is None,
+        ),
         ("production console.log", "console.log" not in js_source),
         ("HTML inline styles", re.search(r"\sstyle\s*=", html_source, re.I) is None),
         ("silent catch blocks", re.search(r"catch\s*(?:\([^)]*\))?\s*\{\s*\}", js_source) is None),
@@ -1039,15 +1061,15 @@ def run_quality_checks(skip_rust_gates=False):
             "CSP unsafe-inline",
             "unsafe-inline" not in rust_source,
         ),
-    ]
-    advisory_checks = [
         ("#[allow(dead_code)]", "#[allow(dead_code)]" not in rust_source),
         ("let _ = error swallowing", re.search(r"\blet\s+_\s*=", rust_source) is None),
         ("JavaScript inline styles", re.search(r"\.style\.|\sstyle\s*=", js_source) is None),
         ("HTML inline event handlers", re.search(r"\son[a-z]+\s*=", html_source, re.I) is None),
         (
+            # 只禁旧版 {success: bool} API 载荷键（对象字面量键位置）；
+            # 不能写成 \.success\b —— 那会误伤 toast.success() 这类合法方法调用。
             "frontend success contract",
-            re.search(r"\.success\b|[\"']success[\"']\s*:", js_source) is None,
+            re.search(r"(?:\{|,)\s*[\"']success[\"']\s*:", js_source) is None,
         ),
         ("CSS hardcoded colors outside tokens", not css_has_hardcoded_color),
         ("CSS hardcoded pixel values outside tokens", not css_has_hardcoded_px),
@@ -1060,16 +1082,6 @@ def run_quality_checks(skip_rust_gates=False):
             re.search(r"--color-token-[0-9]+\s*:", "\n".join(css_lines)) is None,
         ),
     ]
-    blocking_checks = [
-        (
-            "CSS empty var()",
-            re.search(r"var\(\s*\)", "\n".join(css_lines)) is None,
-        ),
-        *hard_policy_checks,
-    ]
-    for label, passed in advisory_checks:
-        if not passed:
-            advisory(label)
     for label, passed in blocking_checks:
         if not passed:
             ok = _quality_error(label) and ok
@@ -1082,11 +1094,6 @@ def run_quality_checks(skip_rust_gates=False):
         if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", dom_id):
             ok = _quality_error(f"DOM id is not kebab-case: {dom_id}") and ok
 
-    if advisory_warnings:
-        # 显著汇总：advisory 不阻断，但违规数量与明细必须一眼可见
-        print(f"\n  [WARN][advisory] source policy 共 {len(advisory_warnings)} 项未达标（不阻断构建）：")
-        for message in advisory_warnings:
-            print(f"    - {message}")
     if not ok:
         raise SystemExit(1)
     print("[check] all mandatory gates passed")
@@ -1099,6 +1106,12 @@ def main():
         "--skip-rust-gates",
         action="store_true",
         help="--check 模式下跳过 cargo fmt/check/clippy/test（CI 已有独立 Rust job 全量覆盖）",
+    )
+    parser.add_argument(
+        "--windows-only",
+        action="store_true",
+        help="--check 模式下只跑 Windows 打包侧专属检查（安装脚本编码、资源哈希）；"
+        "平台无关检查由 CI frontend-and-policy job 覆盖",
     )
     parser.add_argument("--portable", action="store_true", help="构建当前平台完整便携版")
     parser.add_argument("--core", action="store_true", help="构建不含媒体运行时的轻量包")
@@ -1123,7 +1136,11 @@ def main():
     args = parser.parse_args()
 
     if args.check:
-        run_quality_checks(skip_rust_gates=args.skip_rust_gates)
+        run_quality_checks(
+            skip_rust_gates=args.skip_rust_gates,
+            skip_frontend=args.skip_frontend_vue or args.skip_frontend,
+            windows_only=args.windows_only,
+        )
         return
 
     try:

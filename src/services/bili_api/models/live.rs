@@ -51,12 +51,6 @@ impl LiveRoomInit {
     pub fn is_live(&self) -> bool {
         self.live_status == 1
     }
-
-    /// 是否轮播中（live_status == 2）。
-    #[allow(dead_code)]
-    pub fn is_replay(&self) -> bool {
-        self.live_status == 2
-    }
 }
 
 /// `get_info` 响应：直播间详细信息（标题/主播/封面/分区）。
@@ -211,11 +205,12 @@ mod tests {
         let live: LiveRoomInit =
             serde_json::from_str(r#"{"room_id": 100, "live_status": 1}"#).expect("live");
         assert!(live.is_live());
-        assert!(!live.is_replay());
 
+        // 轮播（live_status == 2）不是正在直播，状态码原样保留供调用方区分。
         let replay: LiveRoomInit =
             serde_json::from_str(r#"{"room_id": 100, "live_status": 2}"#).expect("replay");
-        assert!(replay.is_replay());
+        assert!(!replay.is_live());
+        assert_eq!(replay.live_status, 2);
     }
 
     #[test]

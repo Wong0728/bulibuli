@@ -1,10 +1,15 @@
 //! 弹幕/评论下载服务：BV 号解码与 Cookie 工具在本文件，
-//! protobuf 弹幕下载见 `fetch`，评论抓取见 `comments`，评论 HTML 渲染见 `comment_html`。
+//! protobuf 弹幕下载见 `fetch`（编排）/ `fetch_segments`（分段请求）/
+//! `danmaku_serialize`（XML/TXT 序列化），评论抓取见 `comments`（编排）/
+//! `comment_replies`（请求与回复展开），评论 HTML 渲染见 `comment_html`。
 
 mod archive;
 mod comment_html;
+mod comment_replies;
 mod comments;
+mod danmaku_serialize;
 mod fetch;
+mod fetch_segments;
 
 use crate::config::AppPaths;
 use crate::services::bili_api::BiliApi;
@@ -180,13 +185,13 @@ mod tests {
 
     #[test]
     fn danmaku_segment_count_is_bounded() {
-        assert_eq!(fetch::capped_segment_count(0), (1, false));
+        assert_eq!(fetch_segments::capped_segment_count(0), (1, false));
         assert_eq!(
-            fetch::capped_segment_count(SEGMENT_DURATION * 512),
+            fetch_segments::capped_segment_count(SEGMENT_DURATION * 512),
             (512, false)
         );
         assert_eq!(
-            fetch::capped_segment_count(SEGMENT_DURATION * 513),
+            fetch_segments::capped_segment_count(SEGMENT_DURATION * 513),
             (512, true)
         );
     }

@@ -51,73 +51,79 @@
     --transition-fast: 150ms ease;
     --transition-normal: 250ms ease;
 
-    /* 设计令牌：原始值集中定义在 :root。 */
-    --color-token-1: #00a1d6;
-    --color-token-2: #1a1d24;
-    --color-token-3: #22c55e;
-    --color-token-4: #2f323a;
-    --color-token-5: #333;
-    --color-token-6: #5b8ff9;
-    --color-token-7: #61666d;
-    --color-token-8: #666;
-    --color-token-9: #6b7280;
-    --color-token-10: #888;
-    --color-token-11: #999;
-    --color-token-12: #9ca3af;
-    --color-token-13: #a78bfa;
-    --color-token-14: #c9cdd4;
-    --color-token-15: #dc2626;
-    --color-token-16: #ddd;
-    --color-token-17: #e5e7eb;
-    --color-token-18: #eee;
-    --color-token-19: #ef4444;
-    --color-token-20: #f0f0f0;
-    --color-token-21: #f3f4f6;
-    --color-token-22: #f59e0b;
-    --color-token-23: #f5f5f5;
-    --color-token-24: #f9f9f9;
-    --color-token-25: #ff9a9e;
-    --color-token-26: #fff;
-    --color-token-27: rgba(0, 0, 0, 0.06);
-    --color-token-28: rgba(0, 0, 0, 0.1);
-    --color-token-29: rgba(0, 0, 0, 0.12);
-    --color-token-30: rgba(0, 0, 0, 0.35);
-    --color-token-31: rgba(0, 0, 0, 0.4);
-    --color-token-32: rgba(0, 0, 0, 0.72);
-    --color-token-33: rgba(0, 0, 0, 0.75);
-    --color-token-34: rgba(0, 0, 0, 0.8);
-    --color-token-35: rgba(0, 161, 214, 0.1);
-    --color-token-36: rgba(0, 161, 214, 0.2);
-    --color-token-37: rgba(0, 181, 120, 0.06);
-    --color-token-38: rgba(0, 181, 120, 0.1);
-    --color-token-39: rgba(0, 181, 120, 0.3);
-    --color-token-40: rgba(0, 181, 120, 0.9);
-    --color-token-41: rgba(0,0,0,0.04);
-    --color-token-42: rgba(0,0,0,0.08);
-    --color-token-43: rgba(134, 154, 172, 0.9);
-    --color-token-44: rgba(148, 153, 160, 0.9);
-    --color-token-45: rgba(239, 68, 68, 0.08);
-    --color-token-46: rgba(239, 68, 68, 0.3);
-    --color-token-47: rgba(245, 158, 11, 0.08);
-    --color-token-48: rgba(245, 158, 11, 0.1);
-    --color-token-49: rgba(245, 158, 11, 0.9);
-    --color-token-50: rgba(245, 63, 63, 0.06);
-    --color-token-51: rgba(245, 63, 63, 0.1);
-    --color-token-52: rgba(245, 63, 63, 0.18);
-    --color-token-53: rgba(245, 63, 63, 0.3);
-    --color-token-54: rgba(245, 63, 63, 0.35);
-    --color-token-55: rgba(245, 63, 63, 0.9);
-    --color-token-56: rgba(251, 114, 153, 0.1);
-    --color-token-57: rgba(251, 114, 153, 0.12);
-    --color-token-58: rgba(251, 114, 153, 0.2);
-    --color-token-59: rgba(251, 114, 153, 0.3);
-    --color-token-60: rgba(251, 114, 153, 0.9);
-    --color-token-61: rgba(255, 125, 0, 0.06);
-    --color-token-62: rgba(255, 125, 0, 0.3);
-    --color-token-63: rgba(255, 125, 0, 0.35);
-    --color-token-64: rgba(255, 255, 255, 0.3);
-    --color-token-65: rgba(255, 255, 255, 0.9);
-    --color-token-66: rgba(34, 197, 94, 0.1);
+    /* 设计令牌：原始值集中定义在 :root（按用途语义命名）。 */
+
+    /* —— 文字 —— */
+    --text-inverse: #fff;                /* 彩色 / 深色底上的反白文字（dark mode 下保持白色） */
+    --text-faint: #999;                  /* 最弱一级的辅助文字（如大会员限制提示） */
+    --accent-purple: #a78bfa;            /* 紫色强调：日志 wait 级别、评论区用户名 */
+
+    /* —— 日志面板（深底控制台样式） —— */
+    --log-panel-bg: #1a1d24;
+    --log-panel-border: #2f323a;
+    --log-panel-text: #c9cdd4;
+    --log-level-info: #5b8ff9;
+
+    /* —— 评论区用户名 —— */
+    --comment-user-cyan: #00a1d6;
+    --comment-user-green: #22c55e;
+
+    /* —— 徽章 / 标签 —— */
+    --vip-badge-bg: #f9f9f9;
+    --vip-badge-gradient-end: #ff9a9e;   /* .login-vip-badge 品牌渐变的第二停点 */
+    --badge-pending-bg: rgba(134, 154, 172, 0.9);
+    --badge-downloading-bg: rgba(251, 114, 153, 0.9);
+    --badge-completed-bg: rgba(0, 181, 120, 0.9);
+    --badge-failed-bg: rgba(245, 63, 63, 0.9);
+    --badge-not-downloaded-bg: rgba(148, 153, 160, 0.9);
+    --badge-pay-bg: rgba(245, 158, 11, 0.9);
+    --quality-tag-bg: rgba(251, 114, 153, 0.1);
+    --uid-match-badge-bg: rgba(251, 114, 153, 0.12);
+    --preview-badge-bg: rgba(0, 0, 0, 0.8);
+    --burn-badge-bg: rgba(34, 197, 94, 0.1);
+
+    /* —— 封面时长角标（半透明黑底） —— */
+    --duration-overlay: rgba(0, 0, 0, 0.75);
+    --duration-overlay-soft: rgba(0, 0, 0, 0.72);
+
+    /* —— 按钮 —— */
+    --btn-danger-border: rgba(245, 63, 63, 0.3);
+    --btn-danger-hover-bg: rgba(245, 63, 63, 0.06);
+    --btn-retry-bg: rgba(245, 63, 63, 0.1);
+    --btn-retry-hover-bg: rgba(245, 63, 63, 0.18);
+    --btn-success-bg: rgba(0, 181, 120, 0.1);
+    --brand-soft-hover: rgba(251, 114, 153, 0.2);  /* --brand-soft 的 hover 加深 */
+    --notice-dot-hover-bg: rgba(245, 158, 11, 0.1);
+
+    /* —— 横幅 / 提示块 —— */
+    --status-connected-bg: rgba(0, 181, 120, 0.06);
+    --status-connected-border: rgba(0, 181, 120, 0.3);
+    --status-connecting-bg: rgba(255, 125, 0, 0.06);
+    --status-connecting-border: rgba(255, 125, 0, 0.3);
+    --cookie-warning-border: rgba(255, 125, 0, 0.35);
+    --error-banner-border: rgba(245, 63, 63, 0.35);
+    --reupload-hint-bg: rgba(239, 68, 68, 0.08);
+    --reupload-hint-border: rgba(239, 68, 68, 0.3);
+    --pay-note-bg: rgba(245, 158, 11, 0.08);
+
+    /* —— 遮罩 / 悬浮层 —— */
+    --overlay-bg: rgba(0, 0, 0, 0.35);
+    --overlay-bg-strong: rgba(0, 0, 0, 0.4);
+    --spinner-track: rgba(255, 255, 255, 0.3);
+    --state-dot-ring: rgba(255, 255, 255, 0.9);
+
+    /* —— 阴影颜色（与 --shadow-sm/md/lg 的尺寸组合使用） —— */
+    --shadow-color-xs: rgba(0, 0, 0, 0.04);
+    --shadow-color-sm: rgba(0, 0, 0, 0.06);
+    --shadow-color-md: rgba(0, 0, 0, 0.08);
+    --shadow-color-lg: rgba(0, 0, 0, 0.1);
+    --shadow-color-xl: rgba(0, 0, 0, 0.12);
+
+    /* —— 品牌色 / 组件底色衍生 —— */
+    --brand-tint-border: rgba(251, 114, 153, 0.3);
+    --avatar-placeholder-bg: #f3f4f6;
+    --time-point-chip-bg: rgba(0, 161, 214, 0.1);
+    --time-point-chip-del-hover-bg: rgba(0, 161, 214, 0.2);
     --size-10: 10px;
     --size-14: 14px;
     --size-1400: 1400px;
@@ -437,8 +443,8 @@ body {
 }
 
 .server-status.connected {
-    border-color: var(--color-token-39);
-    background: var(--color-token-37);
+    border-color: var(--status-connected-border);
+    background: var(--status-connected-bg);
     color: var(--success);
 }
 
@@ -447,8 +453,8 @@ body {
 }
 
 .server-status.connecting {
-    border-color: var(--color-token-62);
-    background: var(--color-token-61);
+    border-color: var(--status-connecting-border);
+    background: var(--status-connecting-bg);
     color: var(--warning);
 }
 
@@ -543,8 +549,8 @@ body {
     border-radius: var(--radius-full);
     font-size: var(--size-10);
     font-weight: 600;
-    color: var(--color-token-26);
-    background: linear-gradient(135deg, var(--brand), var(--color-token-25));
+    color: var(--text-inverse);
+    background: linear-gradient(135deg, var(--brand), var(--vip-badge-gradient-end));
     line-height: 1.5;
 }
 
@@ -587,7 +593,7 @@ body {
 
 .login-prompt-btn:hover {
     background: var(--brand);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
 }
 
 /* 设置页登录状态框。 */
@@ -661,7 +667,7 @@ body {
     flex-wrap: wrap;
     padding: var(--size-10) var(--size-16);
     background: var(--warning-soft);
-    border: var(--size-1) solid var(--color-token-63);
+    border: var(--size-1) solid var(--cookie-warning-border);
     border-radius: var(--radius-lg);
     margin-bottom: var(--size-12);
     font-size: var(--size-13);
@@ -734,7 +740,7 @@ body {
     gap: var(--size-8);
     padding: var(--size-10) var(--size-16);
     background: var(--error-soft);
-    border: var(--size-1) solid var(--color-token-54);
+    border: var(--size-1) solid var(--error-banner-border);
     border-radius: var(--radius-lg);
     margin-bottom: var(--size-12);
     font-size: var(--size-13);
@@ -1295,22 +1301,22 @@ select.blogger-select option[value=""] {
 .btn-primary {
     background: var(--brand);
     border-color: var(--brand);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
 }
 
 .btn-primary:hover:not(:disabled) {
     background: var(--brand-hover);
     border-color: var(--brand-hover);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
 }
 
 .btn-danger {
     color: var(--error);
-    border-color: var(--color-token-53);
+    border-color: var(--btn-danger-border);
 }
 
 .btn-danger:hover:not(:disabled) {
-    background: var(--color-token-50);
+    background: var(--btn-danger-hover-bg);
     border-color: var(--error);
 }
 
@@ -1538,8 +1544,8 @@ input:checked + .slider:before {
 /* 日志容器。 */
 .log-container,
 .blogger-logs-panel {
-    background: var(--color-token-2);
-    color: var(--color-token-14);
+    background: var(--log-panel-bg);
+    color: var(--log-panel-text);
     padding: var(--size-14);
     border-radius: var(--radius-lg);
     height: var(--size-320);
@@ -1548,7 +1554,7 @@ input:checked + .slider:before {
     font-family: var(--font-custom-6);
     font-size: var(--size-12);
     line-height: 1.6;
-    border: var(--size-1) solid var(--color-token-4);
+    border: var(--size-1) solid var(--log-panel-border);
 }
 
 .blogger-detail-panel .blogger-logs-panel {
@@ -1574,8 +1580,8 @@ input:checked + .slider:before {
 
 .log-level-success { color: var(--success); }
 .log-level-error { color: var(--error); }
-.log-level-info { color: var(--color-token-6); }
-.log-level-wait { color: var(--color-token-13); }
+.log-level-info { color: var(--log-level-info); }
+.log-level-wait { color: var(--accent-purple); }
 .log-level-skip { color: var(--text-muted); }
 
 /* 手动下载结果网格布局。 */
@@ -1786,7 +1792,7 @@ tr:hover {
     display: inline-block;
     width: var(--size-14);
     height: var(--size-14);
-    border: var(--size-2) solid var(--color-token-64);
+    border: var(--size-2) solid var(--spinner-track);
     border-radius: 50%;
     border-top-color: currentColor;
     animation: spin 0.8s linear infinite;
@@ -2029,7 +2035,7 @@ tr:hover {
 
 .nav-badge {
     background: var(--border-strong);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
     padding: var(--size-1) var(--size-7);
     border-radius: var(--radius-full);
     font-size: var(--size-11);
@@ -2169,12 +2175,12 @@ tr:hover {
 }
 
 .action-btn.retry {
-    background: var(--color-token-51);
+    background: var(--btn-retry-bg);
     color: var(--error);
 }
 
 .action-btn.retry:hover {
-    background: var(--color-token-52);
+    background: var(--btn-retry-hover-bg);
 }
 
 .action-btn.download {
@@ -2183,7 +2189,7 @@ tr:hover {
 }
 
 .action-btn.download:hover {
-    background: var(--color-token-58);
+    background: var(--brand-soft-hover);
 }
 
 .action-btn.remove {
@@ -2202,7 +2208,7 @@ tr:hover {
 }
 
 .action-btn.burn:hover:not(:disabled) {
-    background: var(--color-token-58);
+    background: var(--brand-soft-hover);
 }
 
 .action-btn.burn:disabled {
@@ -2324,7 +2330,7 @@ tr:hover {
 
 .blogger-list-item.active {
     background: var(--brand-soft);
-    border-color: var(--color-token-59);
+    border-color: var(--brand-tint-border);
 }
 
 .blogger-list-item .blogger-avatar {
@@ -2532,7 +2538,7 @@ tr:hover {
     left: 0;
     right: 0;
     bottom: 0;
-    background: var(--color-token-30);
+    background: var(--overlay-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2801,7 +2807,7 @@ tr:hover {
     left: 0;
     right: 0;
     bottom: 0;
-    background: var(--color-token-30);
+    background: var(--overlay-bg);
     z-index: 999;
     opacity: 0;
     visibility: hidden;
@@ -2853,7 +2859,7 @@ tr:hover {
 
     .blogger-sidebar.active {
         transform: translateX(var(--size-260));
-        box-shadow: var(--size-4) 0 var(--size-24) var(--color-token-29);
+        box-shadow: var(--size-4) 0 var(--size-24) var(--shadow-color-xl);
     }
 
     .sidebar-toggle-btn {
@@ -3047,7 +3053,7 @@ tr:hover {
     transition: box-shadow 0.2s;
 }
 .blogger-search-card:hover {
-    box-shadow: 0 var(--size-2) var(--size-8) var(--color-token-27);
+    box-shadow: 0 var(--size-2) var(--size-8) var(--shadow-color-sm);
 }
 .blogger-avatar {
     width: var(--size-56);
@@ -3055,7 +3061,7 @@ tr:hover {
     border-radius: 50%;
     object-fit: cover;
     flex-shrink: 0;
-    background: var(--color-token-21);
+    background: var(--avatar-placeholder-bg);
 }
 .blogger-info {
     flex: 1;
@@ -3148,8 +3154,8 @@ tr:hover {
     font-size: var(--size-10);
     font-weight: 600;
     color: var(--brand);
-    background: var(--color-token-57);
-    border: var(--size-1) solid var(--color-token-59);
+    background: var(--uid-match-badge-bg);
+    border: var(--size-1) solid var(--brand-tint-border);
     border-radius: var(--size-3);
     padding: var(--size-1) var(--size-5);
     margin-left: var(--size-6);
@@ -3313,7 +3319,7 @@ tr:hover {
     border-radius: var(--size-10);
     font-size: var(--size-11);
     font-weight: 600;
-    color: var(--color-token-26);
+    color: var(--text-inverse);
     background: var(--info);
     z-index: 2;
 }
@@ -3328,8 +3334,8 @@ tr:hover {
 .drawer-reupload-hint {
     margin: var(--size-8) 0;
     padding: var(--size-8) var(--size-12);
-    background: var(--color-token-45);
-    border: var(--size-1) solid var(--color-token-46);
+    background: var(--reupload-hint-bg);
+    border: var(--size-1) solid var(--reupload-hint-border);
     border-radius: var(--size-6);
     font-size: var(--size-13);
     color: var(--error-text);
@@ -3368,7 +3374,7 @@ tr:hover {
 .drawer-pay-note {
     padding: var(--size-8) var(--size-12);
     margin: var(--size-8) 0;
-    background: var(--color-token-47);
+    background: var(--pay-note-bg);
     border-left: var(--size-3) solid var(--warning);
     border-radius: var(--size-4);
     font-size: var(--size-13);
@@ -3559,7 +3565,7 @@ tr:hover {
 }
 .drawer-file-item:hover {
     background: var(--surface-hover);
-    box-shadow: 0 var(--size-2) var(--size-8) var(--color-token-41);
+    box-shadow: 0 var(--size-2) var(--size-8) var(--shadow-color-xs);
 }
 .drawer-file-icon {
     width: var(--size-36);
@@ -3628,7 +3634,7 @@ tr:hover {
     padding: var(--size-3) var(--size-8);
     border-radius: var(--size-6);
     font-size: var(--size-11);
-    background: var(--color-token-66);
+    background: var(--burn-badge-bg);
     color: var(--success-text);
 }
 .drawer-files-empty {
@@ -3821,10 +3827,10 @@ tr:hover {
     border-radius: var(--size-4);
     padding: 0 var(--size-4);
 }
-.cmt-user-cyan { color: var(--color-token-1); }
-.cmt-user-green { color: var(--color-token-3); }
+.cmt-user-cyan { color: var(--comment-user-cyan); }
+.cmt-user-green { color: var(--comment-user-green); }
 .cmt-user-orange { color: var(--warning); }
-.cmt-user-purple { color: var(--color-token-13); }
+.cmt-user-purple { color: var(--accent-purple); }
 .cmt-user-pink { color: var(--brand); }
 .cmt-vip {
     display: inline-flex;
@@ -3832,7 +3838,7 @@ tr:hover {
     padding: 0 var(--size-6);
     border-radius: var(--radius-full);
     color: var(--surface);
-    background: var(--color-token-24);
+    background: var(--vip-badge-bg);
     font-size: var(--size-10);
     font-weight: 600;
 }
@@ -3919,7 +3925,7 @@ tr:hover {
 /* 操作按钮。 */
 .drawer-btn-danger {
     background: var(--error);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
     border: none;
 }
 .drawer-btn-danger:hover {
@@ -3994,7 +4000,7 @@ tr:hover {
     transition: all 0.2s;
 }
 .notice-dot-btn:hover {
-    background: var(--color-token-48);
+    background: var(--notice-dot-hover-bg);
 }
 .notice-dot-btn[hidden] {
     display: none;
@@ -4007,7 +4013,7 @@ tr:hover {
     height: var(--size-16);
     padding: 0 var(--size-4);
     background: var(--error);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
     border-radius: var(--size-8);
     font-size: var(--size-10);
     font-weight: 600;
@@ -4037,7 +4043,7 @@ tr:hover {
 .blogger-notice-tag {
     padding: var(--size-2) var(--size-6);
     background: var(--brand);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
     border-radius: var(--size-3);
     font-size: var(--size-11);
 }
@@ -4131,8 +4137,8 @@ tr:hover {
     position: absolute;
     bottom: var(--size-8);
     right: var(--size-8);
-    background: var(--color-token-33);
-    color: var(--color-token-26);
+    background: var(--duration-overlay);
+    color: var(--text-inverse);
     font-size: var(--size-12);
     padding: var(--size-2) var(--size-8);
     border-radius: var(--size-4);
@@ -4152,33 +4158,33 @@ tr:hover {
 }
 
 .video-card-badge.pending {
-    background: var(--color-token-43);
-    color: var(--color-token-26);
+    background: var(--badge-pending-bg);
+    color: var(--text-inverse);
 }
 
 .video-card-badge.downloading {
-    background: var(--color-token-60);
-    color: var(--color-token-26);
+    background: var(--badge-downloading-bg);
+    color: var(--text-inverse);
 }
 
 .video-card-badge.completed {
-    background: var(--color-token-40);
-    color: var(--color-token-26);
+    background: var(--badge-completed-bg);
+    color: var(--text-inverse);
 }
 
 .video-card-badge.failed {
-    background: var(--color-token-55);
-    color: var(--color-token-26);
+    background: var(--badge-failed-bg);
+    color: var(--text-inverse);
 }
 
 .video-card-badge.not-downloaded {
-    background: var(--color-token-44);
-    color: var(--color-token-26);
+    background: var(--badge-not-downloaded-bg);
+    color: var(--text-inverse);
 }
 
 .video-card-badge.pay {
-    background: var(--color-token-49);
-    color: var(--color-token-26);
+    background: var(--badge-pay-bg);
+    color: var(--text-inverse);
 }
 
 .manual-no-more {
@@ -4255,7 +4261,7 @@ tr:hover {
 .drawer-overlay {
     position: fixed;
     inset: 0;
-    background: var(--color-token-31);
+    background: var(--overlay-bg-strong);
     backdrop-filter: blur(var(--size-4));
     opacity: 0;
     visibility: hidden;
@@ -4277,7 +4283,7 @@ tr:hover {
     max-width: 90vw;
     height: 100vh;
     background: var(--surface);
-    box-shadow: var(--size-neg-10) 0 var(--size-40) var(--color-token-28);
+    box-shadow: var(--size-neg-10) 0 var(--size-40) var(--shadow-color-lg);
     transform: translateX(100%);
     transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     z-index: 201;
@@ -4371,8 +4377,8 @@ tr:hover {
     position: absolute;
     bottom: var(--size-10);
     right: var(--size-10);
-    background: var(--color-token-34);
-    color: var(--color-token-26);
+    background: var(--preview-badge-bg);
+    color: var(--text-inverse);
     font-size: var(--size-12);
     padding: var(--size-4) var(--size-10);
     border-radius: var(--size-6);
@@ -4475,7 +4481,7 @@ tr:hover {
 .quality-pill-tag {
     font-size: var(--size-10);
     padding: var(--size-1) var(--size-5);
-    background: var(--color-token-56);
+    background: var(--quality-tag-bg);
     color: var(--brand);
     border-radius: var(--size-4);
 }
@@ -4514,7 +4520,7 @@ tr:hover {
 
 .drawer-btn-primary {
     background: var(--brand);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
 }
 
 .drawer-btn-primary:hover {
@@ -4522,7 +4528,7 @@ tr:hover {
 }
 
 .drawer-btn-success {
-    background: var(--color-token-38);
+    background: var(--btn-success-bg);
     color: var(--success);
 }
 
@@ -4566,7 +4572,7 @@ tr:hover {
 .manual-mode-switch .mode-btn.active {
     background: var(--surface);
     color: var(--text);
-    box-shadow: 0 var(--size-1) var(--size-3) var(--color-token-42);
+    box-shadow: 0 var(--size-1) var(--size-3) var(--shadow-color-md);
     font-weight: 500;
 }
 
@@ -4775,7 +4781,7 @@ tr:hover {
     align-items: center;
     gap: var(--size-6);
     padding: var(--size-5) var(--size-6) var(--size-5) var(--size-12);
-    background: var(--color-token-35);
+    background: var(--time-point-chip-bg);
     color: var(--brand);
     border-radius: var(--size-16);
     font-size: var(--size-13);
@@ -4796,7 +4802,7 @@ tr:hover {
     transition: background 0.2s;
 }
 .time-point-chip-del:hover {
-    background: var(--color-token-36);
+    background: var(--time-point-chip-del-hover-bg);
 }
 .time-point-empty {
     font-size: var(--size-13);
@@ -5046,7 +5052,7 @@ tr:hover {
     border-radius: 50%;
     z-index: 2;
     background: var(--success);
-    box-shadow: 0 0 0 var(--size-2) var(--color-token-65);
+    box-shadow: 0 0 0 var(--size-2) var(--state-dot-ring);
 }
 .board-video-card.state-completed .board-card-state-dot { background: var(--success); }
 .board-video-card.state-downloading .board-card-state-dot { background: var(--brand); }
@@ -5086,8 +5092,8 @@ tr:hover {
     position: absolute;
     bottom: var(--size-6);
     right: var(--size-6);
-    background: var(--color-token-32);
-    color: var(--color-token-26);
+    background: var(--duration-overlay-soft);
+    color: var(--text-inverse);
     font-size: var(--size-11);
     padding: var(--size-1) var(--size-6);
     border-radius: var(--radius-sm);
@@ -5099,7 +5105,7 @@ tr:hover {
     top: var(--size-6);
     right: var(--size-6);
     background: var(--error);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
     font-size: var(--size-11);
     font-weight: 600;
     padding: var(--size-1) var(--size-6);
@@ -5176,7 +5182,7 @@ tr:hover {
     width: var(--size-28);
     height: var(--size-28);
     padding: 0;
-    border: 1px solid var(--divider);
+    border: var(--border-width) solid var(--divider);
     border-radius: var(--radius-full);
     background: var(--bg);
     color: var(--text-secondary);
@@ -5185,7 +5191,7 @@ tr:hover {
 }
 .board-card-action-btn:hover {
     background: var(--brand);
-    color: var(--color-token-26);
+    color: var(--text-inverse);
     border-color: var(--brand);
 }
 
@@ -5198,20 +5204,20 @@ tr:hover {
 .board-card-priority .board-card-action-btn {
     width: var(--size-24);
     height: var(--size-24);
-    font-size: 14px;
+    font-size: 0.875rem;
     line-height: 1;
 }
 .board-card-priority-value {
     min-width: var(--size-24);
     text-align: center;
-    font-size: 12px;
+    font-size: 0.75rem;
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
 }
 
 /* 下载管理顶栏队列摘要条（自老框架 style.css 5023-5028 迁移）。 */
 .queue-summary {
-    font-size: 13px;
+    font-size: 0.8125rem;
     color: var(--text-muted);
     margin-right: var(--size-8);
     white-space: nowrap;
@@ -5399,8 +5405,8 @@ tr:hover {
 .confirm-modal-container { max-width: var(--size-400); }
 .confirm-modal-message { padding: var(--radius-sm) 0 var(--radius-lg); font-size: var(--size-14); line-height: 1.6; color: var(--text-secondary); }
 .status-error { color: var(--error); }
-.premium-required { color: var(--color-token-11); }
-.premium-required-inline { color: var(--color-token-11); margin-left: var(--size-10); }
+.premium-required { color: var(--text-faint); }
+.premium-required-inline { color: var(--text-faint); margin-left: var(--size-10); }
 .empty-state-spacious { padding: var(--size-30) var(--size-20); }
 .empty-state-padded { padding: var(--size-20); }
 .status-pending { color: var(--text-muted); }
@@ -5520,7 +5526,7 @@ progress.download-item-progress-fill::-moz-progress-bar {
 }
 
 .form-note-warning {
-    border-left: 3px solid var(--warning);
+    border-left: 0.1875rem solid var(--warning);
     color: var(--warning-text);
     padding-left: 0.75rem;
 }
@@ -5544,7 +5550,7 @@ progress.download-item-progress-fill::-moz-progress-bar {
 .startup-error-content {
     width: min(32rem, 100%);
     padding: 2rem;
-    border: 1px solid var(--error);
+    border: var(--border-width) solid var(--error);
     border-radius: var(--radius-lg);
     background: var(--surface);
     box-shadow: var(--shadow-lg);
@@ -5578,10 +5584,10 @@ progress.download-item-progress-fill::-moz-progress-bar {
 
 .sr-only {
     position: absolute;
-    width: 1px;
-    height: 1px;
+    width: 0.0625rem;
+    height: 0.0625rem;
     padding: 0;
-    margin: -1px;
+    margin: -0.0625rem;
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
@@ -5621,8 +5627,8 @@ progress.download-item-progress-fill::-moz-progress-bar {
 
 .nav-tab:focus-visible,
 #tab-live button:focus-visible {
-    outline: 3px solid var(--brand);
-    outline-offset: 2px;
+    outline: 0.1875rem solid var(--brand);
+    outline-offset: 0.125rem;
 }
 
 /* 顶栏三态同步提示：页面连接 / 监控 worker / B 站新鲜度，各自独立降级。 */
@@ -5845,8 +5851,8 @@ progress.download-item-progress-fill::-moz-progress-bar {
 }
 
 .live-cover-thumb {
-    width: 128px;
-    height: 72px;
+    width: 8rem;
+    height: 4.5rem;
     border-radius: var(--radius-md);
     object-fit: cover;
     background: var(--bg);
@@ -6026,7 +6032,7 @@ progress.download-item-progress-fill::-moz-progress-bar {
 
 .live-stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
     gap: var(--size-8);
     margin-bottom: var(--size-12);
 }
@@ -6051,7 +6057,7 @@ progress.download-item-progress-fill::-moz-progress-bar {
 
 .live-sc-pins {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
     gap: var(--size-8);
     margin-bottom: var(--size-10);
 }
@@ -6098,7 +6104,7 @@ progress.download-item-progress-fill::-moz-progress-bar {
 
 .live-toolbar-row .form-control {
     width: auto;
-    min-width: 140px;
+    min-width: 8.75rem;
 }
 
 .live-events-status {
@@ -6145,8 +6151,8 @@ progress.download-item-progress-fill::-moz-progress-bar {
 .live-heat-bar {
     display: flex;
     align-items: flex-end;
-    gap: 3px;
-    min-height: 40px;
+    gap: 0.1875rem;
+    min-height: 2.5rem;
     padding: var(--size-6) 0 var(--size-8);
     overflow-x: auto;
 }
@@ -6156,7 +6162,7 @@ progress.download-item-progress-fill::-moz-progress-bar {
     width: var(--size-10);
     height: var(--size-30);
     min-width: var(--size-10);
-    padding: 0 2px;
+    padding: 0 0.125rem;
     border: 0;
     background: transparent;
     cursor: pointer;
@@ -6167,7 +6173,7 @@ progress.download-item-progress-fill::-moz-progress-bar {
 .live-heat-bar button i {
     width: 100%;
     height: var(--size-5);
-    border-radius: 2px 2px 0 0;
+    border-radius: 0.125rem 0.125rem 0 0;
     background: var(--brand);
     opacity: 0.28;
 }
@@ -6198,8 +6204,8 @@ progress.download-item-progress-fill::-moz-progress-bar {
 }
 
 .live-event-timeline {
-    max-height: 320px;
-    min-height: 120px;
+    max-height: 20rem;
+    min-height: 7.5rem;
     overflow: auto;
     border: var(--size-1) solid var(--divider);
     border-radius: var(--radius-md);
@@ -6207,7 +6213,7 @@ progress.download-item-progress-fill::-moz-progress-bar {
 
 .live-event-row {
     display: grid;
-    grid-template-columns: 64px minmax(70px, 140px) 1fr auto;
+    grid-template-columns: 4rem minmax(4.375rem, 8.75rem) 1fr auto;
     gap: var(--size-8);
     align-items: baseline;
     padding: var(--size-6) var(--size-10);
@@ -6251,15 +6257,15 @@ progress.download-item-progress-fill::-moz-progress-bar {
 }
 
 .live-event-super_chat {
-    border-left: 3px solid var(--warning);
+    border-left: 0.1875rem solid var(--warning);
 }
 
 .live-event-guard {
-    border-left: 3px solid var(--info);
+    border-left: 0.1875rem solid var(--info);
 }
 
 .live-event-link_mic_pk {
-    border-left: 3px solid var(--brand);
+    border-left: 0.1875rem solid var(--brand);
 }
 
 /* 录制任务看板行。 */
@@ -6496,13 +6502,13 @@ progress.download-item-progress-fill::-moz-progress-bar {
     }
 
     .live-sidebar {
-        max-height: 340px;
+        max-height: 21.25rem;
     }
 }
 
 @media (max-width: 620px) {
     .live-event-row {
-        grid-template-columns: 60px 1fr auto;
+        grid-template-columns: 3.75rem 1fr auto;
     }
 
     .live-event-row .live-event-text {

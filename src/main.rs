@@ -237,7 +237,10 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
             state.business.live_monitor.stop().await;
             state.bili.verify_service.stop().await;
             state.media.live_recorder.stop_all().await;
-            let _ = state.media.aria2.stop().await;
+            // 错误退出路径的尽力停止：失败留痕即可，进程随后关闭，不改变退出流程。
+            if let Err(error) = state.media.aria2.stop().await {
+                tracing::warn!(%error, "绑定主端口失败后停止 aria2 失败");
+            }
             app::setup_server::shutdown_setup_server();
             wait_background_task("Setup server", setup_handle).await;
             wait_background_task("IPC server", Some(control_handle)).await;

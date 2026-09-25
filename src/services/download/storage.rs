@@ -351,7 +351,7 @@ fn dedupe_scan_ext(filename: &str, task_type: &str) -> String {
 
 /// 去重扫描的候选判定：`{stem}.{ext}` 与冲突副本 `{stem}_{后缀}.{ext}` 是同一路流的
 /// 历史版本，参与比对。两类撞名要排除：合并产物 `{标题}_{stem}.{ext}`
-/// （`queue.rs::product_file_matches` 的成品签名，是去重后的输出而非输入），
+/// （`product.rs::product_file_matches` 的成品签名，是去重后的输出而非输入），
 /// 以及其他分P 的输入 `{bvid}_p{N}.{ext}`（分P 词根由 `file_stem_for` 生成）。
 fn dedupe_scan_matches(name: &str, stem: &str, ext: &str) -> bool {
     if !name.ends_with(&format!(".{ext}")) || !name.starts_with(stem) {

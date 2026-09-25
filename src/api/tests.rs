@@ -32,7 +32,10 @@ fn validates_positive_ids_and_fnval() {
 fn install_crypto_provider() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        // 并行测试线程可能已安装过 Provider：重复安装失败属预期，忽略即可
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok();
     });
 }
 

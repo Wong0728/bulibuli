@@ -4,18 +4,24 @@
 //! - `active_window`：博主活跃检查时段（闹钟式窗口）解析与调度计算
 //! - `blogger_check`：单个博主的视频扫描、下架/重投检测与资料变更检测
 //! - `video_window`：视频窗口截取与标题相似度（重投检测）工具函数
-//! - `video_queue`：新视频入队与弹幕/评论自动下载
+//! - `video_queue`：新视频入队（博主策略过滤、付费拦截、下载任务创建）
+//! - `video_sidecar`：入队后弹幕/评论/CC 字幕自动下载
 //! - `paywall`：充电/付费前置校验与 pay_blocked 记录落库
-//! - `scheduled_tasks`：计划弹幕下载、自动烧录与下次检查调度
+//! - `scheduled_tasks`：博主轮询调度与侧车下载进度登记
+//! - `scheduled_sidecar`：计划弹幕/评论下载调度（时间点表 + 退避）
+//! - `scheduled_burn`：自动烧录调度
 //! - `logging`：监控日志写入、查询与清理
 
 mod active_window;
 mod blogger_check;
 mod logging;
 mod paywall;
+mod scheduled_burn;
 mod scheduled_helpers;
+mod scheduled_sidecar;
 mod scheduled_tasks;
 mod video_queue;
+mod video_sidecar;
 mod video_window;
 
 pub(crate) use active_window::{

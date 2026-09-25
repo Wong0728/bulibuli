@@ -1,7 +1,9 @@
 //! 弹幕/字幕烧录服务（us-danmaku 算法移植）。
 //!
 //! 子模块划分：
-//! - `burn`：烧录入口与 FFmpeg 执行（burn_danmaku / burn_subtitle / burn_mixed）
+//! - `burn`：烧录入口编排（burn_danmaku / burn_subtitle / burn_mixed / burn_live_interactions）
+//! - `ffmpeg_exec`：FFmpeg 能力探测、烧录进程执行与 ASS 侧车降级
+//! - `source_lookup`：弹幕/字幕素材文件定位
 //! - `danmaku_source`：弹幕文件（xml/json）加载解析
 //! - `subtitle_convert`：SRT → ASS 转换与 ASS 合并
 //! - `layout`：弹幕轨道布局（R2L / TOP / BOTTOM 位置计算）
@@ -12,7 +14,9 @@
 mod ass_render;
 mod burn;
 mod danmaku_source;
+mod ffmpeg_exec;
 mod layout;
+mod source_lookup;
 mod subtitle_convert;
 
 use crate::services::video_processor::VideoProcessor;
@@ -156,9 +160,9 @@ pub async fn ffmpeg_supports_burn(
     {
         return *cached;
     }
-    let capable = burn::ffmpeg_listing_contains(&ffmpeg, "-filters", "ass").await
-        && (burn::ffmpeg_listing_contains(&ffmpeg, "-encoders", "libx264").await
-            || burn::ffmpeg_listing_contains(&ffmpeg, "-encoders", "mpeg4").await);
+    let capable = ffmpeg_exec::ffmpeg_listing_contains(&ffmpeg, "-filters", "ass").await
+        && (ffmpeg_exec::ffmpeg_listing_contains(&ffmpeg, "-encoders", "libx264").await
+            || ffmpeg_exec::ffmpeg_listing_contains(&ffmpeg, "-encoders", "mpeg4").await);
     cache
         .lock()
         .unwrap_or_else(|error| error.into_inner())

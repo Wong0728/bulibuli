@@ -1,18 +1,21 @@
-//! 下载监控循环：轮询 aria2 状态并驱动任务状态机（generation 守卫防陈旧写入）。
+//! 下载监控循环主体：轮询 aria2 状态并驱动任务状态机（generation 守卫防陈旧写入）。
+//!
+//! 本文件只保留轮询节奏与各分支的编排；单任务状态判定、磁盘策略与
+//! aria2 不可用收敛在 [`super::monitor_poll`]，失败终态在 [`super::terminal`]，
+//! generation 守卫写库在 [`super::guarded_write`]。
 
-use crate::domain::{DownloadStage, DownloadStatus};
-use crate::models::{download_task, history};
+use crate::domain::DownloadStatus;
+use crate::models::download_task;
 use crate::services::file_safety::ensure_disk_space;
 use futures::{stream, StreamExt};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
-use serde_json::json;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use super::completion::CompleteOutcome;
-use super::{task_cache_key, DownloadManager, ProgressCache};
+use super::monitor_poll::{DiskGuardState, PollAccumulators};
+use super::DownloadManager;
 
 impl DownloadManager {
     /// 对账 DB 状态为 paused 但仍有 gid 的任务：若 aria2 报告该 gid 仍在
@@ -66,199 +69,6 @@ impl DownloadManager {
         }
     }
 
-    async fn queue_terminal_failure(
-        &self,
-        task: &download_task::Model,
-        error: String,
-        updates: &mut Vec<(String, i32, i64, download_task::ActiveModel)>,
-    ) {
-        let mut model: download_task::ActiveModel = task.clone().into();
-        model.status = Set("failed".to_string());
-        model.error = Set(Some(error.clone()));
-        model.speed = Set(0);
-        updates.push((task.bvid.clone(), task.id, task.generation, model));
-        self.progress_cache
-            .lock()
-            .await
-            .remove(&task_cache_key(&task.bvid, task.cid));
-        self.cleanup_failed_transfer_leftovers(task).await;
-        self.mark_history_failed(&task.bvid, task.cid, &task.task_type)
-            .await;
-    }
-
-    /// 任务进入失败终态时同步看板记录。
-    ///
-    /// 看板"失败"Tab 按 `history.state = 'failed'` 过滤，而此前没有任何代码写过该值，
-    /// 失败的手动任务会从三个 Tab 同时消失（记录被删掉，产物也无人认领）。
-    /// 只接管下载中的占位行：已完成/已下架/付费受限/校验异常不能被一次下载失败改写。
-    /// 例外：DASH 音视频先完成的一方会把行写成 completed，但 file_path 指向
-    /// .m4s/.m4a 中间产物（成品要等合并回写）；video 侧终态失败意味着合并
-    /// 不会再发生，这条"假完成"行回收为 failed，避免看板承诺不可播放的半成品。
-    /// audio 侧不回收——音频重试耗尽后有纯视频降级合并兜底。
-    pub(super) async fn mark_history_failed(
-        &self,
-        bvid: &str,
-        cid: Option<i64>,
-        failed_task_type: &str,
-    ) {
-        let mut query = history::Entity::find().filter(history::Column::Bvid.eq(bvid));
-        query = match cid {
-            Some(c) => query.filter(history::Column::Cid.eq(c)),
-            None => query.filter(history::Column::Cid.is_null()),
-        };
-        let row = match query.one(&self.db).await {
-            Ok(Some(row)) => row,
-            Ok(None) => return,
-            Err(e) => {
-                warn!("查询待标记失败的历史记录失败 {bvid}: {e}");
-                return;
-            }
-        };
-        if !matches!(
-            row.state.as_deref(),
-            None | Some("pending") | Some("downloading")
-        ) {
-            let reclaimable = failed_task_type == "video"
-                && row.state.as_deref() == Some("completed")
-                && row
-                    .file_path
-                    .as_deref()
-                    .is_some_and(|p| p.ends_with(".m4s") || p.ends_with(".m4a"));
-            if !reclaimable {
-                return;
-            }
-            let mut model: history::ActiveModel = row.into();
-            model.state = Set(Some("failed".to_string()));
-            // 清掉完成时间，让后续重试成功的 add_to_history 能重新接管此行。
-            model.download_time = Set(None);
-            if let Err(e) = model.update(&self.db).await {
-                warn!("回收假完成历史记录失败 {bvid}: {e}");
-            }
-            return;
-        }
-        let mut model: history::ActiveModel = row.into();
-        model.state = Set(Some("failed".to_string()));
-        if let Err(e) = model.update(&self.db).await {
-            warn!("同步失败状态到历史记录失败 {bvid}: {e}");
-        }
-    }
-
-    /// aria2 任务判失败后清理 `.downloading` 临时文件与对应 `.aria2` 控制文件，
-    /// 与 native 路径"失败即删残片"的行为对齐，避免反复失败在下载目录累积垃圾文件。
-    pub(super) async fn cleanup_failed_transfer_leftovers(&self, task: &download_task::Model) {
-        let Some(filename) = task
-            .filename
-            .as_deref()
-            .filter(|name| name.ends_with(".downloading"))
-        else {
-            return;
-        };
-        let Some(dir) = task.download_dir.as_deref() else {
-            return;
-        };
-        let dir = PathBuf::from(dir);
-        for leftover in [dir.join(filename), dir.join(format!("{filename}.aria2"))] {
-            // 路径来自 DB（旧库可能残留越界值），删除前确认仍位于下载根目录内
-            if crate::services::file_safety::ensure_existing_within_root(
-                &self.paths.download_dir,
-                &leftover,
-            )
-            .await
-            .is_err()
-            {
-                continue;
-            }
-            match tokio::fs::remove_file(&leftover).await {
-                Ok(()) => info!("已清理下载残片: {}", leftover.display()),
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    warn!("清理下载残片失败 {}: {e}", leftover.display());
-                }
-                Err(_) => {}
-            }
-        }
-    }
-
-    /// 按 generation 守卫应用一次任务字段更新：仅当数据库中该任务的 generation
-    /// 仍等于轮询快照时才写入。用户重试会递增 generation，此守卫用于丢弃陈旧快照。
-    /// 返回是否成功写入。
-    pub(super) async fn apply_guarded_update(
-        &self,
-        bvid: &str,
-        task_id: i32,
-        expected_generation: i64,
-        model: download_task::ActiveModel,
-    ) -> bool {
-        match download_task::Entity::update_many()
-            .set(model)
-            .filter(download_task::Column::Id.eq(task_id))
-            .filter(download_task::Column::Generation.eq(expected_generation))
-            .exec(&self.db)
-            .await
-        {
-            Ok(result) => {
-                if result.rows_affected == 1 {
-                    true
-                } else {
-                    warn!("跳过陈旧任务状态写入（generation 已变化）: {bvid}");
-                    false
-                }
-            }
-            Err(sea_orm::DbErr::RecordNotUpdated) => {
-                warn!("跳过陈旧任务状态写入（generation 已变化）: {bvid}");
-                false
-            }
-            Err(error) => {
-                error!("更新下载任务失败 {bvid}: {error}");
-                false
-            }
-        }
-    }
-
-    async fn apply_guarded_updates(
-        &self,
-        updates: Vec<(String, i32, i64, download_task::ActiveModel)>,
-    ) -> HashSet<i32> {
-        if updates.is_empty() {
-            return HashSet::new();
-        }
-        let mut updated_ids = HashSet::new();
-        let transaction = match self.db.begin().await {
-            Ok(transaction) => transaction,
-            Err(error) => {
-                error!("开始下载任务批量更新事务失败: {error}");
-                return HashSet::new();
-            }
-        };
-        for (bvid, task_id, generation, model) in updates {
-            match download_task::Entity::update_many()
-                .set(model)
-                .filter(download_task::Column::Id.eq(task_id))
-                .filter(download_task::Column::Generation.eq(generation))
-                .exec(&transaction)
-                .await
-            {
-                Ok(result) if result.rows_affected == 1 => {
-                    updated_ids.insert(task_id);
-                }
-                Ok(_) => {
-                    warn!("跳过陈旧任务批量写入（generation 已变化）: {bvid}");
-                }
-                Err(sea_orm::DbErr::RecordNotUpdated) => {
-                    warn!("跳过陈旧任务状态写入（generation 已变化）: {bvid}");
-                }
-                Err(error) => {
-                    error!("批量更新下载任务失败 {bvid}: {error}");
-                    return HashSet::new();
-                }
-            }
-        }
-        if let Err(error) = transaction.commit().await {
-            error!("提交下载任务批量更新事务失败: {error}");
-            return HashSet::new();
-        }
-        updated_ids
-    }
-
     pub(super) async fn monitor_loop(&self) {
         // gid 缺失任务的首见时间：超过宽限期仍无 gid 则判失败（防悬置）
         let mut gidless_since: HashMap<i32, Instant> = HashMap::new();
@@ -273,9 +83,7 @@ impl DownloadManager {
         // aria2 本次失联起点：宽限窗口内不批量置 failed（覆盖重启抖动）
         let mut aria2_unavailable_since: Option<Instant> = None;
         let mut status_failures: HashMap<i32, u8> = HashMap::new();
-        let mut disk_full_notified = false;
-        // 磁盘满时被自动暂停的任务 ID：恢复后据此自动续传。
-        let mut disk_paused_ids: Vec<i32> = Vec::new();
+        let mut disk = DiskGuardState::default();
         let mut last_audio_retry = Instant::now() - std::time::Duration::from_secs(30);
         let mut last_paused_check = Instant::now() - std::time::Duration::from_secs(30);
         let mut last_disk_check = Instant::now() - std::time::Duration::from_secs(15);
@@ -339,85 +147,11 @@ impl DownloadManager {
                     .map(|error| error.to_string());
                 last_disk_check = Instant::now();
             }
-            if let Some(error) = disk_space_error.as_deref() {
-                // 逐任务暂停（不调全局 pauseAll）：与逐任务路径并发会互相误判
-                for task in &all_tasks {
-                    if let Some(gid) = &task.gid {
-                        if let Err(pause_error) = self.pause_gid_with_fallback(gid).await {
-                            warn!("磁盘空间不足时暂停 aria2 任务 gid={gid} 失败: {pause_error}");
-                        }
-                    }
-                    if self
-                        .state_service
-                        .transition(
-                            task.id,
-                            task.generation,
-                            DownloadStatus::Paused,
-                            DownloadStage::Transferring,
-                        )
-                        .await
-                        .is_ok()
-                    {
-                        disk_paused_ids.push(task.id);
-                    } else {
-                        warn!(task_id = task.id, "磁盘空间不足时持久化暂停状态失败");
-                    }
-                }
-                let mut native = self.native_tasks.lock().await;
-                for task in &all_tasks {
-                    if let Some(token) = native.remove(&task.id) {
-                        token.cancel();
-                    }
-                }
-                if !disk_full_notified {
-                    if let Err(notify_error) = self
-                        .ws
-                        .broadcast_system(
-                            "download:disk-full",
-                            json!({ "message": error }),
-                            crate::ws::NoticeAudience::CanAct,
-                        )
-                        .await
-                    {
-                        warn!("推送磁盘空间不足事件失败: {notify_error}");
-                    }
-                    disk_full_notified = true;
-                }
+            if self
+                .handle_disk_pressure(&all_tasks, disk_space_error.as_deref(), &mut disk)
+                .await
+            {
                 continue;
-            }
-            if disk_full_notified {
-                if let Err(error) = self
-                    .ws
-                    .broadcast_system(
-                        "download:disk-recovered",
-                        json!({}),
-                        crate::ws::NoticeAudience::CanAct,
-                    )
-                    .await
-                {
-                    warn!("推送磁盘恢复事件失败: {error}");
-                }
-                disk_full_notified = false;
-                // 磁盘恢复：自动续传因磁盘满被暂停的任务（后台执行，不阻塞监控循环）。
-                let ids = std::mem::take(&mut disk_paused_ids);
-                if !ids.is_empty() {
-                    info!("磁盘空间已恢复，自动续传 {} 个任务", ids.len());
-                    let manager = self.clone();
-                    let cancellation = self.cancellation.clone();
-                    let handle = tokio::spawn(async move {
-                        for id in ids {
-                            tokio::select! {
-                                _ = cancellation.cancelled() => break,
-                                result = manager.resume_task(Some(id)) => {
-                                    if let Err(error) = result {
-                                        debug!(task_id = id, "磁盘恢复后自动续传未完成: {error}");
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    *self.disk_resume_handle.lock().await = Some(handle);
-                }
             }
 
             if all_tasks.is_empty() {
@@ -442,38 +176,7 @@ impl DownloadManager {
                 const ARIA2_FAILURE_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
                 if aria2_fail_count >= 3 && unavailable_for >= ARIA2_FAILURE_GRACE {
                     warn!("Aria2 持续不可用，将 {} 个下载任务标记为失败", tasks.len());
-                    for task in &tasks {
-                        let mut model: download_task::ActiveModel = task.clone().into();
-                        model.status = Set("failed".to_string());
-                        model.error = Set(Some("Aria2 下载器不可用".to_string()));
-                        model.speed = Set(0);
-                        // generation 守卫：避免覆盖用户重试后重置的新状态。
-                        let updated = self
-                            .apply_guarded_update(&task.bvid, task.id, task.generation, model)
-                            .await;
-                        // 任务终态：清理 DB 节流与进度缓存
-                        self.progress_cache
-                            .lock()
-                            .await
-                            .remove(&task_cache_key(&task.bvid, task.cid));
-                        if updated {
-                            self.broadcast_progress(
-                                task,
-                                "failed",
-                                task.progress_percent,
-                                task.downloaded_size,
-                                task.total_size,
-                                0,
-                                Some("Aria2 下载器不可用"),
-                            )
-                            .await;
-                            // 终态收敛：与 queue_terminal_failure 同口径，
-                            // 否则记录停在 downloading，看板三个 Tab 都不可见。
-                            self.cleanup_failed_transfer_leftovers(task).await;
-                            self.mark_history_failed(&task.bvid, task.cid, &task.task_type)
-                                .await;
-                        }
-                    }
+                    self.fail_all_tasks_when_aria2_unavailable(&tasks).await;
                     aria2_fail_count = 0;
                 }
                 continue;
@@ -490,12 +193,12 @@ impl DownloadManager {
                 self.paused_orphan_reconcile().await;
             }
 
-            let mut to_update: Vec<(String, i32, i64, download_task::ActiveModel)> = Vec::new();
-            // GID 失效被判失败的任务：待 guarded 写库确认后补发一次 failed 进度广播
-            let mut gid_lost_failures: Vec<download_task::Model> = Vec::new();
-            let mut deferred_progress: Vec<(download_task::Model, String, i32, i64, i64, i64)> =
-                Vec::new();
-            let mut completed_bvids: Vec<(String, Option<i64>, Option<String>)> = Vec::new();
+            let mut acc = PollAccumulators {
+                to_update: Vec::new(),
+                gid_lost_failures: Vec::new(),
+                deferred_progress: Vec::new(),
+                completed_bvids: Vec::new(),
+            };
             let gid_tasks = tasks
                 .iter()
                 .filter_map(|task| task.gid.clone().map(|gid| (task.id, gid)))
@@ -508,262 +211,22 @@ impl DownloadManager {
                 .collect::<HashMap<_, _>>()
                 .await;
 
-            for task in tasks {
-                let Some(gid) = &task.gid else {
-                    // gid 缺失：add_task_inner 先插行、投递 aria2 成功后才回写 gid，
-                    // 正常窗口不足 1 秒；若投递失败会留下 gid=NULL 的行，
-                    // 缺少引擎进度超过 60 秒后判失败，避免任务永久悬空。
-                    let first_seen = *gidless_since.entry(task.id).or_insert_with(Instant::now);
-                    if first_seen.elapsed() >= std::time::Duration::from_secs(60) {
-                        gidless_since.remove(&task.id);
-                        warn!("任务 {} 超过 60 秒无 aria2 GID，标记为失败", task.bvid);
-                        self.queue_terminal_failure(
-                            &task,
-                            "任务缺少 aria2 GID，无法监控（投递可能失败）".to_string(),
-                            &mut to_update,
-                        )
-                        .await;
-                    }
-                    continue;
-                };
-                gidless_since.remove(&task.id);
-                {
-                    let Some(status_result) = aria_statuses.remove(&task.id) else {
-                        continue;
-                    };
-                    match status_result {
-                        Ok(status) => {
-                            status_failures.remove(&task.id);
-                            let mut model: download_task::ActiveModel = task.clone().into();
-                            // 更新内存进度缓存，减少数据库查询压力（按分P粒度隔离）
-                            {
-                                let mut cache = self.progress_cache.lock().await;
-                                cache.insert(
-                                    task_cache_key(&task.bvid, task.cid),
-                                    ProgressCache {
-                                        progress_percent: status.progress_percent,
-                                        downloaded_size: status.downloaded_size,
-                                        total_size: status.total_size,
-                                        speed: status.speed,
-                                    },
-                                );
-                            }
-
-                            match status.status.as_str() {
-                                "complete" => {
-                                    match self.handle_complete(&task, &status).await {
-                                        CompleteOutcome::Skip { clear_throttle } => {
-                                            if clear_throttle {
-                                                self.progress_cache
-                                                    .lock()
-                                                    .await
-                                                    .remove(&task_cache_key(&task.bvid, task.cid));
-                                            }
-                                            continue;
-                                        }
-                                        CompleteOutcome::Finished { uid } => {
-                                            // 任务已终态，清理 DB 写入节流缓存，避免长期运行后 HashMap 无限增长
-                                            self.progress_cache
-                                                .lock()
-                                                .await
-                                                .remove(&task_cache_key(&task.bvid, task.cid));
-                                            // 添加到下载历史并触发音视频合并检查
-                                            completed_bvids.push((
-                                                task.bvid.clone(),
-                                                task.cid,
-                                                uid,
-                                            ));
-                                        }
-                                    }
-                                }
-                                "error" => {
-                                    if task.status != "failed" {
-                                        info!(
-                                            "[DownloadManager] 下载失败: {} ({}) 错误: {}",
-                                            task.bvid,
-                                            task.task_type,
-                                            status.error_message.as_deref().unwrap_or("未知错误")
-                                        );
-                                        // 失败计入坏 CDN 熔断（两次即熔断 10 分钟），
-                                        // 重试重新解析 URL 时 choose_url 会避开该 host
-                                        if let Some(host) = task
-                                            .url
-                                            .as_deref()
-                                            .and_then(|u| url::Url::parse(u).ok())
-                                            .and_then(|u| u.host_str().map(str::to_owned))
-                                        {
-                                            self.bili_api.bad_cdns().record_failure(&host).await;
-                                        }
-                                        // 手动下载任务不携带 UID，避免混入博主自动监测日志。
-                                        let uid = if task.source.as_deref() == Some("manual") {
-                                            None
-                                        } else {
-                                            self.get_blogger_uid_from_history(&task.bvid).await
-                                        };
-                                        self.log_bvid(
-                                            &task.bvid,
-                                            uid.as_deref(),
-                                            &format!(
-                                                "下载失败（{}）：{}",
-                                                task.task_type,
-                                                status
-                                                    .error_message
-                                                    .as_deref()
-                                                    .unwrap_or("未知错误")
-                                            ),
-                                            "error",
-                                        )
-                                        .await;
-                                    }
-                                    self.queue_terminal_failure(
-                                        &task,
-                                        status
-                                            .error_message
-                                            .clone()
-                                            .unwrap_or_else(|| "未知下载错误".to_string()),
-                                        &mut to_update,
-                                    )
-                                    .await;
-                                }
-                                "active" => {
-                                    let filename_changed = !status.filename.is_empty()
-                                        && status.filename != "Unknown"
-                                        && task.filename.as_deref() != Some(&status.filename);
-                                    if filename_changed {
-                                        model.filename = Set(Some(status.filename.clone()));
-                                    }
-                                    if task.status != "downloading" || filename_changed {
-                                        if task.status != "downloading" {
-                                            info!(
-                                                "[DownloadManager] 开始下载: {} ({})",
-                                                task.bvid, task.task_type
-                                            );
-                                        }
-                                        model.status = Set("downloading".to_string());
-                                        to_update.push((
-                                            task.bvid.clone(),
-                                            task.id,
-                                            task.generation,
-                                            model,
-                                        ));
-                                    }
-                                    deferred_progress.push((
-                                        task.clone(),
-                                        "downloading".to_string(),
-                                        status.progress_percent,
-                                        status.downloaded_size,
-                                        status.total_size,
-                                        status.speed,
-                                    ));
-                                }
-                                "waiting" if task.status != "pending" => {
-                                    info!(
-                                        "[DownloadManager] 任务等待中: {} ({})",
-                                        task.bvid, task.task_type
-                                    );
-                                    model.status = Set("pending".to_string());
-                                    to_update.push((
-                                        task.bvid.clone(),
-                                        task.id,
-                                        task.generation,
-                                        model,
-                                    ));
-                                    deferred_progress.push((
-                                        task.clone(),
-                                        "pending".to_string(),
-                                        task.progress_percent,
-                                        task.downloaded_size,
-                                        task.total_size,
-                                        0,
-                                    ));
-                                }
-                                "paused" if task.status != "paused" => {
-                                    info!(
-                                        "[DownloadManager] 任务已暂停: {} ({})",
-                                        task.bvid, task.task_type
-                                    );
-                                    model.status = Set("paused".to_string());
-                                    to_update.push((
-                                        task.bvid.clone(),
-                                        task.id,
-                                        task.generation,
-                                        model,
-                                    ));
-                                    deferred_progress.push((
-                                        task.clone(),
-                                        "paused".to_string(),
-                                        task.progress_percent,
-                                        task.downloaded_size,
-                                        task.total_size,
-                                        0,
-                                    ));
-                                }
-                                "waiting" | "paused" => {}
-                                "stopped" | "removed" => {
-                                    // 任务被停止或移除，标记为失败
-                                    if task.status != "failed" {
-                                        info!(
-                                            "[DownloadManager] 任务停止: {} ({}) 状态: {}",
-                                            task.bvid, task.task_type, status.status
-                                        );
-                                    }
-                                    self.queue_terminal_failure(
-                                        &task,
-                                        format!("任务已停止 (aria2 状态: {})", status.status),
-                                        &mut to_update,
-                                    )
-                                    .await;
-                                }
-                                _ => {}
-                            }
-                        }
-                        Err(e) => {
-                            // GID 已失效（下载器重启后 session 丢失/记录被清理）是永久性
-                            // 错误：立即判失败并走既有自动重试机制（重新解析 URL 重下），
-                            // 不再按瞬时故障累计 3 次，避免每 2 秒刷一遍无效轮询告警。
-                            if matches!(
-                                e.downcast_ref::<crate::services::aria2::Aria2Error>(),
-                                Some(crate::services::aria2::Aria2Error::GidNotFound(_))
-                            ) {
-                                status_failures.remove(&task.id);
-                                info!(
-                                    "[DownloadManager] aria2 已丢失任务 {} 的 GID={gid}，标记为失败等待自动重试",
-                                    task.bvid
-                                );
-                                self.queue_terminal_failure(
-                                    &task,
-                                    "aria2 已丢失该下载任务（GID 失效，可能因程序重启）"
-                                        .to_string(),
-                                    &mut to_update,
-                                )
-                                .await;
-                                gid_lost_failures.push(task.clone());
-                                continue;
-                            }
-                            let failures = status_failures.entry(task.id).or_default();
-                            *failures = failures.saturating_add(1);
-                            warn!("获取 aria2 状态失败 (gid={gid}, attempt={failures}): {e}");
-                            if *failures >= 3 {
-                                status_failures.remove(&task.id);
-                                self.queue_terminal_failure(
-                                    &task,
-                                    format!("Aria2 状态连续 3 次查询失败: {e}"),
-                                    &mut to_update,
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                }
-            }
+            self.poll_gid_tasks(
+                &tasks,
+                &mut aria_statuses,
+                &mut gidless_since,
+                &mut status_failures,
+                &mut acc,
+            )
+            .await;
 
             // 状态/文件名批量写入与进度广播解耦：aria2 任务落库时已是 downloading，
             // 若以“本轮是否更新”为门槛，稳态下进度推送与 DB 落盘会完全停摆
             // （DB 进度从 0 直接跳 100，WS 无下载中事件）。进度提交本身已有
             // generation 守卫与合并去抖，可无条件执行。
-            let updated_ids = self.apply_guarded_updates(to_update).await;
+            let updated_ids = self.apply_guarded_updates(acc.to_update).await;
             // 仅对写库成功的任务广播失败进度，避免覆盖用户重试后的新状态
-            for task in &gid_lost_failures {
+            for task in &acc.gid_lost_failures {
                 if !updated_ids.contains(&task.id) {
                     continue;
                 }
@@ -778,12 +241,12 @@ impl DownloadManager {
                 )
                 .await;
             }
-            for (task, status, progress, downloaded, total, speed) in deferred_progress {
+            for (task, status, progress, downloaded, total, speed) in acc.deferred_progress {
                 self.broadcast_progress(&task, &status, progress, downloaded, total, speed, None)
                     .await;
             }
 
-            for (bvid, cid, uid) in completed_bvids {
+            for (bvid, cid, uid) in acc.completed_bvids {
                 if let Err(e) = self.on_task_completed(&bvid, cid, uid.as_deref()).await {
                     error!("处理完成任务失败 {bvid}: {e}");
                 }

@@ -176,7 +176,11 @@ impl AuditLogService {
                         new_version,
                         request_id: ctx.request_id.clone(),
                     };
-                    let _ = self.event_sender.send(event);
+                    // 无 WebSocket 订阅者时广播发送失败属正常情况（无人在线），
+                    // 仅调试留痕，不影响审计落库。
+                    if let Err(error) = self.event_sender.send(event) {
+                        tracing::debug!(%error, "审计事件无订阅者，未广播");
+                    }
                 }
                 tracing::debug!(audit_id = inserted.id, broadcast, "audit log recorded");
             }

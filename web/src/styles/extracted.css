@@ -1,0 +1,40 @@
+/* ============================================================
+ * extracted.css · 内联样式迁移（质量门禁整改）
+ * ------------------------------------------------------------
+ * 存放从 .vue / .ts 源码中清理出来的样式规则，随 index.css 在
+ * 全量样式表之后加载（覆盖原版工具类不受影响）。
+ *
+ * 规则约束（与 build.py CSS 门禁一致）：
+ *   - 颜色一律 var(--token)（token 见 tokens.css），禁止硬编码色值；
+ *   - 尺寸用 rem（px ÷ 16），禁止 px 字面量；
+ *   - 不使用 var() 兜底写法。
+ * ============================================================ */
+
+/* VideoDrawer.vue：剪贴板兜底 textarea（navigator.clipboard 不可用时）。
+ * 原内联：position: fixed; left: -9999px —— 移出屏幕避免闪烁。 */
+.clipboard-fallback-textarea {
+    position: fixed;
+    left: -624.9375rem;
+}
+
+/* ConfirmDialogList.vue：确认弹窗正文保留换行与舒适行高。 */
+.confirm-modal-message-text {
+    white-space: pre-wrap;
+    line-height: 1.6;
+}
+
+/* TabHistory.vue：看板底部「加载更多」容器。 */
+.history-load-more-wrap {
+    text-align: center;
+    margin-top: 0.75rem;
+}
+
+/* TabLive.vue：录制看板「合并任务」区块。 */
+.live-merge-jobs-block {
+    margin-top: 1rem;
+}
+
+/* 图片加载失败兜底：等价于原 @error 内联 display:none（无占位兄弟节点的图）。 */
+.img-hidden {
+    display: none;
+}

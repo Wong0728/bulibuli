@@ -184,7 +184,9 @@ impl Aria2Manager {
                 if let Err(error) =
                     std::fs::set_permissions(&secret_config, std::fs::Permissions::from_mode(0o600))
                 {
-                    let _ = std::fs::remove_file(&secret_config);
+                    // 尽力清理临时认证配置：启动即将失败，删除失败仅残留一个
+                    // 临时文件（0600 权限未设置成功），不值得为它掩盖真实错误。
+                    std::fs::remove_file(&secret_config).ok();
                     return Err(error).context("保护 Aria2 临时认证配置失败");
                 }
             }

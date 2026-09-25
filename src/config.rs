@@ -249,7 +249,7 @@ pub(crate) fn enforce_private_dir(path: &std::path::Path) -> Result<()> {
             .with_context(|| format!("设置目录权限失败: {}", path.display()))?;
     }
     #[cfg(not(unix))]
-    let _ = path;
+    let _path = path;
     Ok(())
 }
 

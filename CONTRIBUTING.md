@@ -8,10 +8,12 @@ Run the checks relevant to the change:
 
 ```bash
 cargo fmt --all -- --check
-cargo check --all-targets
+cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets
 python build.py --check
 ```
+
+`python build.py --check` 是全量门禁入口：Rust 三件套、前端构建与冒烟、源码规范（行数上限、`let _ =`、内联样式、CSS token 纪律等）全部为硬失败，没有 advisory 级。只改打包侧时可用 `--check --skip-rust-gates --windows-only` 单独验证 Windows 安装脚本编码与资源哈希；CI 里前端产物已先行构建时传 `--skip-frontend-vue` 复用，避免二次构建。
 
 Frontend changes also require:
 

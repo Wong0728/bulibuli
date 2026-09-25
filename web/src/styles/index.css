@@ -16,9 +16,10 @@
 @import "./live.css";
 @import "./drawer.css";
 @import "./style.css";
+@import "./extracted.css";
 
 /* —— 顶部兼容：原 vanilla JS 留下的 utility class —— */
-.sr-only { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.sr-only { position: absolute; left: -9999px; width: 0.0625rem; height: 0.0625rem; overflow: hidden; }
 .tone-brand { color: var(--bulibuli-brand); }
 .tone-success { color: var(--bulibuli-success); }
 .tone-error { color: var(--bulibuli-error); }
@@ -45,17 +46,17 @@ img { max-width: 100%; }
 /* ARIA2 状态点（保留：原版 header 顶栏也用） */
 .aria2-dot {
     display: inline-block;
-    width: 8px;
-    height: 8px;
+    width: 0.5rem;
+    height: 0.5rem;
     border-radius: 50%;
-    margin-left: 6px;
+    margin-left: 0.375rem;
     vertical-align: middle;
 }
 
 /* aria2 状态点可点击（弹诊断信息），也可键盘触发。 */
 .aria2-dot:focus-visible {
-    outline: 2px solid var(--brand, #165dff);
-    outline-offset: 2px;
+    outline: 0.125rem solid var(--brand);
+    outline-offset: 0.125rem;
 }
-.aria2-dot.connected { background: var(--bulibuli-success); box-shadow: 0 0 6px rgba(82, 196, 26, 0.4); }
+.aria2-dot.connected { background: var(--bulibuli-success); box-shadow: 0 0 0.375rem var(--glow-success); }
 .aria2-dot.disconnected { background: var(--bulibuli-text-faint); }

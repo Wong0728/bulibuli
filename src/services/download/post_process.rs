@@ -104,7 +104,7 @@ impl DownloadManager {
                 let merge_in_progress = merge_in_progress_for_cb.clone();
                 let cache_key_for_cb = cache_key_for_cb.clone();
                 let source = source_for_cb.clone();
-                let _ = background_tasks.spawn("merge_callback", async move {
+                let merge_callback_registered = background_tasks.spawn("merge_callback", async move {
                     // 合并任务结束，释放幂等标记
                     {
                         let mut guard = match merge_in_progress.lock() {
@@ -147,6 +147,11 @@ impl DownloadManager {
                         warn!("推送合并结果失败 bvid={bvid}: {error}");
                     }
                 });
+                // 登记器已停止接收（应用正在关机）时回调任务不会运行；
+                // 合并幂等标记由下方 on_abort 兜底移除，这里留痕即可。
+                if !merge_callback_registered {
+                    warn!("合并结果回调任务未能登记（应用正在关机）bvid={bvid_string}");
+                }
             },
         ));
 

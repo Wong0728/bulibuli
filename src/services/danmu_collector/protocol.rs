@@ -478,7 +478,7 @@ mod tests {
         #[test]
         fn arbitrary_wire_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..=4096)) {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = parse_commands(&bytes);
+            let _outcome = parse_commands(&bytes);
             }));
             prop_assert!(outcome.is_ok());
         }

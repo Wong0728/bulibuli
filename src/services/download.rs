@@ -2,32 +2,50 @@
 //!
 //! 子模块职责：
 //! - `manager`：构造、监控启停与断点续传恢复
-//! - `monitor`：monitor_loop 轮询 aria2 状态并驱动任务状态机
+//! - `monitor`：monitor_loop 轮询主体（节奏控制与各分支编排）
+//! - `monitor_poll`：单任务 aria2 状态判定、磁盘满/恢复策略与 aria2 不可用收敛
+//! - `terminal`：任务失败终态收敛（失败行登记、history 同步、下载残片清理）
+//! - `guarded_write`：generation 守卫的任务写库（单条与批量）
 //! - `completion`：单任务完成处理（防抖闸门、去重归位、落库与封面）
-//! - `queue`：任务入队、重试与移除
+//! - `queue`：任务入队链路与近期完成幂等缓存
+//! - `product`：最终产物文件识别（视频/音频成片存在性判定）
+//! - `dispatch`：向引擎投递任务（新任务与既有任务重新派发）
+//! - `retry`：任务重试与移除、退避额度、占位 history 清理
+//! - `pause`：任务暂停（单任务/全局、幂等与降级）
+//! - `resume`：任务恢复（单任务/全局、gid 复核与回滚）
 //! - `backoff`：重试退避与任务缓存清理
-//! - `dispatch`：向 aria2 投递下载任务
 //! - `engine`：下载引擎枚举分发（aria2 优先，完全不可用时降级原生兜底）
 //! - `native`：reqwest 原生流式下载兜底
 //! - `audio_retry`：音频失败自动重试与纯视频降级
 //! - `post_process`：下载完成后的音视频合并触发
-//! - `history_sync`：历史记录写入与封面落盘
+//! - `history_sync`：完成记录 UPSERT 写入与历史/终态任务清理
+//! - `history_placeholder`：手动入队的 history 占位记录
+//! - `cover`：封面下载落盘与本地定位
 //! - `storage`：下载目录派生与 SHA-256 去重归位
 //! - `status`：状态查询、队列摘要与进度广播
 
 mod audio_retry;
 mod backoff;
 mod completion;
+mod cover;
 mod dispatch;
 mod engine;
+mod guarded_write;
+mod history_placeholder;
 mod history_sync;
 mod manager;
 mod monitor;
+mod monitor_poll;
 mod native;
+mod pause;
 mod post_process;
+mod product;
 mod queue;
+mod resume;
+mod retry;
 mod status;
 mod storage;
+mod terminal;
 mod video_retry;
 
 use crate::config::{AppConfig, AppPaths};

@@ -288,7 +288,11 @@ impl DownloadManager {
                     model.next_retry_at = Set(Some(now + delay));
                     if let Err(e) = model.update(&self.db).await {
                         if let Some(gid) = runtime_gid.as_deref() {
-                            let _ = self.aria2.remove(gid).await;
+                            if let Err(remove_error) = self.aria2.remove(gid).await {
+                                warn!(
+                                    "[音频自动重试] 回滚 Aria2 任务失败 gid={gid}: {remove_error}"
+                                );
+                            }
                         }
                         error!("[音频自动重试] 更新任务失败 {bvid}，已取消外部传输: {e}");
                         continue;

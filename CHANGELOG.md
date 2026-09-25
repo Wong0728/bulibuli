@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+开发者体验与质量门禁（不影响运行时行为，升级无感知）：
+
+- 质量门禁去虚存实：advisory 级源码规范（`let _ =`、`#[allow(dead_code)]`、内联样式、CSS token 纪律、行数上限等 9 项）此前常年违规却从不阻断，历史违规全部清理后统一升级为硬失败；`frontend success contract` 检查正则收窄，不再误伤 `toast.success()` 等合法调用；CSS 检查剥离注释后再扫描。
+- CI 消除重复劳动：Rust job 删去被 clippy 包含的 `cargo check`；前端产物在同一 job 内只构建一次（`--skip-frontend-vue` 复用）；Windows 冒烟只跑平台专属检查（`--windows-only`）；e2e job 补 Playwright 浏览器缓存；依赖审计收敛为 cargo-deny 单一来源（豁免清单统一进 `deny.toml`）。
+- 代码结构治理：src/ 下 34 个超 500 行文件按职责真实拆分为模块（公共签名与行为不变），前端三个千行级组件（TabLive/TabSettings/VideoDrawer）拆分为子组件与 composables；139+ 处 `let _ =` 按语义改为显式处理（`.ok()` 加注释或 tracing 留痕）；66 个数字命名 CSS token 全部语义化并删除 14 个死 token。
+
 ## v2.0.1
 
 补丁版本：汇总 v2.0.0 正式版发布之后合入主线的全部修复，其中含多项安全加固。替换程序文件即可升级，`data/` 不受影响；数据库会由迁移自动校正，无需手工处理。

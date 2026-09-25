@@ -20,3 +20,9 @@ export function imageError(event: Event) {
 export function hideImageOnError(event: Event) {
   (event.target as HTMLImageElement).hidden = true;
 }
+
+/** 加载失败：给图片加 .img-hidden class（extracted.css 定义 display:none）隐藏。
+ * 用于抽屉里没有占位兄弟节点的封面 / 头像，等价于原内联 style.display='none'。 */
+export function hideImgOnError(event: Event) {
+  (event.target as HTMLElement).classList.add('img-hidden');
+}

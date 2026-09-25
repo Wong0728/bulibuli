@@ -90,7 +90,8 @@ async fn full_backup(
     .await?;
 
     if let Err(error) = vacuum_into(&state, &database_target).await {
-        let _ = tokio::fs::remove_dir_all(&target).await;
+        // 半成品备份目录清理属 best-effort：删除失败仅残留目录，不掩盖原始错误
+        tokio::fs::remove_dir_all(&target).await.ok();
         error!(%error, "完整恢复备份数据库快照失败");
         return Err(error);
     }
@@ -104,11 +105,13 @@ async fn full_backup(
     {
         Ok(Ok(skipped)) => skipped,
         Ok(Err(error)) => {
-            let _ = tokio::fs::remove_dir_all(&target).await;
+            // 半成品备份目录清理属 best-effort：删除失败仅残留目录
+            tokio::fs::remove_dir_all(&target).await.ok();
             return Err(AppError::Internal(format!("复制完整恢复备份失败: {error}")));
         }
         Err(error) => {
-            let _ = tokio::fs::remove_dir_all(&target).await;
+            // 半成品备份目录清理属 best-effort：删除失败仅残留目录
+            tokio::fs::remove_dir_all(&target).await.ok();
             return Err(AppError::Internal(format!(
                 "复制完整恢复备份任务失败: {error}"
             )));

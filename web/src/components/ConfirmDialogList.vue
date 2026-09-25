@@ -21,7 +21,7 @@ useModalFocus(open, root, () => {
         <span id="confirm-modal-title">{{ current.title }}</span>
       </div>
       <div class="confirm-modal-message">
-        <div id="confirm-modal-message" style="white-space: pre-wrap; line-height: 1.6;">{{ current.message }}</div>
+        <div id="confirm-modal-message" class="confirm-modal-message-text">{{ current.message }}</div>
       </div>
       <div class="modal-footer">
         <button class="btn" id="confirm-modal-cancel" @click="resolveConfirm(current, false)">{{ current.cancelText || '取消' }}</button>
