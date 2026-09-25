@@ -116,6 +116,7 @@ impl DownloadManager {
                         guard.remove(&cache_key_for_cb);
                     }
                     if result.success {
+                        settle_merge_stage(&db, cb_task_id, "muxing", "done").await;
                         if let Err(e) = Self::update_history_after_merge_static(
                             &db, &bvid, cb_cid, cb_page, &output, &source,
                         )
@@ -154,6 +155,9 @@ impl DownloadManager {
         {
             Ok(result) if result.success => {
                 info!("已启动音视频合并任务 {bvid}: {}", output.display());
+                // 合并发生在两路都 completed 之后，status 不再变动；用 stage 表达"合并中"，
+                // 中断后由 resume_interrupted_merges 补触发。合并失败刻意停在 muxing。
+                settle_merge_stage(&self.db, video.id, "finalizing", "muxing").await;
             }
             Ok(result) => {
                 warn!("合并任务未成功启动 {bvid}: {}", result.message);
@@ -234,5 +238,26 @@ impl DownloadManager {
             model.update(db).await?;
         }
         Ok(())
+    }
+}
+
+/// 推进合并阶段标记：只在仍处于 `from_stage` 时改写，避免覆盖并发的状态迁移。
+pub(super) async fn settle_merge_stage(
+    db: &DatabaseConnection,
+    task_id: i32,
+    from_stage: &str,
+    to_stage: &str,
+) {
+    if let Err(error) = download_task::Entity::update_many()
+        .col_expr(
+            download_task::Column::Stage,
+            sea_orm::sea_query::Expr::value(to_stage),
+        )
+        .filter(download_task::Column::Id.eq(task_id))
+        .filter(download_task::Column::Stage.eq(from_stage))
+        .exec(db)
+        .await
+    {
+        warn!("更新合并阶段失败 task_id={task_id}: {error}");
     }
 }

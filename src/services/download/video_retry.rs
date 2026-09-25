@@ -6,7 +6,7 @@ use chrono::{Duration, Local};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use tracing::{error, info, warn};
 
-use super::DownloadManager;
+use super::{DownloadManager, RetryTrigger};
 
 /// 单个视频任务的最大自动重试次数（与音频重试一致）。
 const MAX_VIDEO_RETRIES: u32 = 3;
@@ -57,7 +57,10 @@ impl DownloadManager {
             }
 
             // 复用手动重试路径：重新解析 URL（避开坏 CDN）、failed→Retrying、重新入队。
-            match self.retry_task(&task.bvid, "video").await {
+            match self
+                .retry_task(&task.bvid, "video", RetryTrigger::Auto)
+                .await
+            {
                 Ok(outcome) if outcome.ok => {
                     info!("[视频自动重试] {} 重试已投递", task.bvid);
                 }

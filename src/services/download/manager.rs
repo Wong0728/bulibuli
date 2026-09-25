@@ -98,6 +98,7 @@ impl DownloadManager {
         }
         // 断点续传：恢复上次未完成的任务
         self.resume_pending_tasks().await;
+        self.resume_interrupted_merges().await;
         let manager = self.clone();
         let handle = tokio::spawn(async move {
             manager.monitor_loop().await;
@@ -155,6 +156,42 @@ impl DownloadManager {
         }
     }
 
+    /// 重启续合并：进程在合并阶段被打断时，音视频两路都已是 completed、`stage` 停在
+    /// muxing、终产物却还没落盘。这类任务的 status 不在 RESUME_STATUSES 内（它已
+    /// completed），不单独扫一遍就永远不会再合并，用户只看到"录了却没有 mp4"。
+    async fn resume_interrupted_merges(&self) {
+        let stuck = match download_task::Entity::find()
+            .filter(download_task::Column::Status.eq("completed"))
+            .filter(download_task::Column::Stage.eq("muxing"))
+            .filter(download_task::Column::TaskType.eq("video"))
+            .all(&self.db)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                error!("续合并扫描失败: {e}");
+                return;
+            }
+        };
+        for task in stuck {
+            let dir = self.task_download_dir(&task).await;
+            let stem = file_stem_for(&task.bvid, task.page);
+            if Self::completed_product_exists(&dir, &stem, "video").await {
+                // 中断后产物其实已经落盘：只收敛阶段，不重复合并。
+                super::post_process::settle_merge_stage(&self.db, task.id, "muxing", "done").await;
+                continue;
+            }
+            info!("续合并：重启后补触发 {} 的音视频合并", task.bvid);
+            let uid = self.get_blogger_uid_from_history(&task.bvid).await;
+            if let Err(e) = self
+                .on_task_completed(&task.bvid, task.cid, uid.as_deref())
+                .await
+            {
+                warn!("续合并触发失败 {}: {e}", task.bvid);
+            }
+        }
+    }
+
     /// 断点续传：程序重启后恢复未完成的下载任务
     async fn resume_pending_tasks(&self) {
         let tasks = match download_task::Entity::find()
@@ -191,7 +228,8 @@ impl DownloadManager {
             // --allow-overwrite 覆盖成品（纯浪费带宽且存在覆盖风险）。
             let dir = self.task_download_dir(&task).await;
             let stem = file_stem_for(&task.bvid, task.page);
-            if Self::completed_product_exists(&dir, &stem, &task.task_type).await {
+            if let Some(product) = Self::find_completed_product(&dir, &stem, &task.task_type).await
+            {
                 match self
                     .state_service
                     .complete_once(task.id, task.generation)
@@ -199,6 +237,40 @@ impl DownloadManager {
                 {
                     Ok(true) => {
                         info!("断点续传：{} 成品已存在，跳过重下直接标记完成", task.bvid);
+                        // 任务终态与看板记录必须一起收敛：add_to_history 对已完成记录不回头
+                        // 补，此处漏写会让文件静静躺在盘上、三个 Tab 都看不到它。
+                        let uid = self.get_blogger_uid_from_history(&task.bvid).await;
+                        let task_cookies = self
+                            .settings_service
+                            .cookie_header()
+                            .await
+                            .unwrap_or_default();
+                        if let Err(e) = self
+                            .add_to_history(
+                                &task.bvid,
+                                Some(&product),
+                                uid.as_deref(),
+                                None,
+                                Some(&task_cookies),
+                                task.source.as_deref().unwrap_or("auto"),
+                                task.cid,
+                                task.page,
+                                task.part_title.as_deref(),
+                            )
+                            .await
+                        {
+                            error!("断点续传：{} 补写历史记录失败: {e}", task.bvid);
+                        }
+                        // 音频成品只是合并的输入而非终产物，配对齐全时补触发一次合并；
+                        // 视频成品即终产物，不能再合。
+                        if task.task_type == "audio" {
+                            if let Err(e) = self
+                                .on_task_completed(&task.bvid, task.cid, uid.as_deref())
+                                .await
+                            {
+                                error!("断点续传：{} 补触发合并失败: {e}", task.bvid);
+                            }
+                        }
                         continue;
                     }
                     // 闸门未通过（已完成/generation 变化）：按原流程继续重建收敛

@@ -12,7 +12,7 @@ use super::engine::TransferEngine;
 use super::history_sync::HistoryPlaceholder;
 use super::{
     backoff_key, file_stem_for, is_valid_bvid, task_cache_key, DownloadManager, PageInfo,
-    TaskOutcome,
+    RetryTrigger, TaskOutcome,
 };
 
 /// 任务完成后多久以内的重复入队请求视为重复（前端超时重试、连点），
@@ -495,6 +495,16 @@ impl DownloadManager {
         let filename = sanitize_filename(&filename);
         self.cleanup_task_caches(&existing.bvid, existing.cid).await;
         let download_id = existing.id;
+        // 重新派发前先收掉上一轮仍在跑的传输：cleanup_task_caches 只清内存缓存，不碰外部
+        // 引擎，否则同一个 dir/out 上会挂两个任务并发写同一份文件。
+        if let Some(token) = self.native_tasks.lock().await.remove(&download_id) {
+            token.cancel();
+        }
+        if let Some(stale_gid) = existing.gid.as_deref() {
+            if let Err(error) = self.aria2.remove(stale_gid).await {
+                warn!("重新派发前移除旧 Aria2 任务失败 gid={stale_gid}: {error}");
+            }
+        }
         let (gid, permit) = self
             .dispatch_transfer(
                 engine,
@@ -518,6 +528,9 @@ impl DownloadManager {
         } else {
             100
         };
+        // retry_task 已把任务置为 retrying 并写好 attempts / 退避时间，此处不能再清零，
+        // 否则自动重试计数被抹平、MAX_VIDEO_RETRIES 永不触顶（失败任务会 30 秒一轮无限重打）。
+        let is_retry_dispatch = existing.status == "retrying";
         let mut model: download_task::ActiveModel = existing.into();
         model.status = Set("downloading".to_string());
         model.error = Set(None);
@@ -534,10 +547,11 @@ impl DownloadManager {
         model.generation = Set(next_generation);
         model.completion_triggered = Set(false);
         model.stage = Set("transferring".to_string());
-        // 重试额度按"每次运行"计算：重新派发时清零累计 attempts，
-        // 否则 video_retry/audio_retry 读到历史累计值会提前耗尽自动重试
-        model.attempts = Set(0);
-        model.next_retry_at = Set(None);
+        if !is_retry_dispatch {
+            // 用户重新添加同一链接视为新的失败回合，重置自动重试额度。
+            model.attempts = Set(0);
+            model.next_retry_at = Set(None);
+        }
         model.error_kind = Set(None);
         if let Err(e) = model.update(&self.db).await {
             if let Some(gid) = gid.as_deref() {
@@ -562,26 +576,36 @@ impl DownloadManager {
     /// 判断指定词根的最终产物是否已存在。`stem` 单P为 bvid，多P为 `{bvid}_p{page}`。
     /// 合并产物命名为 `{title}_{stem}.mp4`，匹配规则见 [`product_file_matches`]：
     /// 仅接受精确命中与标题前缀命中，边界判定与 storage.rs 的去重扫描对齐。
-    pub(super) async fn completed_product_exists(dir: &Path, stem: &str, task_type: &str) -> bool {
+    pub(super) async fn find_completed_product(
+        dir: &Path,
+        stem: &str,
+        task_type: &str,
+    ) -> Option<PathBuf> {
         let extensions: &[&str] = if task_type == "video" {
             &["mp4", "mkv", "flv", "mov"]
         } else if task_type == "audio" {
             &["m4a", "mp3", "aac", "wav", "flac"]
         } else {
-            return false;
+            return None;
         };
         let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
-            return false;
+            return None;
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let Some(name) = entry.file_name().into_string().ok() else {
                 continue;
             };
             if product_file_matches(&name, stem, extensions) {
-                return true;
+                return Some(entry.path());
             }
         }
-        false
+        None
+    }
+
+    pub(super) async fn completed_product_exists(dir: &Path, stem: &str, task_type: &str) -> bool {
+        Self::find_completed_product(dir, stem, task_type)
+            .await
+            .is_some()
     }
 
     /// 回滚手动任务时同步清理入队时写入的 history 占位记录：
@@ -636,7 +660,12 @@ impl DownloadManager {
             .is_some_and(|at| at.elapsed() < RECENT_COMPLETION_WINDOW)
     }
 
-    pub async fn retry_task(&self, bvid: &str, task_type: &str) -> Result<TaskOutcome> {
+    pub async fn retry_task(
+        &self,
+        bvid: &str,
+        task_type: &str,
+        trigger: RetryTrigger,
+    ) -> Result<TaskOutcome> {
         // 多P：同一 (bvid, task_type) 可能对应多个分P任务，逐个重试；单P时恰为一行，行为不变。
         let tasks = download_task::Entity::find()
             .filter(download_task::Column::Bvid.eq(bvid))
@@ -674,8 +703,13 @@ impl DownloadManager {
                     .await?;
                 let mut retrying: download_task::ActiveModel = task.clone().into();
                 retrying.priority = Set(200);
-                retrying.attempts = Set(task.attempts.saturating_add(1));
-                retrying.next_retry_at = Set(None);
+                // 人工重试重新发放额度并立即再试；自动重试只累加计数并保留 video_retry
+                // 刚写入的退避时间，否则计数被抹平、退避退化成一轮 30 秒的紧密循环。
+                retrying.attempts = Set(next_attempts(trigger, task.attempts));
+                retrying.next_retry_at = Set(match trigger {
+                    RetryTrigger::Manual => None,
+                    RetryTrigger::Auto => task.next_retry_at,
+                });
                 retrying.update(&self.db).await?;
             }
             let url = self
@@ -1313,11 +1347,39 @@ impl DownloadManager {
     }
 }
 
+/// 本次重试后任务应持有的自动重试计数。
+///
+/// 曾经无条件在重新派发时清零，导致 `video_retry` 的 `MAX_VIDEO_RETRIES` 永不触顶，
+/// 永久失败的任务每 30 秒无限重打 B 站接口。
+fn next_attempts(trigger: RetryTrigger, current: i32) -> i32 {
+    match trigger {
+        RetryTrigger::Manual => 0,
+        RetryTrigger::Auto => current.saturating_add(1),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::product_file_matches;
+    use super::{next_attempts, RetryTrigger};
 
     const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "flv", "mov"];
+
+    #[test]
+    fn auto_retry_accumulates_until_it_reaches_the_cap() {
+        // 自动重试必须单调累加，否则 MAX_VIDEO_RETRIES(3) 永不触顶。
+        let mut attempts = 0;
+        for expected in [1, 2, 3] {
+            attempts = next_attempts(RetryTrigger::Auto, attempts);
+            assert_eq!(attempts, expected);
+        }
+        assert!(attempts >= 3, "触顶后 video_retry 应停止自动重试");
+    }
+
+    #[test]
+    fn manual_retry_rearms_the_budget() {
+        assert_eq!(next_attempts(RetryTrigger::Manual, 9), 0);
+    }
 
     #[test]
     fn product_match_accepts_exact_and_title_prefixed_hits() {

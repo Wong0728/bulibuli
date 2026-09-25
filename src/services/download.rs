@@ -66,6 +66,16 @@ struct RetryBackoff {
     next_retry_at: Instant,
 }
 
+/// 触发重试的来源：决定这次是否重新发放自动重试额度。
+///
+/// 人工重试（网页按钮、`ctl dl retry`）视为新的失败回合，额度重置；自动重试
+/// （`video_retry` 定时扫描）只累加计数，否则计数会被清零而永不触顶。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetryTrigger {
+    Manual,
+    Auto,
+}
+
 /// 任务入队、重试和移除的统一结果。
 /// `ok=false` 表示业务拒绝（重复任务、退避中、非法参数等），而非系统错误。
 #[derive(Clone, Debug)]

@@ -24,7 +24,7 @@ use crate::services::audit_log::AuditContext;
 use crate::services::blogger::NewBlogger;
 use crate::services::conflict_guard::ConflictGuard;
 use crate::services::credential::Credential;
-use crate::services::download::TaskOutcome;
+use crate::services::download::{RetryTrigger, TaskOutcome};
 use crate::services::security_config::{AccessAction, AccessMode};
 use crate::services::url_parser::{parse_media_input, ResolvedMedia};
 use crate::state::SharedState;
@@ -869,7 +869,7 @@ async fn dl_retry(state: &SharedState, args: &[String]) -> AppResult<Value> {
         Some(target),
         None,
         move |_guard| async move {
-            dm.retry_task(&bvid, task_type)
+            dm.retry_task(&bvid, task_type, RetryTrigger::Manual)
                 .await
                 .map_err(AppError::from)
         },

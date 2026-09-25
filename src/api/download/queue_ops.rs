@@ -3,7 +3,7 @@
 use crate::error::{ApiResponse, AppError};
 use crate::models::{download_task, operation_log::OperationTarget};
 use crate::services::conflict_guard::ConflictGuard;
-use crate::services::download::{PageInfo, TaskOutcome};
+use crate::services::download::{PageInfo, RetryTrigger, TaskOutcome};
 use crate::state::SharedState;
 use axum::{extract::Query, extract::State, Json};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -655,7 +655,7 @@ pub(super) async fn retry_download(
     let outcome = state
         .media
         .download_manager
-        .retry_task(&req.bvid, &req.task_type)
+        .retry_task(&req.bvid, &req.task_type, RetryTrigger::Manual)
         .await;
 
     let outcome = match outcome {

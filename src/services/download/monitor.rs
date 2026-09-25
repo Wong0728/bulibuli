@@ -1,10 +1,10 @@
 //! 下载监控循环：轮询 aria2 状态并驱动任务状态机（generation 守卫防陈旧写入）。
 
 use crate::domain::{DownloadStage, DownloadStatus};
-use crate::models::download_task;
+use crate::models::{download_task, history};
 use crate::services::file_safety::ensure_disk_space;
 use futures::{stream, StreamExt};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -82,6 +82,39 @@ impl DownloadManager {
             .await
             .remove(&task_cache_key(&task.bvid, task.cid));
         self.cleanup_failed_transfer_leftovers(task).await;
+        self.mark_history_failed(&task.bvid, task.cid).await;
+    }
+
+    /// 任务进入失败终态时同步看板记录。
+    ///
+    /// 看板"失败"Tab 按 `history.state = 'failed'` 过滤，而此前没有任何代码写过该值，
+    /// 失败的手动任务会从三个 Tab 同时消失（记录被删掉，产物也无人认领）。
+    /// 只接管下载中的占位行：已完成/已下架/付费受限/校验异常不能被一次下载失败改写。
+    async fn mark_history_failed(&self, bvid: &str, cid: Option<i64>) {
+        let mut query = history::Entity::find().filter(history::Column::Bvid.eq(bvid));
+        query = match cid {
+            Some(c) => query.filter(history::Column::Cid.eq(c)),
+            None => query.filter(history::Column::Cid.is_null()),
+        };
+        let row = match query.one(&self.db).await {
+            Ok(Some(row)) => row,
+            Ok(None) => return,
+            Err(e) => {
+                warn!("查询待标记失败的历史记录失败 {bvid}: {e}");
+                return;
+            }
+        };
+        if !matches!(
+            row.state.as_deref(),
+            None | Some("pending") | Some("downloading")
+        ) {
+            return;
+        }
+        let mut model: history::ActiveModel = row.into();
+        model.state = Set(Some("failed".to_string()));
+        if let Err(e) = model.update(&self.db).await {
+            warn!("同步失败状态到历史记录失败 {bvid}: {e}");
+        }
     }
 
     /// aria2 任务判失败后清理 `.downloading` 临时文件与对应 `.aria2` 控制文件，
