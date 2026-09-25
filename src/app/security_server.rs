@@ -875,11 +875,23 @@ fn add_security_headers(response: &mut Response, path: &str) {
         ),
     );
     if is_static_asset(path) {
+        // index.html 是资源清单入口，必须每次回源校验：发版后旧 hash 资源会被
+        // 清理/覆盖，浏览器缓存旧 index 只会加载到已被替换的旧界面。
+        // 带内容 hash 的产物才允许缓存。
+        let cache_control = if is_html_entry(path) {
+            "no-cache"
+        } else {
+            "public, max-age=300"
+        };
         headers.insert(
             header::CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=300"),
+            HeaderValue::from_static(cache_control),
         );
     }
+}
+
+fn is_html_entry(path: &str) -> bool {
+    matches!(path, "/index.html" | "/app" | "/app/" | "/app/index.html")
 }
 
 fn is_static_asset(path: &str) -> bool {

@@ -251,7 +251,12 @@ def stage_test_frontend(exe_path):
     """Place the Vue bundle beside the release binary used by test mode."""
     source = ROOT / "static" / "app"
     destination = exe_path.parent / "static" / "app"
-    shutil.copytree(source, destination, dirs_exist_ok=True)
+    # 镜像式替换而非合并拷贝：dirs_exist_ok=True 会把旧 hash 的 JS/CSS 永久留在
+    # 磁盘上，配合浏览器缓存的旧 index.html 构成自洽的"旧前端"，用户怎么刷新
+    # 都是老界面。先清空再整体拷贝，保证磁盘上只有当前构建的产物。
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination)
     return destination / "index.html"
 
 
