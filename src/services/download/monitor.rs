@@ -94,7 +94,12 @@ impl DownloadManager {
     /// .m4s/.m4a 中间产物（成品要等合并回写）；video 侧终态失败意味着合并
     /// 不会再发生，这条"假完成"行回收为 failed，避免看板承诺不可播放的半成品。
     /// audio 侧不回收——音频重试耗尽后有纯视频降级合并兜底。
-    async fn mark_history_failed(&self, bvid: &str, cid: Option<i64>, failed_task_type: &str) {
+    pub(super) async fn mark_history_failed(
+        &self,
+        bvid: &str,
+        cid: Option<i64>,
+        failed_task_type: &str,
+    ) {
         let mut query = history::Entity::find().filter(history::Column::Bvid.eq(bvid));
         query = match cid {
             Some(c) => query.filter(history::Column::Cid.eq(c)),
