@@ -805,6 +805,11 @@ def run_test(platform_name, skip_vue=False):
     print("[3/5] 清理残留的旧实例，避免端口被占用...")
     stop_existing_instances(platform_name)
     exe_path = build_release(platform_name)
+    # 测试模式直接运行 Core：launcher 是 GUI 子系统，为 PowerShell 链新建控制台，
+    # 控制台事件（CTRL_BREAK / Ctrl+C）无法跨控制台边界送达 Core，优雅关停永远
+    # 失效。python 自身已提供控制台，Core 直接作为脚本子进程运行。
+    if platform_name == "windows":
+        exe_path = core_build_path(platform_name)
     stage_test_windows_launcher(exe_path)
     staged_index = stage_test_frontend(exe_path)
     stage_test_runtime(exe_path)

@@ -4,14 +4,18 @@ use url::{Host, Url};
 
 /// B 站自有资源域白名单。`bilivideo.cn` 与 `bilivideo.com` 同属 B 站 CDN 域族，
 /// playurl 的 MCDN 兜底候选用它，缺该域会让 `cdn_registry::choose_url` 的兜底必然被拒。
-/// `akamaized.net` 是 B 站长期使用的 Akamai 镜像（upos-hz-mirrorakam），playurl
-/// 会间歇性返回该域作为取流地址，缺它会让入队校验把正常任务整体拒掉。
+/// `akamaized.net` 是 B 站长期使用的 Akamai 镜像（upos-hz-mirrorakam）。
+/// `szbdyd.com` / `mountaintoys.cn` 是 B 站 PCDN/P2P 域族，playurl 会直接作为
+/// 取流地址返回（对标项目 Bili23 将其列为"劣质节点"降权但保留可用）；缺它们
+/// 会让入队校验把正常任务整体拒掉。
 const ALLOWED_ROOTS: &[&str] = &[
     "bilibili.com",
     "bilivideo.com",
     "bilivideo.cn",
     "hdslb.com",
     "akamaized.net",
+    "szbdyd.com",
+    "mountaintoys.cn",
 ];
 
 /// 在服务端边界规范化 B 站资源 URL。
@@ -66,6 +70,8 @@ pub fn validate_syntax(raw: &str) -> AppResult<Url> {
         .iter()
         .any(|root| host == *root || host.ends_with(&format!(".{root}")))
     {
+        // 只记 host：URL query 携带签名与时效参数，不得落入日志。
+        tracing::warn!("拒绝非白名单下载资源域名: {host}");
         return Err(AppError::BadRequest("不支持的 B 站资源域名".to_string()));
     }
     Ok(parsed)
@@ -177,8 +183,10 @@ mod tests {
     fn accepts_bilivideo_cn_cdn_family_for_mcdn_candidates() {
         assert!(validate_syntax("https://xy1x2xy.mcdn.bilivideo.cn/v1/a.m4s").is_ok());
         assert!(validate_syntax("https://bilivideo.cn/v1/a.m4s").is_ok());
-        // Akamai 镜像域（与 client.rs::is_cdn_host 测试覆盖同一域族）
+        // Akamai 镜像域与 PCDN/P2P 域族（对标项目 Bili23 的 PCDN 黑名单同源）
         assert!(validate_syntax("https://upos-hz-mirrorakam.akamaized.net/v1/a.m4s").is_ok());
+        assert!(validate_syntax("https://xy1x2xy.szbdyd.com/v1/a.m4s").is_ok());
+        assert!(validate_syntax("https://xy1x2xy.mountaintoys.cn/v1/a.m4s").is_ok());
         // 后缀混淆与端口边界不因新增域放宽
         assert!(validate_syntax("https://bilivideo.cn.evil.example/v1/a.m4s").is_err());
         assert!(validate_syntax("https://evil-bilivideo.cn/v1/a.m4s").is_err());
