@@ -323,18 +323,9 @@ impl DownloadManager {
             gidless_since.retain(|id, _| current_ids.contains(id));
             status_failures.retain(|id, _| current_ids.contains(id));
 
-            if all_tasks.is_empty() {
-                // 空队列：连续空闲 3 轮后退避到长间隔，入队通知会立即唤醒
-                idle_rounds = idle_rounds.saturating_add(1);
-                if idle_rounds >= 3 {
-                    tick = IDLE_TICK;
-                }
-                continue;
-            }
-            idle_rounds = 0;
-            tick = ACTIVE_TICK;
-
-            // 先检查 aria2 是否可用
+            // 磁盘探测与恢复必须先于空队列短路：磁盘满会把全部任务置 paused，
+            // 下一轮队列为空，若先 continue，探测/恢复事件/自动续传永远走不到，
+            // 用户清出空间后任务会静默停在 paused。
             if last_disk_check.elapsed() >= std::time::Duration::from_secs(15) {
                 disk_space_error = ensure_disk_space(&self.paths.download_dir, None)
                     .await
@@ -422,6 +413,17 @@ impl DownloadManager {
                     *self.disk_resume_handle.lock().await = Some(handle);
                 }
             }
+
+            if all_tasks.is_empty() {
+                // 空队列：连续空闲 3 轮后退避到长间隔，入队通知会立即唤醒
+                idle_rounds = idle_rounds.saturating_add(1);
+                if idle_rounds >= 3 {
+                    tick = IDLE_TICK;
+                }
+                continue;
+            }
+            idle_rounds = 0;
+            tick = ACTIVE_TICK;
 
             let aria2_available = self.aria2.is_available().await;
             if !aria2_available {
