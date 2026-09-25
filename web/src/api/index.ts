@@ -172,8 +172,9 @@ export const history = {
   search: (keyword: string, page = 1, page_size = 50) =>
     get<{ history: HistoryEntry[]; total: number; page: number; page_size: number }>('/api/history/search', { keyword, page, page_size }),
   // 后端返回 { bvid, removed_files, removed_tasks }（src/api/history/crud.rs::delete_history）。
+  // removed_files 是实际删除的文件路径数组（Vec<String>），非布尔值。
   delete: (bvid: string, history_id?: number, delete_files?: boolean) =>
-    post<{ bvid: string; removed_files: boolean; removed_tasks: number }>('/api/history/delete', { bvid, history_id, delete_files }),
+    post<{ bvid: string; removed_files: string[]; removed_tasks: number }>('/api/history/delete', { bvid, history_id, delete_files }),
   openDirectory: (bvid: string, history_id?: number, path?: string) =>
     post<{ bvid: string }>('/api/history/open-directory', { bvid, history_id, path }),
   fileDownloadUrl: (bvid: string, path: string, history_id?: number) =>
