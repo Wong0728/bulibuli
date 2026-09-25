@@ -10,7 +10,7 @@
 
 > 隐私说明：本工具收集的 B 站 Cookie 仅存储在本地并加密，数据不回传任何第三方服务器，详见 [隐私说明（PRIVACY.md）](PRIVACY.md)。
 
-**前端架构**：主界面是唯一的 Vue 3 + Vite + Pinia + Vue Router 工程（位于 `web/`，构建产物落到 `static/app/`）；根路由 `/` 直接提供该界面。新版构建步骤见「从源码开发」一节。
+**前端架构**：主界面是唯一的 Vue 3 + Vite + Pinia 工程（位于 `web/`，构建产物落到 `static/app/`，不引入前端路由库）；根路由 `/` 直接提供该界面。新版构建步骤见「从源码开发」一节。
 
 ## 快速开始
 
@@ -26,8 +26,17 @@
 | --- | --- |
 | Windows x86_64 | Windows 10 / Server 2016 及更新 |
 | Linux x86_64 | **glibc ≥ 2.35**（Ubuntu 22.04 LTS、Debian 12、RHEL/Rocky/Alma 9 及更新的发行版）；更低版本的发行版无法运行 portable 包 |
-| macOS | 以 Release 页说明为准（CI 使用 macos-14 / macos-15 构建机，未显式降低部署目标） |
+| macOS | **尚未做实机兼容验证**：CI 使用 macos-14 / macos-15 构建机，且未显式降低部署目标，因此最低可运行系统版本未测定，下载前请按下面的「macOS 兼容性自查」确认 |
 | Termux Android arm64 | Termux 应用环境，aria2/FFmpeg 由 `pkg` 提供 |
+
+### macOS 兼容性自查
+
+发布流程没有在 macOS 真机上跑过安装与运行验收，上表只记录了构建机版本，不构成兼容性承诺。落地前按下列步骤自行确认：
+
+1. 先核对架构：Apple Silicon 用 `bulibuli-macos-arm64-portable-*.tar.gz`，Intel 用 `bulibuli-macos-x86_64-portable-*.tar.gz`；终端执行 `uname -m` 得到 `arm64` 或 `x86_64`，与归档名一致再下载。
+2. 解压后执行 `chmod +x bulibuli resources/aria2c resources/ffmpeg`，再运行 `./bulibuli --version`。该命令不加载配置、不创建数据目录、不启动服务，是最低成本的可行性检查。
+3. 按报错判断归属：`Bad CPU type in executable` 或 `mach-o, but wrong architecture` 是架构不匹配；`dyld: Symbol not found`、`compiled for newer macOS version` 一类提示是系统版本低于产物要求，此时只能等为该版本构建的产物或改用 Linux/Termux 包；被 Gatekeeper 拦下「未知发布者」属未签名二进制的预期表现，按[关于未签名二进制](#关于未签名二进制)一节处理。
+4. 已安装 Command Line Tools 时可用 `otool -l bulibuli | grep -A5 LC_BUILD_VERSION` 查看产物声明的 `minos`，与 `sw_vers -productVersion` 对比；这一步只读，不会运行程序本体。
 
 ## 从 Releases 安装
 
@@ -74,7 +83,9 @@ $env:BULIBULI_CACHE_DIR = 'D:\GitHub\bulibuli'
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-不传 `-PackagePath` 时，本地包会优先于 Release；没有本地包时读取 Release 的 `latest.json`（仅指向正式版）。`latest.json` 拉取失败时的回退也只会在 Releases 清单中选取正式版（排除 draft 与 prerelease）：若当前只有 alpha 预发布版本，一键安装会终止并提示用 `BULIBULI_VERSION` 固定版本或直接下载归档。PATH 修改为用户级设置，完成后请重新打开终端。
+不传 `-PackagePath` 时，本地包会优先于 Release；没有本地包时读取 Release 的 `latest.json`。**Windows 安装器只装正式版**：`latest.json` 取自 `releases/latest/download/`，而 GitHub 该地址本身跳过 draft 与预发布，只指向最新正式版；`latest.json` 拉取失败时的回退同样在 Releases 清单中排除 draft 与 prerelease。因此若当前只有 alpha 预发布版本，Windows 一键安装会终止并提示固定版本——这里只接受 `-Version vX.Y.Z` 参数，不读 `BULIBULI_VERSION` 环境变量，也可以直接下载归档绕过安装器。PATH 修改为用户级设置，完成后请重新打开终端。
+
+Linux 与 Termux 安装器的版本口径不同：默认跟随最新 Release（**含预发布**），需要只装正式版时显式设置 `BULIBULI_STABLE_ONLY=1`，两节末尾各自说明。
 
 **升级已有安装**：安装目录已存在时安装器会报错，重跑安装器升级需显式加 `-Force`：
 
@@ -98,12 +109,16 @@ curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux
 ~/.local/share/bulibuli/install.sh run
 ```
 
+未固定版本时，安装器直接查询 Releases API，取列表中最新一条 Release，**含 alpha/beta/RC 预发布**；只想装正式版就加 `BULIBULI_STABLE_ONLY=1`（安装器不走 `/releases/latest`，因为纯预发布仓库该地址会 302 到 HTML 列表页）。与 Windows 安装器只认正式版的口径不同，跨平台部署时需要显式对齐。
+
 如需固定版本，避免自动升级：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/linux/install.sh \
   | BULIBULI_VERSION=vX.Y.Z bash
 ```
+
+设置 `BULIBULI_VERSION` 后不再查询发布清单，直接按指定版本下载。
 
 安装器支持 `install`、`run`、`service`、`unservice` 和 `status`。`service` 会优先使用用户级 systemd；root 安装会创建独立服务用户，`run` 与 `service` 统一使用 `/var/lib/bulibuli` 作为数据目录（可用 `BULIBULI_DATA_DIR` 覆盖），避免一台机器出现两套数据库。自定义数据目录时使用绝对路径，例如：
 
@@ -121,7 +136,7 @@ Termux 现在优先下载 GitHub Actions 云端编译好的预编译包，再通
 curl -fsSL https://raw.githubusercontent.com/Wong0728/bulibuli/main/deploy/termux/install.sh | bash
 ```
 
-脚本会校验 Release 的 SHA-256 和包内文件清单，不需要 Rust、Node.js 或本机编译。远程一键安装完成后，后台运行使用 `bash "$PREFIX/opt/bulibuli/install.sh" start`；如果是手动解压包，则使用解压目录中的 `bash install.sh start`。开机自启还需要 Termux:Boot。只有需要源码构建时才设置 `BULIBULI_SOURCE_BUILD=1`。
+脚本会校验 Release 的 SHA-256 和包内文件清单，不需要 Rust、Node.js 或本机编译。远程一键安装完成后，后台运行使用 `bash "$PREFIX/opt/bulibuli/install.sh" start`；如果是手动解压包，则使用解压目录中的 `bash install.sh start`。开机自启还需要 Termux:Boot。只有需要源码构建时才设置 `BULIBULI_SOURCE_BUILD=1`。版本解析与 Linux 安装器一致：默认跟随最新 Release（含预发布），`BULIBULI_STABLE_ONLY=1` 只认正式版，`BULIBULI_VERSION=vX.Y.Z` 固定到指定版本。
 
 ### 各平台升级方式
 
@@ -177,7 +192,7 @@ Linux/macOS 将 `bulibuli.exe` 替换为 `./bulibuli`。完整命令清单见 [`
 - 下载失败先运行 `sys status`，确认 aria2 可用；再运行 `sys aria2-restart`。
 - FFmpeg 检查使用 `sys ffmpeg-test`（读取设置里的 FFmpeg 模式与自定义路径，与设置页测试一致）。
 - 无桌面、SSH、Docker 或 nohup 环境不会强行调用浏览器；直接打开终端输出的 URL。
-- 如果安装器找不到最新版本，可用 `BULIBULI_VERSION=vX.Y.Z` 固定到 Releases 中明确存在的版本；也可以直接下载 portable 归档，不需要安装器。
+- 如果安装器找不到最新版本，可固定到 Releases 中明确存在的版本：Windows 安装器传 `-Version vX.Y.Z`，Linux/Termux 设置 `BULIBULI_VERSION=vX.Y.Z`（Linux/Termux 还可加 `BULIBULI_STABLE_ONLY=1` 只在正式版中解析）；也可以直接下载 portable 归档，不需要安装器。
 - Linux 便携包中的运行时二进制带有独立 `.sha256` 文件；归档或运行时校验失败时停止安装，不要使用被替换的文件。
 
 ## 从源码开发
@@ -207,6 +222,8 @@ python build.py --skip-frontend --portable
 ## 文档与贡献
 
 - [用户文档索引](docs/user/README.md)
+- [已知问题与暂不支持清单](docs/user/KNOWN_ISSUES.md)
+- [版本升级说明](docs/user/UPGRADE.md)
 - [贡献指南](CONTRIBUTING.md)
 - [行为准则](CODE_OF_CONDUCT.md)
 - [安全策略](SECURITY.md)
@@ -220,7 +237,7 @@ python build.py --skip-frontend --portable
 
 ## 项目状态
 
-`v2.0.0` 是当前正式版。升级前请备份 `data/`，不要让新旧版本同时写同一数据库。后续版本仍可能调整接口和数据结构。
+`v2.0.1` 是当前正式版。升级前请备份 `data/`，不要让新旧版本同时写同一数据库。后续版本仍可能调整接口和数据结构。
 
 ## 关于未签名二进制
 

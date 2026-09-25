@@ -64,4 +64,4 @@ Windows 包内的 `ffmpeg.exe` / `ffprobe.exe` 为**本仓库 GitHub Actions 工
 
 ## 其他
 
-Exact bundled versions and SHA-256 values are listed in [`resources/README.md`](resources/README.md). The Unix runtime binaries are copied from the official CI runner packages at release-build time and receive per-package `.sha256` manifests.
+随包组件的精确版本号与 SHA-256 取值列在 [`resources/README.md`](resources/README.md) 中。Unix 平台的运行时二进制在构建发布包时从官方 CI runner 自带的软件包中复制，并在每个发布包内附带对应的 `.sha256` 清单文件。

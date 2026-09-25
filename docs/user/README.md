@@ -9,11 +9,13 @@
 | 普通用户 | [项目主页与安装说明](../../README.md) |
 | 部署/运维人员 | [配置、状态与恢复](CONFIGURATION.md) → [部署安全说明](../../deploy/SECURITY.md) → [云端发布架构](RELEASES.md) |
 | AI/自动化代理 | [Skill 命令契约](../skill.md) → [配置、状态与恢复](CONFIGURATION.md) |
-| 开发者/审查者 | [贡献指南](../../CONTRIBUTING.md) → [安全策略](../../SECURITY.md) → [生命周期审查报告](../../启动与生命周期-静态审查报告.md) |
+| 开发者/审查者 | [贡献指南](../../CONTRIBUTING.md) → [安全策略](../../SECURITY.md) |
 
 ## 使用与运维
 
 - [项目主页与安装说明](../../README.md)
+- [已知问题与暂不支持清单](KNOWN_ISSUES.md)
+- [版本升级说明](UPGRADE.md)
 - [配置、状态与恢复](CONFIGURATION.md)
 - [AI Skill 使用说明](../skill.md)
 - [部署安全说明](../../deploy/SECURITY.md)
