@@ -151,7 +151,7 @@ impl DownloadManager {
         page: Option<&PageInfo>,
         audio_ext: Option<&str>,
     ) -> Result<TaskOutcome> {
-        crate::services::bili_url_policy::validate(url)
+        crate::services::bili_url_policy::validate_download_url(url)
             .await
             .map_err(anyhow::Error::from)?;
         // 入口校验 bvid 格式：防止恶意 bvid 触发路径穿越或文件名注入

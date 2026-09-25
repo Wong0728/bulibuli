@@ -177,7 +177,7 @@ pub(super) async fn add_download(
         );
         return Err(AppError::BadRequest("请提供BV号和下载链接".to_string()));
     }
-    crate::services::bili_url_policy::validate(url).await?;
+    crate::services::bili_url_policy::validate_download_url(url).await?;
     let cookies = state.infra.settings_service.cookie_header().await?;
     // 未提供标题时自动补全：直接 POST {"bvid": ...} 不再因 missing field title 失败。
     let title = if title.is_empty() {

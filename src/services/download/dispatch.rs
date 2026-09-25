@@ -9,7 +9,7 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::DownloadManager;
 
@@ -26,7 +26,7 @@ impl DownloadManager {
         dir: &Path,
         filename: &str,
     ) -> Result<(String, ConcurrencyPermit)> {
-        crate::services::bili_url_policy::validate(url).await?;
+        crate::services::bili_url_policy::validate_download_url(url).await?;
         ensure_existing_within_root(&self.paths.download_dir, dir).await?;
         let filename = sanitize_filename(filename);
         let max_parallel = self
@@ -86,6 +86,15 @@ impl DownloadManager {
                 cookies.to_string()
             }
         };
+        // Cookie 只随白名单内 B 站主机出站：CDN 链接的鉴权在签名 query 里
+        // （对标 Bili23），名单外的新 PCDN 域照常下载但不附带 Cookie，
+        // 保证登录凭据永不出 B 站域。
+        let scoped_cookies = if crate::services::bili_url_policy::host_allows_credentials(url) {
+            enriched_cookies
+        } else {
+            info!("[CDN] {bvid} 下载主机不在 B 站域白名单内，本次下载不携带 Cookie");
+            String::new()
+        };
 
         let settings = self.settings_value().await?;
         let aria2_basic = settings.get("aria2c_basic").cloned().unwrap_or_default();
@@ -113,7 +122,7 @@ impl DownloadManager {
 
         let gid = self
             .aria2
-            .add_download(url, &filename, &enriched_cookies, headers, options)
+            .add_download(url, &filename, &scoped_cookies, headers, options)
             .await
             .map_err(|e| anyhow!("添加 Aria2 任务失败: {e}"))?;
         Ok((gid, permit))

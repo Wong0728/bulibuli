@@ -133,7 +133,7 @@ impl DownloadManager {
         uid: Option<&str>,
         permit: ConcurrencyPermit,
     ) -> Result<()> {
-        crate::services::bili_url_policy::validate(url).await?;
+        crate::services::bili_url_policy::validate_download_url(url).await?;
         let task = download_task::Entity::find_by_id(task_id)
             .one(&self.db)
             .await?
@@ -166,7 +166,11 @@ impl DownloadManager {
             ),
             ("Origin".to_string(), "https://www.bilibili.com".to_string()),
         ];
-        if !enriched_cookies.is_empty() {
+        // Cookie 只随白名单内 B 站主机出站（与 aria2 路径同口径）：
+        // 签名 query 即下载鉴权，名单外主机不带 Cookie，凭据永不出 B 站域。
+        let credential_host =
+            crate::services::bili_url_policy::host_allows_credentials(url);
+        if credential_host && !enriched_cookies.is_empty() {
             headers.push(("Cookie".to_string(), enriched_cookies));
         }
         // 原生下载也走完成管线：先写临时文件，成功后由 SHA-256 去重逻辑归位。

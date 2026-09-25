@@ -2,12 +2,13 @@ use crate::error::{AppError, AppResult};
 use std::net::IpAddr;
 use url::{Host, Url};
 
-/// B 站自有资源域白名单。`bilivideo.cn` 与 `bilivideo.com` 同属 B 站 CDN 域族，
-/// playurl 的 MCDN 兜底候选用它，缺该域会让 `cdn_registry::choose_url` 的兜底必然被拒。
-/// `akamaized.net` 是 B 站长期使用的 Akamai 镜像（upos-hz-mirrorakam）。
-/// `szbdyd.com` / `mountaintoys.cn` / `solseed.cn` 是 B 站 PCDN/P2P 域族，playurl
-/// 会直接作为取流地址返回（对标项目 Bili23 将前两者列为"劣质节点"降权但保留
-/// 可用）；缺它们会让入队校验把正常任务整体拒掉。
+/// B 站自有域白名单：**凭据作用域**，不是访问围栏。
+/// Cookie 只允许随名单内主机出站（封面/代理等 B 站资源请求，以及白名单内
+/// CDN 的下载直链）；名单外主机照常可下载（不带 Cookie，签名即鉴权）。
+/// `bilivideo.cn`/`bilivideo.com` 同属 B 站 CDN 域族，`akamaized.net` 是
+/// Akamai 镜像（upos-hz-mirrorakam），`szbdyd.com`/`mountaintoys.cn`/
+/// `solseed.cn` 是 PCDN/P2P 域族——playurl 会轮换返回，名单外的新域
+/// 不阻塞下载，只影响是否附带 Cookie。
 const ALLOWED_ROOTS: &[&str] = &[
     "bilibili.com",
     "bilivideo.com",
@@ -117,6 +118,65 @@ pub async fn validate(raw: &str) -> AppResult<Url> {
     let host = parsed
         .host_str()
         .ok_or_else(|| AppError::BadRequest("下载 URL 缺少域名".to_string()))?;
+    ensure_public_dns(host).await?;
+    Ok(parsed)
+}
+
+/// 下载直链校验：签名即鉴权，域名不做枚举。
+///
+/// B 站 CDN/PCDN 域族持续轮换（bilivideo 双域、akamaized、szbdyd、
+/// mountaintoys、solseed……），枚举式白名单只会不断误拒正常任务。
+/// 借鉴对标项目 Bili23 的结论：取流 URL 的鉴权信息全在签名 query 里，
+/// Cookie 只随白名单内主机出站（见 [`host_allows_credentials`]），因此
+/// 下载直链不需要域名白名单，安全边界是 DNS 私网/环网拦截。
+/// mcdn 节点常带非 443 端口（如 4483），同样放行。
+pub async fn validate_download_url(raw: &str) -> AppResult<Url> {
+    let parsed = validate_download_syntax(raw)?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| AppError::BadRequest("下载 URL 缺少域名".to_string()))?;
+    ensure_public_dns(&host.to_ascii_lowercase()).await?;
+    Ok(parsed)
+}
+
+/// 下载直链的同步语法校验（不含 DNS）：scheme/用户信息/域名形态。
+fn validate_download_syntax(raw: &str) -> AppResult<Url> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(AppError::BadRequest("下载 URL 不能为空".to_string()));
+    }
+    let normalized = if raw.starts_with("//") {
+        format!("https:{raw}")
+    } else {
+        raw.to_string()
+    };
+    let mut parsed = Url::parse(&normalized)
+        .map_err(|_| AppError::BadRequest("下载 URL 格式无效".to_string()))?;
+    if parsed.scheme() == "http" {
+        parsed
+            .set_scheme("https")
+            .map_err(|_| AppError::BadRequest("下载 URL 协议无效".to_string()))?;
+    }
+    if parsed.scheme() != "https" {
+        return Err(AppError::BadRequest("下载 URL 必须使用 HTTPS".to_string()));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(AppError::BadRequest(
+            "下载 URL 不允许携带用户信息".to_string(),
+        ));
+    }
+    let Host::Domain(_) = parsed
+        .host()
+        .ok_or_else(|| AppError::BadRequest("下载 URL 不允许使用 IP 地址".to_string()))?
+    else {
+        return Err(AppError::BadRequest(
+            "下载 URL 不允许使用 IP 地址".to_string(),
+        ));
+    };
+    Ok(parsed)
+}
+
+async fn ensure_public_dns(host: &str) -> AppResult<()> {
     let addresses = tokio::net::lookup_host((host, 443))
         .await
         .map_err(|_| AppError::BadRequest("下载域名无法解析".to_string()))?;
@@ -132,7 +192,23 @@ pub async fn validate(raw: &str) -> AppResult<Url> {
     if !found {
         return Err(AppError::BadRequest("下载域名没有可用地址".to_string()));
     }
-    Ok(parsed)
+    Ok(())
+}
+
+/// 该 URL 的主机是否在 B 站自有域白名单内。
+/// Cookie 只允许随白名单内主机出站：白名单从"准入围栏"降级为"凭据作用域"，
+/// 名单外的新 PCDN 域照常下载（不带 Cookie），Cookie 永不出 B 站域。
+pub fn host_allows_credentials(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url.trim()) else {
+        return false;
+    };
+    let Some(Host::Domain(host)) = parsed.host() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    ALLOWED_ROOTS
+        .iter()
+        .any(|root| host == *root || host.ends_with(&format!(".{root}")))
 }
 
 fn is_public_ip(ip: IpAddr) -> bool {
@@ -195,6 +271,36 @@ mod tests {
         assert!(validate_syntax("https://evil-bilivideo.cn/v1/a.m4s").is_err());
         assert!(validate_syntax("https://evil.akamaized.net.evil.example/v1/a.m4s").is_err());
         assert!(validate_syntax("https://xy.mcdn.bilivideo.cn:8082/v1/a.m4s").is_err());
+    }
+
+    #[test]
+    fn download_urls_skip_domain_enumeration_but_keep_syntax_fence() {
+        // 下载直链不做域名单：签名 query 即鉴权，新 PCDN 域即插即用。
+        assert!(validate_download_syntax("https://unknown-cdn.example.com/v1/a.m4s").is_ok());
+        // mcdn 节点常带非 443 端口，下载直链放行。
+        assert!(validate_download_syntax("https://xy.mcdn.bilivideo.cn:4483/v1/a.m4s").is_ok());
+        // 其余语法围栏不变：协议升级、拒绝用户信息与 IP 字面量。
+        assert_eq!(
+            validate_download_syntax("//upos.example.com/a.m4s")
+                .expect("protocol relative")
+                .as_str(),
+            "https://upos.example.com/a.m4s"
+        );
+        assert!(validate_download_syntax("https://user@upos.example.com/a.m4s").is_err());
+        assert!(validate_download_syntax("https://127.0.0.1/a.m4s").is_err());
+        assert!(validate_download_syntax("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn credentials_only_leave_for_whitelisted_hosts() {
+        // Cookie 作用域：名单内主机携带凭据，名单外主机（含新 PCDN 域）不带。
+        assert!(host_allows_credentials("https://upos-sz-mirrorcos.bilivideo.com/a.m4s"));
+        assert!(host_allows_credentials("https://upos-lcdn-cqgl01.solseed.cn/a.m4s"));
+        assert!(!host_allows_credentials("https://unknown-cdn.example.com/a.m4s"));
+        assert!(!host_allows_credentials("https://bilivideo.com.evil.example/a.m4s"));
+        assert!(!host_allows_credentials("not a url"));
+        // 后缀混淆不得借白名单带走凭据。
+        assert!(!host_allows_credentials("https://evil.hdslb.com.evil.example/a.m4s"));
     }
 
     #[test]
