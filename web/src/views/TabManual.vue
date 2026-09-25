@@ -297,7 +297,7 @@ async function resolveLink() {
     } else if (hasDownloadInfo) {
       defaults = missing;
     } else {
-      defaults = episodes.length ? [episodes[0].bvid] : [];
+      defaults = episodes.slice(0, 1).map(e => e.bvid);
     }
     selectedEpisodes.value = new Set(defaults);
     episodePage.value = 1;
