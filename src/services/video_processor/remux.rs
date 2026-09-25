@@ -35,8 +35,16 @@ impl VideoProcessor {
             }) as MergeCallback
         });
 
-        self.merge_audio_video(video_path, audio_path, output_path, container, cb, None, on_abort)
-            .await
+        self.merge_audio_video(
+            video_path,
+            audio_path,
+            output_path,
+            container,
+            cb,
+            None,
+            on_abort,
+        )
+        .await
     }
 
     async fn cleanup_source_files(video_path: &Path, audio_path: &Path) {

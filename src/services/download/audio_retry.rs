@@ -113,8 +113,13 @@ impl DownloadManager {
                         warn!("[音频自动重试] 持久化降级失败状态出错: {error}");
                     }
                 }
-                self.log_bvid(bvid, None, &format!("音频重试耗尽且纯视频降级失败：{e}"), "error")
-                    .await;
+                self.log_bvid(
+                    bvid,
+                    None,
+                    &format!("音频重试耗尽且纯视频降级失败：{e}"),
+                    "error",
+                )
+                .await;
             }
         }
     }

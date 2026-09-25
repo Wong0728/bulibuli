@@ -287,7 +287,8 @@ impl DownloadManager {
                     // 终态收敛：与 queue_terminal_failure 同口径，
                     // 否则记录停在 downloading，看板三个 Tab 都不可见。
                     self.cleanup_failed_transfer_leftovers(&task).await;
-                    self.mark_history_failed(&task.bvid, task.cid, &task.task_type).await;
+                    self.mark_history_failed(&task.bvid, task.cid, &task.task_type)
+                        .await;
                     let mut model: download_task::ActiveModel = task.into();
                     model.status = Set("failed".to_string());
                     model.error = Set(Some(
@@ -344,7 +345,8 @@ impl DownloadManager {
                         task.bvid, outcome.message
                     );
                     self.cleanup_failed_transfer_leftovers(&task).await;
-                    self.mark_history_failed(&task.bvid, task.cid, &task.task_type).await;
+                    self.mark_history_failed(&task.bvid, task.cid, &task.task_type)
+                        .await;
                     let mut model: download_task::ActiveModel = task.into();
                     model.status = Set("failed".to_string());
                     model.error = Set(Some(format!("重启后恢复被拒绝: {}", outcome.message)));
@@ -355,7 +357,8 @@ impl DownloadManager {
                 Err(e) => {
                     error!("断点续传：恢复任务 {} 失败: {e}", task.bvid);
                     self.cleanup_failed_transfer_leftovers(&task).await;
-                    self.mark_history_failed(&task.bvid, task.cid, &task.task_type).await;
+                    self.mark_history_failed(&task.bvid, task.cid, &task.task_type)
+                        .await;
                     let mut model: download_task::ActiveModel = task.into();
                     model.status = Set("failed".to_string());
                     model.error = Set(Some(format!("重启后恢复失败: {e}")));

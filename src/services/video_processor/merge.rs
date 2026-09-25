@@ -13,8 +13,8 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use super::{
-    MergeAbortCallback, MergeCallback, MergeProgress, MergeResult, MergeTaskInfo,
-    ProgressCallback, VideoProcessor,
+    MergeAbortCallback, MergeCallback, MergeProgress, MergeResult, MergeTaskInfo, ProgressCallback,
+    VideoProcessor,
 };
 
 impl VideoProcessor {

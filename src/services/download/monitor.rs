@@ -82,7 +82,8 @@ impl DownloadManager {
             .await
             .remove(&task_cache_key(&task.bvid, task.cid));
         self.cleanup_failed_transfer_leftovers(task).await;
-        self.mark_history_failed(&task.bvid, task.cid, &task.task_type).await;
+        self.mark_history_failed(&task.bvid, task.cid, &task.task_type)
+            .await;
     }
 
     /// 任务进入失败终态时同步看板记录。
@@ -469,7 +470,8 @@ impl DownloadManager {
                             // 终态收敛：与 queue_terminal_failure 同口径，
                             // 否则记录停在 downloading，看板三个 Tab 都不可见。
                             self.cleanup_failed_transfer_leftovers(task).await;
-                            self.mark_history_failed(&task.bvid, task.cid, &task.task_type).await;
+                            self.mark_history_failed(&task.bvid, task.cid, &task.task_type)
+                                .await;
                         }
                     }
                     aria2_fail_count = 0;

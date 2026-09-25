@@ -168,8 +168,7 @@ impl DownloadManager {
         ];
         // Cookie 只随白名单内 B 站主机出站（与 aria2 路径同口径）：
         // 签名 query 即下载鉴权，名单外主机不带 Cookie，凭据永不出 B 站域。
-        let credential_host =
-            crate::services::bili_url_policy::host_allows_credentials(url);
+        let credential_host = crate::services::bili_url_policy::host_allows_credentials(url);
         if credential_host && !enriched_cookies.is_empty() {
             headers.push(("Cookie".to_string(), enriched_cookies));
         }
@@ -340,7 +339,8 @@ impl DownloadManager {
                     // 终态收敛：与 queue_terminal_failure 同口径，
                     // 否则记录停在 downloading，看板三个 Tab 都不可见。
                     self.cleanup_failed_transfer_leftovers(&task).await;
-                    self.mark_history_failed(&task.bvid, task.cid, &task.task_type).await;
+                    self.mark_history_failed(&task.bvid, task.cid, &task.task_type)
+                        .await;
                 }
             }
         }

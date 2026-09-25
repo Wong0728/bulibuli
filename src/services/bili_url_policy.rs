@@ -294,13 +294,23 @@ mod tests {
     #[test]
     fn credentials_only_leave_for_whitelisted_hosts() {
         // Cookie 作用域：名单内主机携带凭据，名单外主机（含新 PCDN 域）不带。
-        assert!(host_allows_credentials("https://upos-sz-mirrorcos.bilivideo.com/a.m4s"));
-        assert!(host_allows_credentials("https://upos-lcdn-cqgl01.solseed.cn/a.m4s"));
-        assert!(!host_allows_credentials("https://unknown-cdn.example.com/a.m4s"));
-        assert!(!host_allows_credentials("https://bilivideo.com.evil.example/a.m4s"));
+        assert!(host_allows_credentials(
+            "https://upos-sz-mirrorcos.bilivideo.com/a.m4s"
+        ));
+        assert!(host_allows_credentials(
+            "https://upos-lcdn-cqgl01.solseed.cn/a.m4s"
+        ));
+        assert!(!host_allows_credentials(
+            "https://unknown-cdn.example.com/a.m4s"
+        ));
+        assert!(!host_allows_credentials(
+            "https://bilivideo.com.evil.example/a.m4s"
+        ));
         assert!(!host_allows_credentials("not a url"));
         // 后缀混淆不得借白名单带走凭据。
-        assert!(!host_allows_credentials("https://evil.hdslb.com.evil.example/a.m4s"));
+        assert!(!host_allows_credentials(
+            "https://evil.hdslb.com.evil.example/a.m4s"
+        ));
     }
 
     #[test]
