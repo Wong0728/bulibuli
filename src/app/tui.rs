@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+use tracing::info;
 
 const MAX_LOG_LINES: usize = 1000;
 const MAX_IMPORTANT_LOG_LINES: usize = 200;
@@ -473,6 +474,7 @@ fn run(
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if input.is_empty() {
                     // 空输入 Ctrl+C = 退出服务；有内容时先清空输入，防误触关停。
+                    info!("终端 Ctrl+C 触发服务关停");
                     state.infra.cancellation.cancel();
                 } else {
                     input.clear();

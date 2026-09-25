@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -809,13 +810,25 @@ def run_test(platform_name, skip_vue=False):
     print(f"  运行: {exe_path}")
     print("  启动后请查看控制台输出的 \"服务器监听于 http://...\" 行，")
     print("  在浏览器中打开该地址即可使用。\n")
+    windows_run = sys.platform == "win32"
     try:
-        proc = subprocess.Popen([str(exe_path)])
+        # 子进程放进独立进程组：Ctrl+C 只被本脚本收到，随后显式转发 CTRL_BREAK
+        # 触发子进程优雅关停。此前同组共享控制台，Ctrl+C 的送达取决于各进程的
+        # 控制台模式与 TUI raw mode 状态，实测常被本脚本独吞（KeyboardInterrupt），
+        # 子进程收不到任何事件、日志无关停记录，只能靠关闭窗口的 CTRL_CLOSE 兜底。
+        popen_kwargs = (
+            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if windows_run else {}
+        )
+        proc = subprocess.Popen([str(exe_path)], **popen_kwargs)
         try:
             proc.wait()
         except KeyboardInterrupt:
-            # Rust 进程已捕获 Ctrl+C 并正在优雅关闭，等待其完成
             print("\n[中断] 等待服务关闭...")
+            if windows_run:
+                try:
+                    proc.send_signal(signal.CTRL_BREAK_EVENT)
+                except (OSError, ProcessLookupError):
+                    pass
             try:
                 proc.wait(timeout=15)
             except subprocess.TimeoutExpired:

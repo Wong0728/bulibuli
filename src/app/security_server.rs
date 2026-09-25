@@ -980,6 +980,18 @@ async fn shutdown_signal(cancellation: tokio_util::sync::CancellationToken) {
             Err(error) => error!("installing close signal handler failed: {error}"),
         }
     };
+    // CTRL_BREAK：测试模式（build.py）把本程序放进独立进程组，Ctrl+C 被父进程
+    // 收到后经 GenerateConsoleCtrlEvent 显式转发为本事件，是测试工作流的主要
+    // 优雅关停入口。
+    #[cfg(windows)]
+    let ctrl_break = async {
+        match signal::windows::ctrl_break() {
+            Ok(mut stream) => {
+                stream.recv().await;
+            }
+            Err(error) => error!("installing ctrl-break signal handler failed: {error}"),
+        }
+    };
     #[cfg(unix)]
     let terminate = async {
         match signal::unix::signal(signal::unix::SignalKind::terminate()) {
@@ -991,6 +1003,14 @@ async fn shutdown_signal(cancellation: tokio_util::sync::CancellationToken) {
     };
     #[cfg(not(any(windows, unix)))]
     let terminate = std::future::pending::<()>();
+    #[cfg(windows)]
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+        _ = ctrl_break => {},
+        _ = cancellation.cancelled() => {},
+    }
+    #[cfg(not(windows))]
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
