@@ -827,7 +827,11 @@ impl DownloadManager {
             .filter(download_task::Column::TaskType.eq(task_type))
             .all(&self.db)
             .await?;
+        let mut touched_cids: Vec<Option<i64>> = Vec::new();
         for task in tasks {
+            if !touched_cids.contains(&task.cid) {
+                touched_cids.push(task.cid);
+            }
             // 原生兜底任务：取消传输（后台任务感知取消后自行退出，不再写终态）
             if let Some(token) = self.native_tasks.lock().await.remove(&task.id) {
                 token.cancel();
@@ -846,6 +850,12 @@ impl DownloadManager {
                 let mut backoff = self.retry_backoff.lock().await;
                 backoff.remove(&format!("{}_{}", task_cache_key(bvid, task.cid), task_type));
             }
+        }
+        // 入队时写入的 history 占位行（state=pending、无完成时间）随任务一并回收，
+        // 否则 cleanup_history 的排序会让它永远落在删除窗口之外，成为只增不减的
+        // 孤儿行。仅回收占位行，已完成的真实记录不受影响。
+        for cid in touched_cids {
+            self.cleanup_history_placeholder(bvid, cid).await;
         }
         // 若该 bvid 下已无任何任务，则一并清理 bvid 级缓存
         let remaining = download_task::Entity::find()
