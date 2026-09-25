@@ -1256,6 +1256,11 @@ select.blogger-select option[value=""] {
     margin-bottom: 0;
 }
 
+/* 链接模式：说明文字在输入行之外（留在行内会被 flex-end 对齐把按钮压低一行） */
+#manual-link-input-group + .form-note {
+    margin-top: var(--size-6);
+}
+
 /* 按钮。 */
 .btn {
     display: inline-flex;

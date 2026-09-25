@@ -473,7 +473,6 @@ function optionMeta(b: any) {
           <label for="manual-link-input">输入番剧 / 课程链接</label>
           <input id="manual-link-input" v-model="linkInput" type="text" class="form-control"
                  placeholder="支持 ep / ss / fp 链接，如 https://www.bilibili.com/bangumi/play/ep123" />
-          <div class="form-note">番剧（ep/ss）与课程（fp）链接解析出分集列表后批量下载；普通视频仅支持 BV 链接。</div>
         </div>
         <button type="button" class="btn btn-primary" id="manual-resolve-btn" data-action="resolve-link"
                 data-network-required="true" :disabled="resolving" @click="resolveLink">
@@ -481,6 +480,10 @@ function optionMeta(b: any) {
           <i v-else class="fa-solid fa-magnifying-glass"></i>
           {{ resolving ? '解析中' : '解析链接' }}
         </button>
+      </div>
+      <!-- 说明文字放在 flex 行之外：uid-input-group 底边对齐，note 留在行内会把按钮压低一行 -->
+      <div v-if="mode === 'link'" class="form-note" id="manual-link-note">
+        番剧（ep/ss）与课程（fp）链接解析出分集列表后批量下载；普通视频仅支持 BV 链接。
       </div>
     </div>
 
