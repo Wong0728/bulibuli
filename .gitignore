@@ -23,6 +23,8 @@
 *.py[cod]
 clippy_output*.txt
 .codex_*
+# ZCode 本地排除配置，仅本机使用，不入库。
+.zcodeignore
 
 # Local collector credentials and generated Python bytecode.
 /tools/.cookie_cache
