@@ -295,7 +295,12 @@ function cardProgress(e: HistoryEntry) {
   const live = liveTaskFor(e);
   const task: any = live ?? e.task ?? {};
   const status = task.status as string | undefined;
-  const isTaskActive = status === 'downloading' || status === 'pending' || status === 'paused';
+  // 活跃集合与后端 DownloadStatus::ACTIVE_STATUSES 对齐：retrying 必须计入，
+  // 否则退避重打中的卡片没有进度条，看起来像已经结束（老框架无此状态，属新状态漏接）。
+  // merging 不列：合并期 DB 里 status 仍是 completed、用 stage 表达（post_process.rs），
+  // 板数据拿不到 merging。
+  const isTaskActive = status === 'downloading' || status === 'pending'
+    || status === 'paused' || status === 'retrying';
   const show = isTaskActive
     && (e.state === 'pending' || e.state === 'downloading' || e.state === 'paused' || subTab.value === 'downloading');
   // live store 任务的字段名是 progress（fromBackendTask/applyWsProgress 映射），
@@ -312,6 +317,7 @@ function cardProgress(e: HistoryEntry) {
     const stepText = `(${step}/${totalSteps})`;
     if (status === 'downloading') label = `${stepText}${live.step_label ? ` ${live.step_label}` : ''} ${percent}%`;
     else if (status === 'pending') label = `${stepText} 等待中`;
+    else if (status === 'retrying') label = `${stepText} 重试中 ${percent}%`;
     else if (isPaused) label = `${stepText} 已暂停 ${percent}%`;
   } else if (isPaused) {
     label = `已暂停 ${percent}%`;
@@ -355,7 +361,10 @@ function cardControls(e: HistoryEntry) {
   const task: any = e.task ?? {};
   const status = task.status as string | undefined;
   const taskId = Number(task.task_id) || 0;
-  const show = !!taskId && (status === 'downloading' || status === 'pending' || status === 'paused');
+  // 可暂停集合 = 后端 pause_task 接受的集合（MONITOR_STATUSES + paused 幂等恢复）：
+  // 含 retrying（否则重试中的任务无法从看板中止），不含 merging（状态机会拒绝转入 paused）。
+  const show = !!taskId && (status === 'downloading' || status === 'pending'
+    || status === 'paused' || status === 'retrying');
   return {
     show,
     taskId,

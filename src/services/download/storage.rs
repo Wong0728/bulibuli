@@ -198,11 +198,14 @@ impl DownloadManager {
         let temp_sha256 = crate::services::file_safety::stream_file_sha256(temp_path).await?;
         info!("[SHA-256去重] {} 临时文件 SHA-256: {}", bvid, temp_sha256);
 
-        // 提取扩展名（task_type 决定：video→m4s, audio→m4a）
-        let ext = if task_type == "audio" { "m4a" } else { "m4s" };
+        // 扫描扩展名取自待归位文件名，而不是按 task_type 硬编码 m4s/m4a：
+        // 杜比(ec3)、Hi-Res(flac)、durl 直链(flv/mp4) 的真实后缀都不等于硬编码值，
+        // 硬编码会让这些流完全不参与 SHA-256 去重（重下直接覆盖旧版本、
+        // 冲突策略被跳过），冲突副本还会被写成与内容不符的扩展名。
+        let ext = dedupe_scan_ext(&original_name, task_type);
 
-        // 扫描同目录下所有匹配 {bvid}*.{ext} 的文件（排除 .downloading）
-        // 使用 bvid + "_" / bvid + "." 边界判断，避免前缀误匹配（如 BV1 与 BV1XX）
+        // 扫描同目录下所有匹配 {stem}*.{ext} 的文件（排除 .downloading）
+        // 使用 stem + "_" / stem + "." 边界判断，避免前缀误匹配（如 BV1 与 BV1XX）
         let mut existing_files: Vec<(String, PathBuf)> = Vec::new();
         let mut entries = tokio::fs::read_dir(dir).await?;
         while let Some(entry) = entries.next_entry().await? {
@@ -214,19 +217,11 @@ impl DownloadManager {
                 Some(n) => n,
                 None => continue,
             };
-            // 排除 .downloading 临时文件，只匹配 .{ext} 结尾
+            // 排除 .downloading 临时文件，只匹配同一流的历史版本
             if name.ends_with(".downloading") {
                 continue;
             }
-            if !name.ends_with(&format!(".{ext}")) {
-                continue;
-            }
-            // 严格匹配：必须以 {stem} 开头，且其后字符必须为 "_" 或 "."（避免前缀误匹配）
-            if !name.starts_with(stem) {
-                continue;
-            }
-            let rest = &name[stem.len()..];
-            if !rest.is_empty() && !rest.starts_with('_') && !rest.starts_with('.') {
+            if !dedupe_scan_matches(name, stem, &ext) {
                 continue;
             }
             existing_files.push((name.to_string(), path));
@@ -340,5 +335,99 @@ impl DownloadManager {
             final_filename: new_name,
             message: "检测到内容变化，已保留为新版本".to_string(),
         })
+    }
+}
+
+/// SHA-256 去重扫描使用的扩展名：取待归位文件名的真实后缀
+/// （m4s/m4a/ec3/flac/flv/mp4 都可能），无有效后缀时回退 task_type 默认值，
+/// 保证存量 m4s/m4a 行为不变。长度上限用于挡掉 `xxx.downloading` 这类残名。
+fn dedupe_scan_ext(filename: &str, task_type: &str) -> String {
+    let fallback = if task_type == "audio" { "m4a" } else { "m4s" };
+    filename
+        .rsplit_once('.')
+        .filter(|(stem, ext)| !stem.is_empty() && !ext.is_empty() && ext.len() <= 5)
+        .map_or_else(|| fallback.to_string(), |(_, ext)| ext.to_string())
+}
+
+/// 去重扫描的候选判定：`{stem}.{ext}` 与冲突副本 `{stem}_{后缀}.{ext}` 是同一路流的
+/// 历史版本，参与比对。两类撞名要排除：合并产物 `{标题}_{stem}.{ext}`
+/// （`queue.rs::product_file_matches` 的成品签名，是去重后的输出而非输入），
+/// 以及其他分P 的输入 `{bvid}_p{N}.{ext}`（分P 词根由 `file_stem_for` 生成）。
+fn dedupe_scan_matches(name: &str, stem: &str, ext: &str) -> bool {
+    if !name.ends_with(&format!(".{ext}")) || !name.starts_with(stem) {
+        return false;
+    }
+    let rest = &name[stem.len()..];
+    if !rest.starts_with('.') && !rest.starts_with('_') {
+        return false;
+    }
+    if let Some(after_page) = rest.strip_prefix("_p") {
+        if after_page.starts_with(|c: char| c.is_ascii_digit()) {
+            return false;
+        }
+    }
+    !rest.ends_with(&format!("_{stem}.{ext}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dedupe_scan_ext, dedupe_scan_matches};
+
+    const STEM: &str = "BV1xx411c7mD";
+
+    #[test]
+    fn dedupe_scan_ext_follows_the_real_stream_extension() {
+        // 存量行为：m4s/m4a 与按 task_type 硬编码的结果一致
+        assert_eq!(dedupe_scan_ext("BV1xx411c7mD.m4s", "video"), "m4s");
+        assert_eq!(dedupe_scan_ext("BV1xx411c7mD.m4a", "audio"), "m4a");
+        // 曾经被硬编码挡掉的三类产物现在都按自身扩展名参与去重
+        assert_eq!(dedupe_scan_ext("BV1xx411c7mD.ec3", "audio"), "ec3");
+        assert_eq!(dedupe_scan_ext("BV1xx411c7mD.flac", "audio"), "flac");
+        assert_eq!(dedupe_scan_ext("BV1xx411c7mD.mp4", "video"), "mp4");
+        assert_eq!(dedupe_scan_ext("BV1xx411c7mD.flv", "video"), "flv");
+        // 无后缀 / 空前缀时回退默认值，不拿整串当扩展名
+        assert_eq!(dedupe_scan_ext("unknown", "audio"), "m4a");
+        assert_eq!(dedupe_scan_ext(".m4s", "video"), "m4s");
+        assert_eq!(dedupe_scan_ext("BV1xx.", "video"), "m4s");
+        assert_eq!(dedupe_scan_ext("BV1xx.downloading", "video"), "m4s");
+    }
+
+    #[test]
+    fn dedupe_scan_matches_accepts_same_stream_versions() {
+        assert!(dedupe_scan_matches("BV1xx411c7mD.m4s", STEM, "m4s"));
+        assert!(dedupe_scan_matches(
+            "BV1xx411c7mD_20260813_101112.m4s",
+            STEM,
+            "m4s"
+        ));
+        assert!(dedupe_scan_matches("BV1xx411c7mD.flac", STEM, "flac"));
+        // 多P词根隔离：分P2 的历史版本不能被分P1 命中
+        assert!(!dedupe_scan_matches("BV1xx411c7mD_p2.flac", STEM, "flac"));
+        // 前缀撞车（BV1 与 BV1XX）与其他扩展名一律不参与
+        assert!(!dedupe_scan_matches("BV1xx411c7mDXXX.m4s", STEM, "m4s"));
+        assert!(!dedupe_scan_matches("BV1xx411c7mD.m4a", STEM, "m4s"));
+    }
+
+    #[test]
+    fn dedupe_scan_matches_excludes_merged_product() {
+        // 合并产物 `{标题}_{stem}.{ext}`：durl 直链按 mp4 扫描后会撞上同名尾部，
+        // 成品是输出去重结果，不能作为"同流旧版本"参与比对或被 skip 策略回报。
+        assert!(!dedupe_scan_matches(
+            "BV1xx411c7mD_标题_BV1xx411c7mD.mp4",
+            STEM,
+            "mp4"
+        ));
+        assert!(!dedupe_scan_matches("某标题_BV1xx411c7mD.mp4", STEM, "mp4"));
+        // 分P产物的尾部同样排除，但分P自身的输入仍然接受
+        assert!(!dedupe_scan_matches(
+            "BV1xx411c7mD_p2_BV1xx411c7mD_p2.mp4",
+            "BV1xx411c7mD_p2",
+            "mp4"
+        ));
+        assert!(dedupe_scan_matches(
+            "BV1xx411c7mD_p2.mp4",
+            "BV1xx411c7mD_p2",
+            "mp4"
+        ));
     }
 }

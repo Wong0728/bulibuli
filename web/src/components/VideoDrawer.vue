@@ -125,7 +125,11 @@ const stateLabel = computed(() => {
 const task = computed<any>(() => video.value?.task || null);
 const taskStatus = computed<string>(() => String(task.value?.status || ''));
 const taskId = computed<number | null>(() => Number(task.value?.task_id) || null);
-const taskActive = computed(() => ['downloading', 'pending', 'paused'].includes(taskStatus.value));
+// 活跃集合与后端 pause_task 的可暂停集合同源（MONITOR_STATUSES + paused）：
+// 漏掉 retrying 会让抽屉既无进度条也无暂停入口（该状态由后端状态机真实下发）。
+const taskActive = computed(() =>
+  ['downloading', 'pending', 'paused', 'retrying'].includes(taskStatus.value),
+);
 const isPaused = computed(() => taskStatus.value === 'paused');
 const progressPercent = computed(() => clampPercent(task.value?.progress_percent));
 // 主按钮：重新下载仅在 state ∈ failed/removed/pay_blocked 时出现（老框架语义）
@@ -1144,8 +1148,8 @@ onUnmounted(stopBurnPolling);
           <div class="drawer-section">
             <div class="drawer-section-title">操作</div>
             <div class="drawer-actions">
-              <button v-if="taskStatus === 'downloading' || taskStatus === 'pending'" class="drawer-btn drawer-btn-primary" disabled>
-                <i class="fa-solid fa-spinner fa-spin"></i> 下载中 {{ progressPercent }}%
+              <button v-if="taskStatus === 'downloading' || taskStatus === 'pending' || taskStatus === 'retrying'" class="drawer-btn drawer-btn-primary" disabled>
+                <i class="fa-solid fa-spinner fa-spin"></i> {{ taskStatus === 'retrying' ? '重试中' : '下载中' }} {{ progressPercent }}%
               </button>
               <button v-else-if="isPaused" class="drawer-btn drawer-btn-primary" disabled>
                 <i class="fa-solid fa-pause"></i> 已暂停 {{ progressPercent }}%

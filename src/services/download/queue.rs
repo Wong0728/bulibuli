@@ -883,8 +883,12 @@ impl DownloadManager {
     }
 
     /// 暂停下载任务。
-    /// - `task_id = None`：全局暂停（逐任务暂停并持久化所有 downloading/pending 为 paused）。
-    /// - `task_id = Some(id)`：仅暂停指定任务。仅 downloading/pending 可暂停，其他状态返回可读拒绝信息。
+    /// - `task_id = None`：全局暂停（逐任务暂停并持久化所有运行态任务为 paused）。
+    /// - `task_id = Some(id)`：仅暂停指定任务。仅运行态（`MONITOR_STATUSES`：
+    ///   downloading/pending/retrying）可暂停，其他状态返回可读拒绝信息。
+    ///
+    /// 可暂停集合与 `MONITOR_STATUSES` 同集：状态机里恰好这三个非终态
+    /// 允许转入 paused（merging 由完成链路驱动、不可暂停）。
     ///
     /// 暂停后：速度归零、generation+=1（防陈旧回调覆盖）；释放并发额度
     /// （native 路径 token 取消后 spawn 退出自动 Drop permit；aria2 路径不持有 permit）。
@@ -927,22 +931,26 @@ impl DownloadManager {
             .await?
             .ok_or_else(|| anyhow!("任务 {task_id} 不存在"))?;
 
-        // 仅 downloading/pending 可暂停；paused 重复暂停视为成功（幂等）
+        // 仅运行态（downloading/pending/retrying）可暂停；paused 重复暂停视为成功（幂等）
         let status = task.status.as_str();
         if status == "paused" {
             return Ok(TaskOutcome::done("任务已处于暂停状态"));
         }
-        if !matches!(status, "downloading" | "pending") {
+        if !DownloadStatus::MONITOR_STATUSES.contains(&status) {
             return Ok(TaskOutcome::rejected(format!(
-                "当前状态为 {status}，仅下载中/等待中可暂停"
+                "当前状态为 {status}，仅下载中/等待中/重试中可暂停"
             )));
         }
 
         // Native：取消传输（spawn 感知取消后自行退出并删除 .downloading 临时文件，
         // 不再写终态）
+        // retrying 的 gid 是上次失败后的残值（新 gid 与 downloading 同刻写回），对已停止
+        // 的 gid 调 pause 必然报错，会把可暂停的任务误计成"暂停失败"而跳过落库；
+        // downloading（active）与 pending（aria2 waiting，见 monitor 归一）才可能有存活传输。
+        let live_gid = task.gid.as_ref().filter(|_| status != "retrying");
         if let Some(token) = self.native_tasks.lock().await.remove(&task.id) {
             token.cancel();
-        } else if let Some(gid) = &task.gid {
+        } else if let Some(gid) = live_gid {
             // aria2 任务：pause 失败降级 forcePause；"cannot be paused now"
             // 表示任务已被暂停（幂等场景），视为成功照常落库 paused；
             // 其余失败则不落库，避免 monitor_loop 停止轮询后形成孤儿任务
@@ -998,18 +1006,22 @@ impl DownloadManager {
     }
 
     async fn pause_all_tasks(&self) -> Result<TaskOutcome> {
+        // 全局暂停覆盖全部运行态（downloading/pending/retrying）：漏掉 retrying
+        // 会让"全部暂停"管不住退避重打的任务，且重试中不产进度、用户无从中止。
         let tasks = download_task::Entity::find()
-            .filter(download_task::Column::Status.is_in(vec!["downloading", "pending"]))
+            .filter(download_task::Column::Status.is_in(DownloadStatus::MONITOR_STATUSES))
             .all(&self.db)
             .await?;
 
         let mut count = 0usize;
         let mut failed = 0usize;
         for task in &tasks {
+            // 与 pause_single_task 同源：retrying 没有存活传输，不去碰它的残值 gid。
+            let live_gid = task.gid.as_ref().filter(|_| task.status != "retrying");
             // Native：取消传输；aria2 单任务 gid 也显式 pause（pauseAll 已涵盖，这里只做兜底）
             if let Some(token) = self.native_tasks.lock().await.remove(&task.id) {
                 token.cancel();
-            } else if let Some(gid) = &task.gid {
+            } else if let Some(gid) = live_gid {
                 // pause 失败降级 forcePause；"cannot be paused now" 表示任务已被
                 // 暂停（幂等场景），视为成功照常落库；其余失败跳过该任务，不落库
                 // paused（否则 monitor_loop 停止轮询后形成"实际仍在下载"的孤儿任务）
@@ -1362,6 +1374,8 @@ fn next_attempts(trigger: RetryTrigger, current: i32) -> i32 {
 mod tests {
     use super::product_file_matches;
     use super::{next_attempts, RetryTrigger};
+    use crate::domain::DownloadStatus;
+    use std::str::FromStr;
 
     const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "flv", "mov"];
 
@@ -1379,6 +1393,29 @@ mod tests {
     #[test]
     fn manual_retry_rearms_the_budget() {
         assert_eq!(next_attempts(RetryTrigger::Manual, 9), 0);
+    }
+
+    #[test]
+    fn pausable_set_matches_monitor_driven_statuses() {
+        // 暂停入口（单任务守卫与全局暂停查询）统一引用 MONITOR_STATUSES，
+        // 一旦字面量数组与状态机的 paused 入边脱钩，重试中的任务就会逃出"全部暂停"。
+        for status in DownloadStatus::MONITOR_STATUSES {
+            let current = DownloadStatus::from_str(status).expect("pausable status is known");
+            assert!(
+                current.can_transition_to(&DownloadStatus::Paused),
+                "{status} 应可暂停"
+            );
+        }
+        for status in DownloadStatus::ACTIVE_STATUSES {
+            let current = DownloadStatus::from_str(status).expect("active status is known");
+            // paused 由入口的幂等分支先行返回，不占监控集合，但同样"可暂停"。
+            let accepted = status == "paused" || DownloadStatus::MONITOR_STATUSES.contains(&status);
+            assert_eq!(
+                current.can_transition_to(&DownloadStatus::Paused),
+                accepted,
+                "{status} 的可暂停性与暂停入口引用的集合不一致"
+            );
+        }
     }
 
     #[test]

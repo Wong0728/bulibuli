@@ -12,7 +12,7 @@
 //! - `audio_retry`：音频失败自动重试与纯视频降级
 //! - `post_process`：下载完成后的音视频合并触发
 //! - `history_sync`：历史记录写入与封面落盘
-//! - `storage`：下载目录派生与 MD5 去重归位
+//! - `storage`：下载目录派生与 SHA-256 去重归位
 //! - `status`：状态查询、队列摘要与进度广播
 
 mod audio_retry;
@@ -53,7 +53,7 @@ struct ProgressCache {
     speed: i64,
 }
 
-/// MD5 去重结果
+/// SHA-256 去重结果
 #[derive(Debug)]
 struct DedupeResult {
     final_filename: String,
@@ -201,7 +201,7 @@ pub(super) fn backoff_key(bvid: &str, cid: Option<i64>, task_type: &str) -> Stri
 }
 
 /// 文件名词根：单P（page=None）返回 bvid（保持存量 `{bvid}.ext` 命名）；
-/// 多P返回 `{bvid}_p{page}`。用于视频/音频临时文件命名与 MD5 去重扫描前缀，
+/// 多P返回 `{bvid}_p{page}`。用于视频/音频临时文件命名与 SHA-256 去重扫描前缀，
 /// 隔离同 bvid 不同分P的文件，避免跨分P误匹配。
 fn file_stem_for(bvid: &str, page: Option<i32>) -> String {
     match page {

@@ -1,5 +1,6 @@
 //! 音频失败自动重试：视频完成后按指数退避重试音频，耗尽后降级为纯视频 remux。
 
+use crate::domain::DownloadStatus;
 use crate::models::download_task;
 use crate::services::file_safety::sanitize_filename;
 use chrono::{Duration, Local};
@@ -77,8 +78,14 @@ impl DownloadManager {
                     .filter(download_task::Column::TaskType.eq("audio"))
                     .filter(download_task::Column::Cid.eq(cid));
                 if let Ok(Some(audio_task)) = audio_query.one(&self.db).await {
+                    // 音轨就此放弃：落终态 cancelled，而不是自造第 9 个状态 "degraded"。
+                    // 曾写 "degraded" 不在 DownloadStatus 里，同一行数据被 `from_str`
+                    // 判为未知、get_status 兜成 failed、看板聚合成 completed（口径相反），
+                    // 且逃过 history 清理与博主删除的终态级联回收。
+                    // 不可写 failed：本方法的触发条件正是 status=failed && attempts>=3，
+                    // 会每轮 check_audio_retry 重新 remux 一次，形成无限降级循环。
                     let mut model: download_task::ActiveModel = audio_task.into();
-                    model.status = Set("degraded".to_string());
+                    model.status = Set(DownloadStatus::Cancelled.to_string());
                     model.attempts = Set(4);
                     model.next_retry_at = Set(None);
                     if let Err(error) = model.update(&self.db).await {
@@ -285,5 +292,25 @@ impl DownloadManager {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DownloadStatus;
+    use std::str::FromStr;
+
+    #[test]
+    fn audio_fallback_lands_on_a_registered_terminal_status() {
+        // 降级后的音轨行必须落在已登记的状态上，且保持终态：
+        // 既不能被 `from_str` 判为未知（旧 "degraded" 会让 get_status 与看板口径相反），
+        // 也不能是 failed（check_audio_retry 的选取条件就是 status=failed）。
+        let settled = DownloadStatus::Cancelled.to_string();
+        assert_eq!(
+            DownloadStatus::from_str(&settled).expect("fallback status is registered"),
+            DownloadStatus::Cancelled
+        );
+        assert!(DownloadStatus::Cancelled.is_terminal());
+        assert_ne!(settled, "failed");
     }
 }
