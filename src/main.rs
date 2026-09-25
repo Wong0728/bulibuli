@@ -62,6 +62,13 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
         // 响应本来就是 JSON 信封，按 ok 字段判定结果供 AI/脚本靠 exit code 决策。
         return match app::control::run_client(&paths.data_dir, &args[1..]).await {
             Ok(response) => {
+                // 空响应不是成功：此前响应侧只靠服务端 drop 管道句柄产生的 EOF 收尾，
+                // 服务端一个字节都没写就退出时 `from_str` 解析失败会落进下面的兜底分支，
+                // 打印空行并 exit 0，让 AI/脚本以为命令已经生效。
+                if response.trim().is_empty() {
+                    eprintln!("ctl 未收到服务端响应（控制通道被服务端提前关闭），按连接失败处理");
+                    std::process::exit(2);
+                }
                 let envelope: Result<serde_json::Value, _> = serde_json::from_str(&response);
                 match envelope {
                     Ok(value) if value.get("ok") == Some(&serde_json::Value::Bool(false)) => {
