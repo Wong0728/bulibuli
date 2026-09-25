@@ -279,8 +279,8 @@ import { imageUrl, hideImageOnError as imageError } from '@/utils/image';
       </div>
       <div v-if="blogger.savedBloggers.length === 0" id="known-blogger-list">
         <div class="empty-state empty-state-padded">
-          <p>暂无已添加博主</p>
-          <p class="empty-hint">使用上方搜索添加博主</p>
+          <p>{{ blogger.savedError ? `已添加博主加载失败：${blogger.savedError}` : '暂无已添加博主' }}</p>
+          <p v-if="!blogger.savedError" class="empty-hint">使用上方搜索添加博主</p>
         </div>
       </div>
       <div v-else id="known-blogger-list">

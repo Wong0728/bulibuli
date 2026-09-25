@@ -553,7 +553,8 @@ function describeFailure(failure?: { message?: string; kind?: string; fallback_r
           <i class="fa-solid fa-spinner fa-spin"></i>
           <p>正在加载…</p>
         </div>
-        <div v-else-if="sortedGroups.length === 0" class="empty-state-grid">
+        <!-- 加载失败时只显示错误横幅，不再叠加"去博主搜索"空态引导误导用户 -->
+        <div v-else-if="!history.error && sortedGroups.length === 0" class="empty-state-grid">
           <i class="fa-solid fa-inbox"></i>
           <p>{{ emptyHint }}</p>
           <p class="empty-hint"><a href="#" @click.prevent="app.setTab('search')">去博主搜索</a> 或 <a href="#" @click.prevent="app.setTab('manual')">手动查询</a></p>
