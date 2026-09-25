@@ -169,7 +169,7 @@ impl MonitorService {
         // 下架检测必须查询该博主的全部 history，并只比较本轮实际扫描到的时间范围；
         // 否则可能把扫描深度之外的老视频误判为下架。
         let scanned_bvids: HashSet<String> = all_videos.iter().map(|v| v.bvid.clone()).collect();
-        let oldest_scanned_ts = all_videos.iter().map(|v| v.created).min();
+        let oldest_scanned_ts = oldest_scanned_timestamp(all_videos.iter().map(|v| v.created));
         let mut removed_count = 0;
         if let Some(oldest_ts) = oldest_scanned_ts {
             let uid_histories: Vec<history::Model> = history::Entity::find()
@@ -267,7 +267,7 @@ impl MonitorService {
                             uid: Set(Some(uid.clone())),
                             bvid: Set(new_bvid.to_string()),
                             title: Set(Some(v.title.clone())),
-                            pub_timestamp: Set(Some(v.created)),
+                            pub_timestamp: Set((v.created > 0).then_some(v.created)),
                             pub_date: Set(crate::services::time_format::pub_date(v.created)),
                             pic: Set(Some(v.pic.clone())),
                             state: Set(Some("pending".to_string())),
@@ -337,7 +337,7 @@ impl MonitorService {
         if let Some(latest) = all_videos.first() {
             let bvid = latest.bvid.as_str();
             if !bvid.is_empty() {
-                let published = Some(latest.created);
+                let published = (latest.created > 0).then_some(latest.created);
                 self.db.execute_raw(Statement::from_sql_and_values(
                     self.db.get_database_backend(),
                     "INSERT INTO submission_checkpoints(uid,last_bvid,last_pub_timestamp,last_success_at,updated_at) VALUES(?,?,?,?,?) \
@@ -420,5 +420,34 @@ impl MonitorService {
                 warn!("更新博主资料失败 {uid}: {e}");
             }
         }
+    }
+}
+
+/// 下架比对窗口的下界：本轮实际扫描到的最早发布时间。
+///
+/// B 站投稿列表模型带 `#[serde(default)]`，接口不下发 `created` 时静默为 0。若把它当作
+/// 有效时间，`min()` 会取到 0，比对窗口塌缩成"该博主全部历史"，扫描深度之外的正常视频
+/// 会被整批误标 removed 并向用户推送下架通知。全部不可用时返回 None，调用方跳过下架判定。
+fn oldest_scanned_timestamp(created_values: impl Iterator<Item = i64>) -> Option<i64> {
+    created_values.filter(|&ts| ts > 0).min()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::oldest_scanned_timestamp;
+
+    #[test]
+    fn oldest_scanned_timestamp_ignores_missing_created() {
+        let real = 1_753_804_800;
+        assert_eq!(
+            oldest_scanned_timestamp([real + 100, 0, real].into_iter()),
+            Some(real)
+        );
+    }
+
+    #[test]
+    fn oldest_scanned_timestamp_without_any_valid_value_skips_takedown_check() {
+        assert_eq!(oldest_scanned_timestamp([0, 0].into_iter()), None);
+        assert_eq!(oldest_scanned_timestamp([].into_iter()), None);
     }
 }

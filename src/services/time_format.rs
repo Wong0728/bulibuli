@@ -6,8 +6,11 @@
 
 use chrono::{Local, TimeZone};
 
-/// 按本机时区把 Unix 秒格式化为 `fmt` 指定的样式；时间戳越界时返回 `None`。
+/// 按本机时区把 Unix 秒格式化为 `fmt` 指定的样式；时间戳越界或非正时返回 `None`。
 pub(crate) fn format_unix_local(ts: i64, fmt: &str) -> Option<String> {
+    if ts <= 0 {
+        return None;
+    }
     Local
         .timestamp_opt(ts, 0)
         .single()
@@ -50,6 +53,15 @@ mod tests {
         if offset.is_some_and(|seconds| seconds != 0) {
             assert_ne!(pub_date(ts).as_deref().unwrap(), utc_day.as_str());
         }
+    }
+
+    #[test]
+    fn non_positive_timestamp_is_unknown_date_not_1970() {
+        // B 站模型带 #[serde(default)]，接口不下发时间戳时静默为 0；
+        // 若放行会渲染成 1970-01-01 落进 history.pub_date 并显示给用户。
+        assert_eq!(pub_date(0), None);
+        assert_eq!(pub_date(-1), None);
+        assert_eq!(format_unix_local(0, "%Y-%m-%d %H:%M"), None);
     }
 
     #[test]

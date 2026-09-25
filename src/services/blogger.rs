@@ -3,7 +3,7 @@ use crate::models::{blogger, download_task, history};
 use anyhow::Result;
 use chrono::Local;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, QueryOrder,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
 };
 use std::path::PathBuf;
@@ -61,12 +61,11 @@ impl BloggerService {
 
         let to_delete = history::Entity::find()
             .filter(history::Column::Uid.eq(uid))
-            // NULL pub_timestamp 是下载中的 pending 占位记录，必须排在删除序列之外，
-            // 否则超限清理会优先删掉活跃占位（记录 ID/封面路径抖动）。
-            .order_by(
-                sea_orm::sea_query::Expr::cust("(pub_timestamp IS NULL)"),
-                Order::Desc,
-            )
+            // 没有可靠发表时间的记录不参与保留数清理，也不是删除候选：它们既包括下载中的
+            // pending 占位，也包括 B 站未下发 created 而落成 0/NULL 的历史行。此前用
+            // `(pub_timestamp IS NULL)` 排序把这些行顶到队首"保护"，但保护仍然占用
+            // retain 名额，会把真正已发布的视频挤出保留窗口并连带删除本地文件。
+            .filter(history::Column::PubTimestamp.gt(0))
             .order_by_desc(history::Column::PubTimestamp)
             .offset(retain_limit as u64)
             .all(&self.db)
