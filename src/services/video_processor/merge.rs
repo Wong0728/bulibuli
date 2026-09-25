@@ -13,7 +13,8 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use super::{
-    MergeCallback, MergeProgress, MergeResult, MergeTaskInfo, ProgressCallback, VideoProcessor,
+    MergeAbortCallback, MergeCallback, MergeProgress, MergeResult, MergeTaskInfo,
+    ProgressCallback, VideoProcessor,
 };
 
 impl VideoProcessor {
@@ -25,6 +26,7 @@ impl VideoProcessor {
         container: &str,
         on_complete: Option<MergeCallback>,
         on_progress: Option<ProgressCallback>,
+        on_abort: Option<MergeAbortCallback>,
     ) -> Result<MergeResult> {
         let (ffmpeg, _) = self
             .detect_ffmpeg("auto", self.custom_ffmpeg_path.as_deref())
@@ -133,6 +135,7 @@ impl VideoProcessor {
         let out_path = output_path.to_path_buf();
         let tid = task_id.clone();
         let background_tasks = self.background_tasks.clone();
+        let on_abort_for_panic = on_abort;
 
         let accepted = background_tasks.spawn("video_merge", async move {
             // 持有合并闸门许可直至 ffmpeg 进程结束（含 panic 路径，随任务 drop 释放）
@@ -156,14 +159,16 @@ impl VideoProcessor {
                 error!("合并任务 [{tid}] panic: {panic_payload:?}");
                 tasks.lock().await.remove(&tid);
                 // panic 路径同样释放调用方的幂等键（on_complete 已随 fut 被 drop，
-                // 无法再调用——只能记录并依赖调用方的兜底超时；至少移除 tasks 条目
-                // 避免状态卡死）。
+                // 无法再调用）；不释放会让该 bvid/cid 的后续合并被永久跳过。
+                if let Some(on_abort) = on_abort_for_panic {
+                    on_abort();
+                }
                 let payload = panic_payload
                     .downcast_ref::<&str>()
                     .map(|s| s.to_string())
                     .or_else(|| panic_payload.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "panic".to_string());
-                error!("合并任务 [{tid}] 因 panic 终止，幂等键由调用方兜底: {payload}");
+                error!("合并任务 [{tid}] 因 panic 终止，已通过 on_abort 释放幂等键: {payload}");
             }
         });
         if !accepted {

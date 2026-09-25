@@ -13,6 +13,8 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 
 pub type MergeCallback = Box<dyn FnOnce(MergeResult) + Send + Sync>;
+/// 合并任务因 panic 等原因未能走到完成回调时的兜底通知（调用方释放幂等键）。
+pub type MergeAbortCallback = Box<dyn FnOnce() + Send + Sync>;
 pub type ProgressCallback = Box<dyn Fn(MergeProgress) + Send + Sync>;
 
 #[derive(Clone, Debug)]

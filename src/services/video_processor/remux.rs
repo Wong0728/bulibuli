@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
-use super::{MergeCallback, MergeResult, VideoProcessor};
+use super::{MergeAbortCallback, MergeCallback, MergeResult, VideoProcessor};
 
 impl VideoProcessor {
     pub async fn merge_and_cleanup(
@@ -18,6 +18,7 @@ impl VideoProcessor {
         output_path: &Path,
         container: &str,
         callback: Option<MergeCallback>,
+        on_abort: Option<MergeAbortCallback>,
     ) -> Result<MergeResult> {
         let v_path = video_path.to_path_buf();
         let a_path = audio_path.to_path_buf();
@@ -34,7 +35,7 @@ impl VideoProcessor {
             }) as MergeCallback
         });
 
-        self.merge_audio_video(video_path, audio_path, output_path, container, cb, None)
+        self.merge_audio_video(video_path, audio_path, output_path, container, cb, None, on_abort)
             .await
     }
 

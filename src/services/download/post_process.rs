@@ -87,8 +87,10 @@ impl DownloadManager {
         let output_for_cb = output.clone();
         let merge_in_progress_for_cb = self.merge_in_progress.clone();
         let merge_in_progress_for_match = self.merge_in_progress.clone();
+        let merge_in_progress_for_abort = self.merge_in_progress.clone();
         let background_tasks = self.background_tasks.clone();
         let cache_key_for_cb = cache_key.clone();
+        let cache_key_for_abort = cache_key.clone();
         let cb_cid = cid;
         let cb_page = video.page;
         let cb_task_id = video.id;
@@ -150,7 +152,22 @@ impl DownloadManager {
 
         match self
             .video_processor
-            .merge_and_cleanup(&v_path, &a_path, &output, container, callback)
+            .merge_and_cleanup(
+                &v_path,
+                &a_path,
+                &output,
+                container,
+                callback,
+                // 合并任务 panic 时 on_complete 已随 future 释放，幂等键在此兜底移除，
+                // 否则该 bvid/cid 的后续合并会被永久跳过（remove 幂等）。
+                Some(Box::new(move || {
+                    let mut guard = match merge_in_progress_for_abort.lock() {
+                        Ok(guard) => guard,
+                        Err(e) => e.into_inner(),
+                    };
+                    guard.remove(&cache_key_for_abort);
+                })),
+            )
             .await
         {
             Ok(result) if result.success => {
