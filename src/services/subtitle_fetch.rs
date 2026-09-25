@@ -254,7 +254,11 @@ impl SubtitleFetchService {
             .await
             .map_err(|e| anyhow!("字幕 URL 不受支持: {e}"))?;
         let mut headers = HeaderMap::new();
-        headers.insert("User-Agent", HeaderValue::from_static("Mozilla/5.0"));
+        // UA 必须与同会话的设备指纹上报一致，否则一份会话出现两种客户端特征。
+        headers.insert(
+            "User-Agent",
+            HeaderValue::from_str(self.bili_api.user_agent())?,
+        );
         headers.insert(
             "Referer",
             HeaderValue::from_static("https://www.bilibili.com/"),

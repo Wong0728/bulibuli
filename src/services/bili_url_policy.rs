@@ -2,7 +2,9 @@ use crate::error::{AppError, AppResult};
 use std::net::IpAddr;
 use url::{Host, Url};
 
-const ALLOWED_ROOTS: &[&str] = &["bilibili.com", "bilivideo.com", "hdslb.com"];
+/// B 站自有资源域白名单。`bilivideo.cn` 与 `bilivideo.com` 同属 B 站 CDN 域族，
+/// playurl 的 MCDN 兜底候选用它，缺该域会让 `cdn_registry::choose_url` 的兜底必然被拒。
+const ALLOWED_ROOTS: &[&str] = &["bilibili.com", "bilivideo.com", "bilivideo.cn", "hdslb.com"];
 
 /// 在服务端边界规范化 B 站资源 URL。
 /// B 站 API 可能返回协议相对地址或旧版 HTTP 图片地址，统一升级为 HTTPS 后
@@ -161,6 +163,16 @@ mod tests {
         assert!(validate_syntax("https://bilivideo.com.evil.example/a").is_err());
         assert!(validate_syntax("https://127.0.0.1/a").is_err());
         assert!(validate_syntax("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn accepts_bilivideo_cn_cdn_family_for_mcdn_candidates() {
+        assert!(validate_syntax("https://xy1x2xy.mcdn.bilivideo.cn/v1/a.m4s").is_ok());
+        assert!(validate_syntax("https://bilivideo.cn/v1/a.m4s").is_ok());
+        // 后缀混淆与端口边界不因新增域放宽
+        assert!(validate_syntax("https://bilivideo.cn.evil.example/v1/a.m4s").is_err());
+        assert!(validate_syntax("https://evil-bilivideo.cn/v1/a.m4s").is_err());
+        assert!(validate_syntax("https://xy.mcdn.bilivideo.cn:8082/v1/a.m4s").is_err());
     }
 
     #[test]

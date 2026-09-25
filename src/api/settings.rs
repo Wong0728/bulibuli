@@ -389,3 +389,35 @@ async fn test_ffmpeg(
         detect_ffmpeg_status(&state, mode, request.custom_path.as_deref()).await,
     )))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::settings_for_response;
+    use crate::services::settings::{RuntimeSettings, SECRET_MASK};
+
+    fn settings_with_sensitive_values() -> RuntimeSettings {
+        let mut settings = RuntimeSettings::default();
+        settings.ffmpeg.custom_path = "D:\\server\\tools\\ffmpeg.exe".to_string();
+        settings.aria2_rpc.secret = "rpc-secret".to_string();
+        settings
+    }
+
+    #[test]
+    fn owner_view_keeps_local_ffmpeg_path() {
+        let owner = settings_for_response(&settings_with_sensitive_values(), true);
+        assert_eq!(owner.ffmpeg.custom_path, "D:\\server\\tools\\ffmpeg.exe");
+        assert_eq!(owner.aria2_rpc.secret, SECRET_MASK);
+    }
+
+    #[test]
+    fn restricted_view_hides_local_paths_without_dropping_other_settings() {
+        let source = settings_with_sensitive_values();
+        let viewer = settings_for_response(&source, false);
+        let mut expected = settings_for_response(&source, true);
+        expected.ffmpeg.custom_path.clear();
+        assert_eq!(viewer, expected);
+        let text = serde_json::to_string(&viewer).expect("serialize");
+        assert!(!text.contains("ffmpeg.exe"));
+        assert!(!text.contains("rpc-secret"));
+    }
+}

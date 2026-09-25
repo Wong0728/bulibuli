@@ -1,3 +1,4 @@
+use crate::error::{BiliApiError, BiliErrorKind};
 use crate::models::live_source;
 use crate::services::bili_api::BiliApi;
 use crate::services::live_recorder::{LiveRecorder, RecordingTrigger};
@@ -300,7 +301,7 @@ impl LiveMonitor {
             Err(error) => {
                 let message = error.to_string();
                 self.inner.health.lock().await.last_error = Some(message.clone());
-                let limited = is_risk_error(&message);
+                let limited = is_risk_error(&error);
                 self.mark_batch_error(&due, message.clone(), limited).await;
                 if limited {
                     self.activate_risk_backoff(message).await;
@@ -446,9 +447,60 @@ impl LiveMonitor {
     }
 }
 
-fn is_risk_error(message: &str) -> bool {
+fn is_risk_error(error: &anyhow::Error) -> bool {
+    // 风控码集合以 `BiliApiError::classify` 的 code→kind 映射为唯一来源，不在此复制；
+    // -101 属登录失效（Unauthorized），全局退避无法修复，因此不参与退避。
+    if let Some(bili) = error.downcast_ref::<BiliApiError>() {
+        return matches!(
+            bili.kind,
+            BiliErrorKind::RiskControl | BiliErrorKind::RateLimited
+        );
+    }
+    // 非结构化错误（网络层 context 包装、CookieManager 文案）退回文案匹配。
+    let message = error.to_string();
     message.contains("-352")
-        || message.contains("429")
+        || message.contains("-403")
+        || message.contains("-799")
         || message.contains("412")
+        || message.contains("429")
         || message.to_ascii_lowercase().contains("riskcontrol")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_risk_error;
+    use crate::error::BiliApiError;
+
+    fn typed(code: i64) -> anyhow::Error {
+        anyhow::Error::new(BiliApiError::classify(code, "upstream rejected"))
+    }
+
+    #[test]
+    fn risk_control_codes_activate_global_backoff() {
+        for code in [-352, -403, -412, -799] {
+            assert!(is_risk_error(&typed(code)), "code {code} 应触发退避");
+        }
+    }
+
+    #[test]
+    fn rate_limited_response_activates_global_backoff() {
+        assert!(is_risk_error(&typed(429)));
+    }
+
+    #[test]
+    fn auth_and_business_errors_do_not_activate_backoff() {
+        assert!(!is_risk_error(&typed(-101)));
+        assert!(!is_risk_error(&typed(-404)));
+        assert!(!is_risk_error(&typed(503)));
+        assert!(!is_risk_error(&anyhow::anyhow!(
+            "批量状态响应未包含该直播源"
+        )));
+    }
+
+    #[test]
+    fn untyped_errors_fall_back_to_message_matching() {
+        assert!(is_risk_error(&anyhow::anyhow!("B站API返回HTTP 412")));
+        assert!(is_risk_error(&anyhow::anyhow!("触发 RiskControl 校验")));
+        assert!(!is_risk_error(&anyhow::anyhow!("发送 B站 API 请求失败")));
+    }
 }
