@@ -40,6 +40,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// 收尾任务（分段合并、停止收尾、录制 worker）的关机预算：普通后台任务只有 10 秒，
+/// 会砍断正在写盘的合并；这里给足完成时间，超时后也会因已登记合并任务而下次启动续跑。
+const FINALIZE_SHUTDOWN_BUDGET: Duration = Duration::from_secs(120);
 // 互动归档收尾是两遍全量扫描（上限 50 万条 / 512 MB），数小时直播轻松超过旧值 5 秒；
 // 超时 abort 会在写出中途截断 legacy JSON / XML，因此按最坏工作量放宽预算。
 const DANMU_STOP_TIMEOUT: Duration = Duration::from_secs(120);
@@ -121,6 +124,9 @@ pub struct MergeJobInfo {
     pub created_at: String,
     pub updated_at: String,
 }
+
+type MergeJobMap = Arc<Mutex<HashMap<String, MergeJobInfo>>>;
+type MergeCancellationMap = Arc<Mutex<HashMap<String, CancellationToken>>>;
 
 /// 录制服务依赖。
 pub struct LiveRecorderDeps {
@@ -822,12 +828,13 @@ impl LiveRecorder {
         // 该房间会永久报"已在录制中"并占用 max_concurrent 额度直至重启。
         // 条目存在期间同房间无法发起新会话，panic 后移除的必是本会话条目。
         let panic_sessions = self.inner.sessions.clone();
-        let accepted = self.inner.background_tasks.spawn_with_panic(
+        let accepted = self.inner.background_tasks.spawn_with_panic_and_budget(
             "live_recorder_worker",
             async move { worker.run().await },
             move || async move {
                 panic_sessions.lock().await.remove(&room_id);
             },
+            FINALIZE_SHUTDOWN_BUDGET,
         );
         if !accepted {
             self.inner.sessions.lock().await.remove(&room_id);
@@ -1207,21 +1214,7 @@ impl LiveRecorder {
     }
 
     async fn find_active_merge_job(&self, recording_id: i32) -> Result<Option<MergeJobInfo>> {
-        let row = self
-            .inner
-            .db
-            .query_one_raw(Statement::from_sql_and_values(
-                self.inner.db.get_database_backend(),
-                "SELECT id, recording_id, status, progress, error_msg, source_segment_count,
-                        cancel_requested, created_at, updated_at
-                   FROM live_merge_jobs
-                  WHERE recording_id = ? AND status IN ('queued', 'running', 'cancelling')
-                  ORDER BY updated_at DESC LIMIT 1"
-                    .to_owned(),
-                [recording_id.into()],
-            ))
-            .await?;
-        row.as_ref().map(merge_job_from_row).transpose()
+        find_active_merge_job(&self.inner.db, recording_id).await
     }
 
     async fn start_merge_job(
@@ -1250,7 +1243,7 @@ impl LiveRecorder {
             .insert(job.id.clone(), cancellation.clone());
         let inner = self.inner.clone();
         let task_cancellation = cancellation.clone();
-        let accepted = self.inner.background_tasks.spawn(
+        let accepted = self.inner.background_tasks.spawn_with_budget(
             "live_merge_job",
             run_merge_job(
                 inner,
@@ -1260,6 +1253,7 @@ impl LiveRecorder {
                 segments,
                 task_cancellation,
             ),
+            FINALIZE_SHUTDOWN_BUDGET,
         );
         if !accepted {
             cancellation.cancel();
@@ -1415,7 +1409,7 @@ impl LiveRecorder {
                 .await
                 .insert(job.id.clone(), cancellation.clone());
             let task_cancellation = cancellation.clone();
-            let accepted = self.inner.background_tasks.spawn(
+            let accepted = self.inner.background_tasks.spawn_with_budget(
                 "live_merge_job",
                 run_merge_job(
                     self.inner.clone(),
@@ -1425,6 +1419,7 @@ impl LiveRecorder {
                     segments,
                     task_cancellation,
                 ),
+                FINALIZE_SHUTDOWN_BUDGET,
             );
             if !accepted {
                 cancellation.cancel();
@@ -1474,23 +1469,25 @@ impl LiveRecorder {
                 "发现未合并的直播 FLV 分段，已保留文件供恢复"
             );
         }
+        // 合并中途被杀留下的临时文件（含被 abort 的收尾合并）没人会再用，
+        // 留到下次开机一并清掉；*.mp4.unverified 是待抢救产物，不在清理范围。
+        let leftovers = sweep_merge_leftovers(&live_root);
+        if leftovers > 0 {
+            info!(
+                leftovers,
+                root = %live_root.display(),
+                "已清理上次遗留的合并临时文件"
+            );
+        }
         Ok(())
     }
 
     /// 优雅停止所有活动会话。单个会话失败时，也不能阻止应用关停期间
     /// 清理其余 FFmpeg 子进程。
     pub async fn stop_all(&self) {
-        let merge_cancellations = self
-            .inner
-            .merge_cancellations
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for cancellation in merge_cancellations {
-            cancellation.cancel();
-        }
+        // 不取消进行中的合并：取消会把任务行写成 cancelled（下次启动不再续跑）
+        // 并删掉半成品。收尾任务已登记更大的关机预算，让它跑完才是用户要的结果；
+        // 真超过预算被 abort 时，行仍是 running，下次启动由 restore_merge_jobs 接手。
         let room_ids = {
             let sessions = self.inner.sessions.lock().await;
             sessions
@@ -1616,7 +1613,6 @@ impl RecordingWorker {
                                 .lock()
                                 .await
                                 .insert(job_id.clone(), merge_cancellation.clone());
-                            let merge_jobs = self.merge_jobs.clone();
                             let merge_cancellations = self.merge_cancellations.clone();
                             let sessions = self.sessions.clone();
                             let room_id = self.room_id;
@@ -1624,67 +1620,28 @@ impl RecordingWorker {
                             // 带 panic 兜底：收尾任务 panic 时 Stopping 条目无人清理，
                             // 该房间会永久报"已在录制中"（条目存在期间无法再次录制）。
                             let panic_sessions = sessions.clone();
-                            let rejected_db = self.db.clone();
-                            let rejected_merge_jobs = merge_jobs.clone();
                             let rejected_merge_cancellations = merge_cancellations.clone();
                             let rejected_sessions = sessions.clone();
                             let rejected_job_id = background_job_id.clone();
                             let background_tasks = self.background_tasks.clone();
-                            let accepted = background_tasks.spawn_with_panic(
+                            // 合并任务行的状态由 finalize 统一登记与关闭，
+                            // 这里不再重复写终态，避免把失败的合并翻成 completed。
+                            let accepted = background_tasks.spawn_with_panic_and_budget(
                                 "live_recorder_stop_background",
                                 async move {
-                                if let Some(job) = merge_jobs.lock().await.get_mut(&background_job_id) {
-                                    job.status = "running".to_owned();
-                                    job.progress = 10;
-                                }
-                                let result = self.finalize(Some(&merge_cancellation)).await;
-                                let job_snapshot = if let Some(job) = merge_jobs.lock().await.get_mut(&background_job_id) {
-                                    job.status = if result.is_ok() {
-                                        "completed"
-                                    } else if merge_cancellation.is_cancelled() {
-                                        "cancelled"
-                                    } else {
-                                        "failed"
-                                    }
-                                    .to_owned();
-                                    job.progress = 100;
-                                    job.error = result
-                                        .as_ref()
-                                        .err()
-                                        .map(ToString::to_string)
-                                        .map(|error| redact_diagnostics(&error));
-                                    job.updated_at = chrono::Utc::now().to_rfc3339();
-                                    Some(job.clone())
-                                } else {
-                                    None
-                                };
-                                if let Some(job) = job_snapshot {
-                                    if let Err(error) = persist_merge_job(&self.db, &job).await {
-                                        warn!(job_id = %background_job_id, "persist merge job failed: {error}");
-                                    }
-                                }
-                                merge_cancellations.lock().await.remove(&background_job_id);
-                                sessions.lock().await.remove(&room_id);
-                            },
-                            move || async move {
-                                panic_sessions.lock().await.remove(&room_id);
-                            },
+                                    let _ = self.finalize(Some(&merge_cancellation)).await;
+                                    merge_cancellations.lock().await.remove(&background_job_id);
+                                    sessions.lock().await.remove(&room_id);
+                                },
+                                move || async move {
+                                    panic_sessions.lock().await.remove(&room_id);
+                                },
+                                FINALIZE_SHUTDOWN_BUDGET,
                             );
                             if !accepted {
-                                let snapshot = if let Some(job) =
-                                    rejected_merge_jobs.lock().await.get_mut(&rejected_job_id)
-                                {
-                                    job.status = "failed".to_owned();
-                                    job.progress = 100;
-                                    job.error = Some("应用正在关闭，直播收尾任务未启动".to_owned());
-                                    job.updated_at = chrono::Utc::now().to_rfc3339();
-                                    Some(job.clone())
-                                } else {
-                                    None
-                                };
-                                if let Some(job) = snapshot {
-                                    let _ = persist_merge_job(&rejected_db, &job).await;
-                                }
+                                // 未启动的收尾保持 queued 行：下次启动 restore_merge_jobs
+                                // 续跑合并，比在这里判失败并丢弃分段更有价值。
+                                warn!(room_id, "应用正在关闭，直播收尾改由下次启动续跑");
                                 rejected_merge_cancellations
                                     .lock()
                                     .await
@@ -2136,6 +2093,9 @@ impl RecordingWorker {
                 }
             }
         }
+        // 同步停止（stop()/关机）与后台停止口径一致：合并之前先登记 live_merge_jobs 行，
+        // 进程在合并中被杀时下次启动的 restore_merge_jobs 才有活可接。
+        let merge_job_id = self.begin_finalize_merge_job(valid_segments.len()).await;
         let merge_result = if valid_segments.is_empty() {
             Err(anyhow!("没有有效的直播分段可供合并"))
         } else {
@@ -2151,6 +2111,10 @@ impl RecordingWorker {
                 None => merge_segments_to_mp4(&self.ffmpeg_path, &valid_segments).await,
             }
         };
+        // 关闭合并任务必须在删除源分段之前：万一此后进程被杀，行里已是终态，
+        // 下次启动不会去重跑一次无分段的合并。
+        self.close_finalize_merge_job(merge_job_id.as_deref(), &merge_result, merge_cancellation)
+            .await;
         let (final_path, merge_error) = match merge_result {
             Ok(path) => {
                 for segment in &self.segments {
@@ -2217,6 +2181,29 @@ impl RecordingWorker {
             "直播录制已完成收尾"
         );
         Ok(info)
+    }
+
+    /// 合并前登记收尾任务，使同步停止与后台停止在"是否登记合并任务"上口径一致。
+    async fn begin_finalize_merge_job(&self, segment_count: usize) -> Option<String> {
+        register_finalize_merge_job(&self.db, &self.merge_jobs, self.recording_id, segment_count)
+            .await
+    }
+
+    async fn close_finalize_merge_job(
+        &self,
+        job_id: Option<&str>,
+        merge_result: &Result<PathBuf>,
+        cancellation: Option<&CancellationToken>,
+    ) {
+        finish_finalize_merge_job(
+            &self.db,
+            &self.merge_jobs,
+            &self.merge_cancellations,
+            job_id,
+            merge_result,
+            cancellation,
+        )
+        .await;
     }
 
     async fn mark_failure(&mut self, error: String) {
@@ -2489,6 +2476,101 @@ async fn persist_closed_segments(db: &DatabaseConnection, recording_id: i32, pat
     }
 }
 
+/// 同一录制最多一条活跃合并任务（唯一索引 ux_live_merge_jobs_active_recording）。
+async fn find_active_merge_job(
+    db: &DatabaseConnection,
+    recording_id: i32,
+) -> Result<Option<MergeJobInfo>> {
+    let row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT id, recording_id, status, progress, error_msg, source_segment_count,
+                    cancel_requested, created_at, updated_at
+               FROM live_merge_jobs
+              WHERE recording_id = ? AND status IN ('queued', 'running', 'cancelling')
+              ORDER BY updated_at DESC LIMIT 1"
+                .to_owned(),
+            [recording_id.into()],
+        ))
+        .await?;
+    row.as_ref().map(merge_job_from_row).transpose()
+}
+
+/// finalize 的合并登记：复用 `request_stop` 已建的活跃行（同一录制有唯一索引，
+/// 另起一行会冲突），没有才新建。DB 不可用时返回 None，不影响合并本身。
+async fn register_finalize_merge_job(
+    db: &DatabaseConnection,
+    merge_jobs: &MergeJobMap,
+    recording_id: i32,
+    segment_count: usize,
+) -> Option<String> {
+    let existing = find_active_merge_job(db, recording_id).await.ok().flatten();
+    let now = chrono::Utc::now().to_rfc3339();
+    let job = match existing {
+        Some(mut job) => {
+            job.status = "running".to_owned();
+            job.progress = 10;
+            job.source_segment_count = segment_count;
+            job.updated_at = now;
+            job
+        }
+        None => {
+            if segment_count == 0 {
+                return None;
+            }
+            MergeJobInfo {
+                id: uuid::Uuid::new_v4().simple().to_string(),
+                recording_id,
+                status: "running".to_owned(),
+                progress: 10,
+                error: None,
+                source_segment_count: segment_count,
+                cancel_requested: false,
+                created_at: now.clone(),
+                updated_at: now,
+            }
+        }
+    };
+    let job_id = job.id.clone();
+    if let Err(error) = persist_merge_job(db, &job).await {
+        warn!(
+            recording_id,
+            "登记收尾合并任务失败，关机时无法续跑合并: {error}"
+        );
+        return None;
+    }
+    merge_jobs.lock().await.insert(job_id.clone(), job);
+    Some(job_id)
+}
+
+/// 关闭 finalize 的合并任务行。必须在删除源分段之前调用：进程若在之后被杀，
+/// 行已是终态，下次启动不会去重跑一次无分段的合并。
+async fn finish_finalize_merge_job(
+    db: &DatabaseConnection,
+    merge_jobs: &MergeJobMap,
+    merge_cancellations: &MergeCancellationMap,
+    job_id: Option<&str>,
+    merge_result: &Result<PathBuf>,
+    cancellation: Option<&CancellationToken>,
+) {
+    let Some(job_id) = job_id else {
+        return;
+    };
+    let (status, error) = match merge_result {
+        Ok(_) => ("completed", None),
+        Err(error) => {
+            let status = if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            (status, Some(error.to_string()))
+        }
+    };
+    write_merge_job(merge_jobs, db, job_id, status, 100, error).await;
+    merge_cancellations.lock().await.remove(job_id);
+}
+
 async fn persist_merge_job(db: &DatabaseConnection, job: &MergeJobInfo) -> Result<()> {
     db.execute_raw(Statement::from_sql_and_values(
         db.get_database_backend(),
@@ -2591,7 +2673,27 @@ async fn update_merge_job(
     progress: u8,
     error: Option<String>,
 ) {
-    let snapshot = if let Some(job) = inner.merge_jobs.lock().await.get_mut(job_id) {
+    write_merge_job(
+        &inner.merge_jobs,
+        &inner.db,
+        job_id,
+        status,
+        progress,
+        error,
+    )
+    .await;
+}
+
+/// 录制 worker 只持有 map/db 克隆，不反向依赖 `LiveRecorderInner`。
+async fn write_merge_job(
+    merge_jobs: &MergeJobMap,
+    db: &DatabaseConnection,
+    job_id: &str,
+    status: &str,
+    progress: u8,
+    error: Option<String>,
+) {
+    let snapshot = if let Some(job) = merge_jobs.lock().await.get_mut(job_id) {
         job.status = status.to_owned();
         job.progress = progress;
         job.error = error.map(|error| redact_diagnostics(&error));
@@ -2601,7 +2703,7 @@ async fn update_merge_job(
         None
     };
     if let Some(job) = snapshot {
-        if let Err(error) = persist_merge_job(&inner.db, &job).await {
+        if let Err(error) = persist_merge_job(db, &job).await {
             warn!(job_id, "persist merge job failed: {error}");
         }
     }
@@ -2662,6 +2764,48 @@ fn recovery_state(status: &str, has_output: bool, segment_count: usize) -> &'sta
         (_, true, false) => "output_pending_db_commit",
         _ => "artifacts_missing",
     }
+}
+
+/// 合并临时文件：FFmpeg 的中间输出与分段清单。
+fn is_merge_leftover_name(name: &str) -> bool {
+    name.ends_with(".mp4.partial")
+        || (name.starts_with('.') && name.contains(".concat-") && name.ends_with(".txt"))
+}
+
+/// 删除录制目录里上次运行遗留的合并临时文件，返回删除数量。
+/// 只在启动恢复阶段调用：此时不可能有合并在写这些文件。
+fn sweep_merge_leftovers(root: &Path) -> usize {
+    if !root.is_dir() {
+        return 0;
+    }
+    let mut removed = 0;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !is_merge_leftover_name(name) {
+                continue;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(error) => warn!(
+                    path = %path.display(),
+                    "清理合并临时文件失败: {error}"
+                ),
+            }
+        }
+    }
+    removed
 }
 
 fn count_residual_segments(root: &Path) -> usize {
@@ -2793,5 +2937,197 @@ mod tests {
             render_file_template("{missing}", 456, "标题", now),
             "{missing}"
         );
+    }
+
+    fn empty_job_maps() -> (MergeJobMap, MergeCancellationMap) {
+        (
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+        )
+    }
+
+    async fn migrated_merge_job_db() -> DatabaseConnection {
+        let db = sea_orm::Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite");
+        <crate::migration::Migrator as sea_orm_migration::MigratorTrait>::up(&db, None)
+            .await
+            .expect("migrations");
+        db
+    }
+
+    async fn persisted_status(db: &DatabaseConnection, job_id: &str) -> String {
+        let row = db
+            .query_one_raw(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status FROM live_merge_jobs WHERE id = ?".to_owned(),
+                [job_id.to_owned().into()],
+            ))
+            .await
+            .expect("query job")
+            .expect("job row");
+        row.try_get("", "status").expect("status column")
+    }
+
+    #[tokio::test]
+    async fn finalize_registers_merge_job_row_for_every_stop_branch() {
+        // 同步停止（stop()/关机）没有 request_stop 预建行，finalize 必须自己登记，
+        // 否则进程被杀后没人续跑这场合并。
+        let db = migrated_merge_job_db().await;
+        let (jobs, _cancellations) = empty_job_maps();
+        let job_id = register_finalize_merge_job(&db, &jobs, 7, 3)
+            .await
+            .expect("收尾合并应登记任务行");
+        assert_eq!(persisted_status(&db, &job_id).await, "running");
+        assert_eq!(
+            find_active_merge_job(&db, 7)
+                .await
+                .expect("find active")
+                .expect("关机 abort 后应留在可续跑状态")
+                .id,
+            job_id
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_reuses_active_row_instead_of_colliding_on_unique_index() {
+        let db = migrated_merge_job_db().await;
+        let (jobs, _cancellations) = empty_job_maps();
+        let now = chrono::Utc::now().to_rfc3339();
+        let pre = MergeJobInfo {
+            id: "pre-job".to_owned(),
+            recording_id: 9,
+            status: "queued".to_owned(),
+            progress: 0,
+            error: None,
+            source_segment_count: 0,
+            cancel_requested: false,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        persist_merge_job(&db, &pre)
+            .await
+            .expect("persist queued job");
+        jobs.lock().await.insert(pre.id.clone(), pre.clone());
+
+        let job_id = register_finalize_merge_job(&db, &jobs, 9, 2)
+            .await
+            .expect("复用已登记的行");
+        assert_eq!(job_id, "pre-job");
+        assert_eq!(persisted_status(&db, "pre-job").await, "running");
+        let rows = db
+            .query_all_raw(Statement::from_string(
+                db.get_database_backend(),
+                "SELECT id FROM live_merge_jobs WHERE recording_id = 9".to_owned(),
+            ))
+            .await
+            .expect("count rows");
+        assert_eq!(rows.len(), 1, "同一录制只允许一条合并任务行");
+    }
+
+    #[tokio::test]
+    async fn completed_merge_closes_row_before_segments_are_removed() {
+        let db = migrated_merge_job_db().await;
+        let (jobs, cancellations) = empty_job_maps();
+        let job_id = register_finalize_merge_job(&db, &jobs, 11, 2)
+            .await
+            .expect("登记合并任务");
+        let ok: Result<PathBuf, anyhow::Error> = Ok(PathBuf::from("room.mp4"));
+        finish_finalize_merge_job(&db, &jobs, &cancellations, Some(&job_id), &ok, None).await;
+        assert_eq!(persisted_status(&db, &job_id).await, "completed");
+        assert!(
+            find_active_merge_job(&db, 11)
+                .await
+                .expect("find active")
+                .is_none(),
+            "已完成的合并不得在下次启动被重跑"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_and_cancelled_merges_leave_terminal_rows() {
+        let db = migrated_merge_job_db().await;
+        let (jobs, cancellations) = empty_job_maps();
+        let failed = register_finalize_merge_job(&db, &jobs, 12, 2)
+            .await
+            .expect("登记合并任务");
+        let error: Result<PathBuf, anyhow::Error> = Err(anyhow!("输入分段无效"));
+        finish_finalize_merge_job(&db, &jobs, &cancellations, Some(&failed), &error, None).await;
+        assert_eq!(persisted_status(&db, &failed).await, "failed");
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = register_finalize_merge_job(&db, &jobs, 13, 2)
+            .await
+            .expect("登记合并任务");
+        cancellations
+            .lock()
+            .await
+            .insert(cancelled.clone(), cancellation.clone());
+        finish_finalize_merge_job(
+            &db,
+            &jobs,
+            &cancellations,
+            Some(&cancelled),
+            &error,
+            Some(&cancellation),
+        )
+        .await;
+        assert_eq!(persisted_status(&db, &cancelled).await, "cancelled");
+        assert!(
+            !cancellations.lock().await.contains_key(&cancelled),
+            "收尾结束后必须释放取消令牌，避免 map 无限增长"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_segment_list_registers_no_job() {
+        let db = migrated_merge_job_db().await;
+        let (jobs, _cancellations) = empty_job_maps();
+        assert!(register_finalize_merge_job(&db, &jobs, 14, 0)
+            .await
+            .is_none());
+        assert!(jobs.lock().await.is_empty());
+    }
+
+    #[test]
+    fn merge_leftover_names_are_recognized() {
+        assert!(is_merge_leftover_name("room_segment_0001.mp4.partial"));
+        assert!(is_merge_leftover_name(
+            ".room_segment_0001.concat-9f3a1b.txt"
+        ));
+        assert!(!is_merge_leftover_name("room_segment_0001.flv"));
+        assert!(!is_merge_leftover_name("room_segment_0001.mp4"));
+        assert!(!is_merge_leftover_name("room_segment_0001.mp4.unverified"));
+        assert!(!is_merge_leftover_name("concat-list.txt"));
+        assert!(!is_merge_leftover_name(".room.concat-1.log"));
+    }
+
+    #[test]
+    fn sweep_removes_only_merge_temporaries() {
+        let root = tempfile::tempdir().expect("temp directory");
+        let room = root.path().join("8178490");
+        std::fs::create_dir_all(&room).expect("create room dir");
+        for name in [
+            "room_segment_0001.mp4.partial",
+            ".room_segment_0001.concat-ab12.txt",
+            "room_segment_0001.flv",
+            "room_segment_0001.mp4",
+            "room_segment_0001.mp4.unverified",
+        ] {
+            std::fs::write(room.join(name), b"x").expect("write fixture");
+        }
+        std::fs::write(root.path().join("room_segment_0002.mp4.partial"), b"x")
+            .expect("write nested leftover");
+
+        assert_eq!(sweep_merge_leftovers(root.path()), 3);
+        assert!(!room.join("room_segment_0001.mp4.partial").exists());
+        assert!(!room.join(".room_segment_0001.concat-ab12.txt").exists());
+        assert!(!root.path().join("room_segment_0002.mp4.partial").exists());
+        assert!(room.join("room_segment_0001.flv").exists());
+        assert!(room.join("room_segment_0001.mp4").exists());
+        assert!(room.join("room_segment_0001.mp4.unverified").exists());
+        assert_eq!(sweep_merge_leftovers(root.path()), 0);
+        assert_eq!(sweep_merge_leftovers(&root.path().join("不存在")), 0);
     }
 }

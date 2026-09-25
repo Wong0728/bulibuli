@@ -1,5 +1,6 @@
 //! 音视频合并：启动 ffmpeg 合并任务、监控进度、原子替换输出。
 
+use crate::services::spawn_util::child_lifetime;
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -94,10 +95,7 @@ impl VideoProcessor {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-
-        let child = cmd.spawn().context("启动 ffmpeg 失败")?;
+        let child = child_lifetime::spawn(&mut cmd).context("启动 ffmpeg 失败")?;
 
         let task = MergeTaskInfo {
             task_id: task_id.clone(),
@@ -210,7 +208,7 @@ impl VideoProcessor {
             .stderr(Stdio::null())
             .stdout(Stdio::piped())
             .kill_on_drop(true);
-        let child = command.spawn().ok()?;
+        let child = child_lifetime::spawn(&mut command).ok()?;
         let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
             .await
             .ok()?
@@ -232,7 +230,7 @@ impl VideoProcessor {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let child = command.spawn().ok()?;
+        let child = child_lifetime::spawn(&mut command).ok()?;
         let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
             .await
             .ok()?

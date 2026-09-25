@@ -1,5 +1,6 @@
 //! 合并后清理与纯视频 remux：merge_and_cleanup、源文件删除、m4s → mp4。
 
+use crate::services::spawn_util::child_lifetime;
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::process::Stdio;
@@ -106,10 +107,7 @@ impl VideoProcessor {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-
-        let mut child = cmd.spawn().context("启动 ffmpeg 失败")?;
+        let mut child = child_lifetime::spawn(&mut cmd).context("启动 ffmpeg 失败")?;
         // 并发读取 stderr，避免 ffmpeg 写满管道缓冲后阻塞
         let stderr = child.stderr.take();
         let stderr_task = tokio::spawn(async move {

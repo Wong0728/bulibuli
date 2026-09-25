@@ -1,5 +1,6 @@
 //! ffmpeg 可执行文件探测与可用性校验（env / system / embedded / custom / auto）。
 
+use crate::services::spawn_util::child_lifetime;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -112,13 +113,13 @@ impl VideoProcessor {
             ("-muxers", "flv"),
             ("-demuxers", "concat"),
         ] {
-            let Ok(output) = Command::new(path)
+            let mut command = Command::new(path);
+            command
                 .args(["-hide_banner", arg])
                 .stdin(Stdio::null())
-                .kill_on_drop(true)
-                .output()
-                .await
-            else {
+                .kill_on_drop(true);
+            child_lifetime::configure(&mut command);
+            let Ok(output) = command.output().await else {
                 return false;
             };
             if !output.status.success() {
@@ -199,7 +200,7 @@ impl VideoProcessor {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        let output = match command.spawn() {
+        let output = match child_lifetime::spawn(&mut command) {
             Ok(child) => tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
                 .await
                 .map_err(|_| {

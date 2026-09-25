@@ -1,5 +1,6 @@
 //! FFmpeg 直播录制会话：进程启动、监督、停止和分段合并。
 
+use crate::services::spawn_util::child_lifetime;
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -17,12 +18,26 @@ const MIN_MERGED_DURATION_RATIO: f64 = 0.90;
 const MERGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// 合并预检的额外安全余量：除输出体积（约等于输入分段总和）外保留的空间。
 const MERGE_FREE_SPACE_MARGIN_BYTES: u64 = 1024 * 1024 * 1024;
+/// 校验失败时保留的合并产物后缀：不匹配 `*.mp4`，也不被启动清扫删除。
+const UNVERIFIED_SUFFIX: &str = ".unverified";
 
 #[derive(Debug)]
 struct MediaProbe {
     duration_secs: f64,
     has_video: bool,
     has_audio: bool,
+}
+
+/// 分段有效性判定：时长为 0 不等于坏文件。
+#[derive(Debug, PartialEq)]
+enum SegmentProbe {
+    /// 时长可信，计入输入总时长。
+    Timestamped(f64),
+    /// 时长不可信（强杀的 FLV 会把 onMetaData.duration 占位写成 0），
+    /// 但音视频轨道与体积有效。
+    Untimestamped,
+    /// 既无时长也无可用轨道或体积为空：真实坏输入。
+    Invalid(&'static str),
 }
 
 /// 单个 FFmpeg 录制进程。
@@ -81,8 +96,7 @@ impl FfmpegSession {
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
 
-        let mut child = cmd
-            .spawn()
+        let mut child = child_lifetime::spawn(&mut cmd)
             .with_context(|| format!("启动 FFmpeg 录制进程失败 (room_id={room_id})"))?;
         let stderr = child.stderr.take();
         let stdin = child.stdin.take();
@@ -284,8 +298,29 @@ async fn merge_segments_to_mp4_inner(
     match result {
         Ok(()) if output_size > 0 => {
             if let Err(error) = verify_merged_output(ffmpeg_path, &partial_output, segments).await {
-                let _ = tokio::fs::remove_file(&partial_output).await;
-                return Err(error);
+                // 校验失败不删产物：整场录像只有一次合并机会，删掉就等于用户什么都没了。
+                // 改名为 *.mp4.unverified 保留（既不被启动清扫，也不会被误认成成品）。
+                let salvage = unverified_output_path(&partial_output);
+                let kept = match tokio::fs::rename(&partial_output, &salvage).await {
+                    Ok(()) => salvage,
+                    Err(rename_error) => {
+                        debug!(
+                            error = %rename_error,
+                            "重命名待抢救合并产物失败，按原路径保留"
+                        );
+                        partial_output
+                    }
+                };
+                let name = kept
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("")
+                    .to_owned();
+                // 单条消息里带上原因与保留路径：调用方只取 Display(to_string)，
+                // 用 context 包装会把原因挤到链外、用户只剩一句"已保留"。
+                return Err(anyhow!(
+                    "{error:#}；已保留未通过校验的合并产物 {name}（与分段同目录，可自行播放抢救）"
+                ));
             }
             tokio::fs::rename(&partial_output, &output)
                 .await
@@ -301,6 +336,16 @@ async fn merge_segments_to_mp4_inner(
             Err(error)
         }
     }
+}
+
+/// `xxx.mp4.partial` -> `xxx.mp4.unverified`
+fn unverified_output_path(partial_output: &Path) -> PathBuf {
+    let name = partial_output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("merge-output.mp4.partial");
+    let base = name.strip_suffix(".partial").unwrap_or(name);
+    partial_output.with_file_name(format!("{base}{UNVERIFIED_SUFFIX}"))
 }
 
 /// 非空 MP4 不能单独证明拼接成功；必须先探测容器，调用方才能删除原始 FLV 分段。
@@ -321,23 +366,55 @@ async fn verify_merged_output(
         ));
     }
     let mut input_duration = 0.0;
+    let mut untimestamped = Vec::new();
     for segment in segments {
         let probe = probe_media(ffmpeg_path, segment)
             .await
             .with_context(|| format!("校验合并输入分段失败: {}", segment.display()))?;
-        if probe.duration_secs <= 0.0 {
-            return Err(anyhow!("输入分段时长无效: {}", segment.display()));
+        let size = tokio::fs::metadata(segment)
+            .await
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        match classify_segment_probe(&probe, size) {
+            SegmentProbe::Timestamped(duration) => input_duration += duration,
+            SegmentProbe::Untimestamped => untimestamped.push(segment.clone()),
+            SegmentProbe::Invalid(reason) => {
+                return Err(anyhow!("输入分段无效（{reason}）: {}", segment.display()))
+            }
         }
-        input_duration += probe.duration_secs;
     }
-    if output_probe.duration_secs < input_duration * MIN_MERGED_DURATION_RATIO {
+    if !untimestamped.is_empty() {
+        warn!(
+            count = untimestamped.len(),
+            total = segments.len(),
+            "部分分段时间戳不可信（探测时长为 0，常见于被强杀的 FLV），已按轨道与体积校验后放行，且不计入输出时长比对"
+        );
+    }
+    if input_duration > 0.0
+        && output_probe.duration_secs < input_duration * MIN_MERGED_DURATION_RATIO
+    {
         return Err(anyhow!(
-            "合并输出时长不足: 输出 {:.3}s，输入合计 {:.3}s",
+            "合并输出时长不足: 输出 {:.3}s，输入可确认合计 {:.3}s（{} 个分段时间戳不可信未计入）",
             output_probe.duration_secs,
-            input_duration
+            input_duration,
+            untimestamped.len()
         ));
     }
     Ok(())
+}
+
+/// 分段判定：时长优先；时长缺失/为 0 时退化为「有音视频轨道 + 非空体积」。
+fn classify_segment_probe(probe: &MediaProbe, size_bytes: u64) -> SegmentProbe {
+    if probe.duration_secs.is_finite() && probe.duration_secs > 0.0 {
+        return SegmentProbe::Timestamped(probe.duration_secs);
+    }
+    if size_bytes == 0 {
+        return SegmentProbe::Invalid("文件为空");
+    }
+    if !probe.has_video && !probe.has_audio {
+        return SegmentProbe::Invalid("无音视频轨道");
+    }
+    SegmentProbe::Untimestamped
 }
 
 async fn probe_media(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
@@ -345,26 +422,21 @@ async fn probe_media(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
     // ffprobe 挂起（损坏文件/异常 IO）会让 finalize 永久停留在 Finalizing：
     // 与合并的 15 分钟超时对齐设一个探测超时。
     const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-    let result = match tokio::time::timeout(
-        PROBE_TIMEOUT,
-        Command::new(&probe)
-            .args([
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration:stream=codec_type",
-                "-of",
-                "json",
-            ])
-            .arg(input)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    {
+    let mut cmd = Command::new(&probe);
+    cmd.args([
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration:stream=codec_type",
+        "-of",
+        "json",
+    ])
+    .arg(input)
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .kill_on_drop(true);
+    let result = match tokio::time::timeout(PROBE_TIMEOUT, probe_output(&mut cmd)).await {
         Ok(result) => result,
         Err(_) => {
             return Err(anyhow!(
@@ -388,6 +460,13 @@ async fn probe_media(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
     }
 }
 
+/// 与 `Command::output()` 等价的进程输出收集（stdin 由调用方置为 null），
+/// 但先 spawn 以便把探测进程也纳入 Job Object / pdeathsig 回收。
+async fn probe_output(cmd: &mut Command) -> std::io::Result<std::process::Output> {
+    let child = child_lifetime::spawn(cmd)?;
+    child.wait_with_output().await
+}
+
 fn parse_probe_json(stdout: &[u8]) -> Result<MediaProbe> {
     let value: serde_json::Value =
         serde_json::from_slice(stdout).context("解析 ffprobe 校验结果失败")?;
@@ -406,7 +485,9 @@ fn parse_probe_json(stdout: &[u8]) -> Result<MediaProbe> {
         .and_then(serde_json::Value::as_str)
         .and_then(|duration| duration.parse::<f64>().ok())
         .filter(|duration| duration.is_finite() && *duration >= 0.0)
-        .ok_or_else(|| anyhow!("ffprobe 未返回有效时长"))?;
+        // 缺失/为 0 只表示「时长不可信」，由调用方按轨道与体积判定有效性；
+        // 强杀留下的 FLV 分段就是 duration=0 但内容可播。
+        .unwrap_or(0.0);
     Ok(MediaProbe {
         duration_secs,
         has_video,
@@ -415,14 +496,14 @@ fn parse_probe_json(stdout: &[u8]) -> Result<MediaProbe> {
 }
 
 async fn probe_media_with_ffmpeg(ffmpeg_path: &Path, input: &Path) -> Result<MediaProbe> {
-    let result = Command::new(ffmpeg_path)
-        .args(["-hide_banner", "-i"])
+    let mut cmd = Command::new(ffmpeg_path);
+    cmd.args(["-hide_banner", "-i"])
         .arg(input)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .output()
+        .kill_on_drop(true);
+    let result = probe_output(&mut cmd)
         .await
         .with_context(|| format!("使用 FFmpeg 读取媒体信息失败: {}", ffmpeg_path.display()))?;
     let text = String::from_utf8_lossy(&result.stderr);
@@ -515,7 +596,7 @@ async fn run_merge_command_timed(
     .stderr(std::process::Stdio::piped())
     .kill_on_drop(true);
 
-    let mut child = cmd.spawn().context("failed to start FFmpeg merge")?;
+    let mut child = child_lifetime::spawn(&mut cmd).context("failed to start FFmpeg merge")?;
     let stdout_task = tokio::spawn(read_diagnostic(child.stdout.take()));
     let stderr_task = tokio::spawn(read_diagnostic(child.stderr.take()));
     let status = if let Some(cancellation) = cancellation {
@@ -893,6 +974,212 @@ mod tests {
         assert!(
             source.exists(),
             "failed validation must retain recovery input"
+        );
+    }
+
+    #[test]
+    fn zero_duration_segment_with_tracks_is_untimestamped_not_invalid() {
+        // 实测：FLV 分段被强杀后 onMetaData.duration 停在占位 0，ffprobe 仍列出音视频轨。
+        let probe = MediaProbe {
+            duration_secs: 0.0,
+            has_video: true,
+            has_audio: true,
+        };
+        assert_eq!(
+            classify_segment_probe(&probe, 4096),
+            SegmentProbe::Untimestamped
+        );
+        let audio_only = MediaProbe {
+            duration_secs: 0.0,
+            has_video: false,
+            has_audio: true,
+        };
+        assert_eq!(
+            classify_segment_probe(&audio_only, 4096),
+            SegmentProbe::Untimestamped
+        );
+        assert_eq!(
+            classify_segment_probe(&audio_only, 0),
+            SegmentProbe::Invalid("文件为空")
+        );
+        let streamless = MediaProbe {
+            duration_secs: 0.0,
+            has_video: false,
+            has_audio: false,
+        };
+        assert_eq!(
+            classify_segment_probe(&streamless, 4096),
+            SegmentProbe::Invalid("无音视频轨道")
+        );
+        let timed = MediaProbe {
+            duration_secs: 12.5,
+            has_video: true,
+            has_audio: true,
+        };
+        assert_eq!(
+            classify_segment_probe(&timed, 4096),
+            SegmentProbe::Timestamped(12.5)
+        );
+    }
+
+    #[test]
+    fn probe_json_treats_missing_duration_as_unknown() {
+        let without_duration =
+            br#"{"streams":[{"codec_type":"video"},{"codec_type":"audio"}],"format":{}}"#;
+        let probe = parse_probe_json(without_duration).expect("streams 有效即应通过");
+        assert_eq!(probe.duration_secs, 0.0);
+        assert!(probe.has_video && probe.has_audio);
+
+        let zero = br#"{"streams":[{"codec_type":"video"}],"format":{"duration":"0.000000"}}"#;
+        assert_eq!(parse_probe_json(zero).expect("零时长").duration_secs, 0.0);
+
+        let real = br#"{"streams":[{"codec_type":"audio"}],"format":{"duration":"7.5"}}"#;
+        assert_eq!(parse_probe_json(real).expect("真实时长").duration_secs, 7.5);
+    }
+
+    #[test]
+    fn unverified_output_keeps_mp4_name_and_drops_partial() {
+        let partial = PathBuf::from("/data/live/room_1/主播 第一段.mp4.partial");
+        assert_eq!(
+            unverified_output_path(&partial),
+            PathBuf::from("/data/live/room_1/主播 第一段.mp4.unverified")
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_of_segment_killed_mid_write_still_produces_output() {
+        let ffmpeg = required_ffmpeg_bin();
+        let temp = tempdir().expect("temporary directory");
+        let healthy = temp.path().join("room_segment_0001.flv");
+        generate_fixture(&ffmpeg, &healthy).await;
+        let killed = spawn_killed_flv(&ffmpeg, temp.path().join("room_segment_0002.flv")).await;
+
+        let output = merge_segments_to_mp4(&ffmpeg, &[healthy.clone(), killed.clone()])
+            .await
+            .expect("被强杀的分段只能按未知时长处理，不得毁掉整场合并");
+        let probe = probe_media(&ffmpeg, &output)
+            .await
+            .expect("probe merged output");
+        assert!(probe.has_video && probe.has_audio);
+        // 输出必须比单个健康分段更大，否则说明强杀分段被静默丢弃。
+        let healthy_size = tokio::fs::metadata(&healthy).await.expect("meta").len();
+        let killed_size = tokio::fs::metadata(&killed).await.expect("meta").len();
+        let output_size = tokio::fs::metadata(&output).await.expect("meta").len();
+        assert!(
+            output_size > healthy_size + killed_size / 2,
+            "merged output too small: {output_size} vs killed {killed_size}"
+        );
+        assert!(
+            killed_size > 1024,
+            "强杀分段应保留可用内容，实际 {killed_size} 字节"
+        );
+    }
+
+    /// 录制中途强杀 FFmpeg：留下的 FLV 分段头部 metadata 停在占位值，
+    /// 与生产上 taskkill 的场次一致。
+    async fn spawn_killed_flv(ffmpeg: &Path, output: PathBuf) -> PathBuf {
+        let mut command = Command::new(ffmpeg);
+        command
+            .args([
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=64x64:rate=25",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=1000:sample_rate=44100",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-flvflags",
+                "add_keyframe_index",
+                "-f",
+                "flv",
+            ])
+            .arg(&output)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let mut child =
+            child_lifetime::spawn(&mut command).expect("start ffmpeg for kill simulation");
+        for _ in 0..100 {
+            if tokio::fs::metadata(&output)
+                .await
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
+                > 256 * 1024
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        child.kill().await.expect("force kill ffmpeg");
+        child.wait().await.expect("reap killed child");
+        output
+    }
+
+    #[tokio::test]
+    async fn failed_validation_preserves_merged_output_for_rescue() {
+        let ffmpeg = required_ffmpeg_bin();
+        let temp = tempdir().expect("temporary directory");
+        // 无音轨的分段：合并能跑完，但输出缺音频轨道，校验必然失败。
+        let silent = temp.path().join("room_segment_0001.flv");
+        let result = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x90:rate=25",
+                "-t",
+                "1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "flv",
+            ])
+            .arg(&silent)
+            .output()
+            .await
+            .expect("generate audio-less fixture");
+        assert!(result.status.success());
+
+        let error = merge_segments_to_mp4(&ffmpeg, &[silent.clone(), silent])
+            .await
+            .expect_err("缺音轨的输出必须校验失败");
+        let message = error.to_string();
+        assert!(
+            message.contains("已保留未通过校验的合并产物") && message.contains(".mp4.unverified"),
+            "错误文案需说明保留了什么: {message}"
+        );
+        let salvage = temp.path().join("room_segment_0001.mp4.unverified");
+        assert!(
+            tokio::fs::metadata(&salvage)
+                .await
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
+                > 0,
+            "校验失败必须保留合并产物供用户抢救"
+        );
+        assert!(
+            tokio::fs::metadata(temp.path().join("room_segment_0001.mp4"))
+                .await
+                .is_err(),
+            "未通过校验的输出不得冒充成品"
         );
     }
 

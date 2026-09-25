@@ -1,5 +1,6 @@
 //! 烧录入口：弹幕/CC字幕/混合烧录与 FFmpeg 执行、素材文件定位。
 
+use crate::services::spawn_util::child_lifetime;
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -26,14 +27,14 @@ fn listing_has_named_entry(text: &str, name: &str) -> bool {
 }
 
 pub(super) async fn ffmpeg_listing_contains(ffmpeg: &Path, flag: &str, name: &str) -> bool {
-    let output = match Command::new(ffmpeg)
+    let mut command = Command::new(ffmpeg);
+    command
         .arg("-hide_banner")
         .arg(flag)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await
-    {
+        .stderr(Stdio::null());
+    child_lifetime::configure(&mut command);
+    let output = match command.output().await {
         Ok(output) => output,
         Err(_) => return false,
     };
@@ -430,7 +431,7 @@ impl SubtitleBurner {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let result = match command.spawn() {
+        let result = match child_lifetime::spawn(&mut command) {
             Ok(mut child) => {
                 // 并发读取 stderr，避免管道缓冲写满导致进程阻塞
                 let stderr = child.stderr.take();
