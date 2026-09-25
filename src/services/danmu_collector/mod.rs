@@ -491,8 +491,13 @@ impl SeenKeys {
                 }
             }
         }
-        self.order.push_back(key.clone());
-        self.set.insert(key)
+        // 只有新 key 才进淘汰队列：重复 key 不使 set.len() 增长，却会让 order 无界
+        // 追加克隆字符串——刷屏场次下队列永远不会触发淘汰，等于无界内存增长。
+        if !self.set.insert(key.clone()) {
+            return false;
+        }
+        self.order.push_back(key);
+        true
     }
 }
 
@@ -578,6 +583,39 @@ mod tests {
     use crate::services::danmu_collector::protocol::{make_packet, op};
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
+
+    #[test]
+    fn duplicate_keys_do_not_grow_the_eviction_queue() {
+        // 刷屏场次里同一条弹幕会反复到达：重复 key 不进 set，若仍追加 order，
+        // set.len() 永不触及上限、淘汰永不触发，order 便无界增长。
+        let mut seen = SeenKeys::default();
+        assert!(seen.insert("danmaku-duplicate".to_string()));
+        for _ in 0..(MAX_SEEN_EVENT_KEYS * 3) {
+            assert!(!seen.insert("danmaku-duplicate".to_string()));
+        }
+        assert_eq!(seen.set.len(), 1);
+        assert_eq!(seen.order.len(), 1);
+    }
+
+    #[test]
+    fn distinct_keys_stay_bounded_and_report_newness() {
+        let mut seen = SeenKeys::default();
+        assert!(seen.insert("first".to_string()));
+        assert!(!seen.insert("first".to_string()));
+        for index in 0..(MAX_SEEN_EVENT_KEYS * 2) {
+            seen.insert(format!("danmaku-{index}"));
+        }
+        assert!(
+            seen.set.len() <= MAX_SEEN_EVENT_KEYS,
+            "集合越界: {}",
+            seen.set.len()
+        );
+        assert!(
+            seen.order.len() <= MAX_SEEN_EVENT_KEYS,
+            "淘汰队列越界: {}",
+            seen.order.len()
+        );
+    }
 
     async fn local_server() -> (TcpListener, String) {
         let listener = TcpListener::bind("127.0.0.1:0")
