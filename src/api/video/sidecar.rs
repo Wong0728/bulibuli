@@ -237,7 +237,15 @@ async fn resolve_sidecar_dir(
                 let path = std::path::Path::new(fp);
                 if let Some(parent) = path.parent() {
                     if parent.exists() {
-                        return Some(parent.to_path_buf());
+                        // 与上面显式选择来源的分支同一道纵深防御：DB 里的 file_path 可能被
+                        // 污染，缺这一步就等于让该分支绕过下载根目录约束写盘。
+                        let download_dir = media.download_manager.download_dir(None).await;
+                        if ensure_existing_within_root(&download_dir, parent)
+                            .await
+                            .is_ok()
+                        {
+                            return Some(parent.to_path_buf());
+                        }
                     }
                 }
             }
