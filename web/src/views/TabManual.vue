@@ -99,7 +99,12 @@ function normalizeVideo(item: any): ManualVideoItem {
   };
 }
 
+// 查询代际守卫：切换模式/博主、重新查询都会使在途请求作废，
+// 迟到的旧响应不得污染新上下文下的 videoList / 分页游标（对齐 stores/history.ts 的 requestId 守卫）。
+let querySeq = 0;
+
 function clearResults() {
+  querySeq++;
   videoList.value = [];
   hasMore.value = false;
   totalCount.value = 0;
@@ -125,6 +130,8 @@ async function loadSeries() {
 }
 
 async function onUidChange() {
+  // 博主变了，在途的旧查询结果一律作废
+  querySeq++;
   if (mode.value === 'series') await loadSeries();
   else {
     selectedSeriesId.value = null;
@@ -142,6 +149,7 @@ async function queryVideos() {
   if (querying.value) return;
   if (!selectedUid.value) { toast.warn('请先选择博主'); return; }
   if (mode.value === 'series' && !selectedSeriesId.value) { toast.warn('请先选择合集'); return; }
+  const seq = ++querySeq;
   querying.value = true;
   resultState.value = 'loading';
   resultMessage.value = '正在请求B站...';
@@ -161,6 +169,7 @@ async function queryVideos() {
         limit,
         offset: 0,
       })) || { videos: [] };
+      if (seq !== querySeq) return;
       const videos = r.videos || [];
       videoList.value = videos.map(normalizeVideo);
       queryOffset.value = Number.isFinite(Number(r.offset)) ? Number(r.offset) : 0;
@@ -169,25 +178,31 @@ async function queryVideos() {
     } else {
       // 走 /api/video/get-videos：后端只支持按投稿分页（limit/offset）
       const r: any = await videoApi.getVideos(selectedUid.value, { limit, offset: 0 });
+      if (seq !== querySeq) return;
       const videos = r?.videos || [];
       videoList.value = videos.map(normalizeVideo);
       queryOffset.value = Number.isFinite(Number(r?.offset)) ? Number(r.offset) : 0;
       hasMore.value = r?.has_more === true || (r?.has_more !== false && videos.length >= limit);
       totalCount.value = Number(r?.total ?? videoList.value.length);
     }
+    if (seq !== querySeq) return;
     resultState.value = videoList.value.length ? 'success' : 'empty';
     if (!videoList.value.length) resultMessage.value = '暂无视频';
   } catch (e: any) {
+    if (seq !== querySeq) return;
     resultState.value = 'error';
     resultMessage.value = e?.message || '查询失败';
     toast.error(e?.message || '查询失败');
   } finally {
+    // queryVideos 由 querying 锁串行化：即使本请求已被作废，也不存在并发的新查询，
+    // 释放锁是安全的（否则模式切换后按钮会永远停在"查询中"）。
     querying.value = false;
   }
 }
 
 async function loadMore() {
   if (!hasMore.value || loadingMore.value) return;
+  const seq = querySeq;
   loadingMore.value = true;
   try {
     // 对齐老框架 loadMoreManualQuery：nextOffset = 当前游标 + 当次 limit，成功后回写后端 data.offset。
@@ -199,6 +214,7 @@ async function loadMore() {
         limit,
         offset: nextOffset,
       })) || { videos: [] };
+      if (seq !== querySeq) return;
       const videos = r.videos || [];
       videoList.value.push(...videos.map(normalizeVideo));
       queryOffset.value = Number.isFinite(Number(r.offset)) ? Number(r.offset) : nextOffset;
@@ -206,6 +222,7 @@ async function loadMore() {
       totalCount.value = Number(r.total ?? videoList.value.length);
     } else {
       const r: any = await videoApi.getVideos(selectedUid.value!, { limit, offset: nextOffset });
+      if (seq !== querySeq) return;
       const videos = r?.videos || [];
       videoList.value.push(...videos.map(normalizeVideo));
       queryOffset.value = Number.isFinite(Number(r?.offset)) ? Number(r.offset) : nextOffset;
@@ -213,6 +230,7 @@ async function loadMore() {
       totalCount.value = Number(r?.total ?? videoList.value.length);
     }
   } catch (e: any) {
+    if (seq !== querySeq) return;
     toast.error(e?.message || '加载更多失败');
   } finally {
     loadingMore.value = false;
