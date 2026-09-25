@@ -537,9 +537,16 @@ impl MonitorService {
         if deferred {
             next = active_window::next_window_start(next, &windows);
         }
-        let mut model: blogger::ActiveModel = blogger.clone().into();
-        model.next_check = Set(Some(next));
-        model.update(&self.db).await?;
+        // 只推进 next_check 一列：轮初快照在扫描期间可能已经被用户改过
+        // （停止监控、改间隔、改活跃时段、改配置版本），整行回写会把这些改动
+        // 连同 version 一起退回旧值，用户的手动改动被静默吃掉。
+        blogger::ActiveModel {
+            id: Set(blogger.id),
+            next_check: Set(Some(next)),
+            ..Default::default()
+        }
+        .update(&self.db)
+        .await?;
         let message = if deferred {
             format!(
                 "博主检查完成，已顺延至活跃时段，下次检查时间: {}",
@@ -601,9 +608,14 @@ impl MonitorService {
         windows: &[(u32, u32)],
     ) -> Result<()> {
         let next = active_window::next_window_start(Local::now(), windows);
-        let mut model: blogger::ActiveModel = blogger.clone().into();
-        model.next_check = Set(Some(next));
-        model.update(&self.db).await?;
+        // 同 schedule_next：顺延只推进 next_check，不整行回写轮初快照
+        blogger::ActiveModel {
+            id: Set(blogger.id),
+            next_check: Set(Some(next)),
+            ..Default::default()
+        }
+        .update(&self.db)
+        .await?;
         self.add_log(
             Some(&blogger.uid),
             None,

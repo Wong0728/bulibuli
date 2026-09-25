@@ -191,15 +191,25 @@ impl MonitorService {
                     _ => continue,
                 }
                 if !scanned_bvids.contains(&h.bvid) {
-                    let mut model: history::ActiveModel = h.clone().into();
-                    model.state = Set(Some("removed".to_string()));
-                    model.pay_note = Set(Some("state_deleted".to_string()));
+                    // 与 view 接口的 state=-100（`paywall::gate_download` 落的
+                    // `state_deleted`）区分开：投稿列表缺席是弱信号，分页空洞、风控、
+                    // 需登录都可能造成缺席，写成 state_deleted 等于给用户一个
+                    // 归因错误的解释。这里只落弱信号自己的标记。
+                    let model = history::ActiveModel {
+                        id: Set(h.id),
+                        state: Set(Some(TAKEDOWN_INFERRED_STATE.to_owned())),
+                        pay_note: Set(Some(TAKEDOWN_INFERRED_NOTE.to_owned())),
+                        ..Default::default()
+                    };
                     model.update(&self.db).await?;
                     removed_count += 1;
                     self.add_log(
                         Some(&uid),
                         Some(&h.bvid),
-                        &format!("视频已下架: {}", h.title.as_deref().unwrap_or(&h.bvid)),
+                        &format!(
+                            "视频未出现在本轮投稿列表中，已标记为下架（未能从视频接口确认）: {}",
+                            h.title.as_deref().unwrap_or(&h.bvid)
+                        ),
                         "warning",
                     )
                     .await;
@@ -210,7 +220,10 @@ impl MonitorService {
             self.add_log(
                 Some(&uid),
                 None,
-                &format!("检测到 {} 个视频被下架", removed_count),
+                &format!(
+                    "检测到 {} 个视频不在本轮投稿列表中，已按疑似下架处理",
+                    removed_count
+                ),
                 "warning",
             )
             .await;
@@ -374,7 +387,12 @@ impl MonitorService {
         let fresh_sign = Some(info.sign.clone());
         let fresh_level = info.level as i32;
 
-        let mut model: blogger::ActiveModel = current.clone().into();
+        // 只写资料列：`current` 是本轮扫描开始时的快照，整行回写会把扫描期间
+        // 用户改掉的监控开关/间隔/活跃时段/version 退回旧值。
+        let mut model = blogger::ActiveModel {
+            id: Set(current.id),
+            ..Default::default()
+        };
         let mut changed = false;
 
         // 改名检测：fresh_name 与当前 name 不同，且 last_seen_name 还没记录过
@@ -423,6 +441,14 @@ impl MonitorService {
     }
 }
 
+/// 「不在本轮投稿列表」这条弱信号落库用的终态与解释。
+///
+/// `state` 仍是 `removed`（前端只认这个终态），但 `pay_note` 与 view 接口
+/// `state=-100` 确认的 `state_deleted`（见 `paywall::gate_download`）区分开：
+/// 分页空洞、风控、需登录都会造成投稿列表缺席，混成一个记号就没法回溯归因。
+const TAKEDOWN_INFERRED_STATE: &str = "removed";
+const TAKEDOWN_INFERRED_NOTE: &str = "absent_from_submission_list";
+
 /// 下架比对窗口的下界：本轮实际扫描到的最早发布时间。
 ///
 /// B 站投稿列表模型带 `#[serde(default)]`，接口不下发 `created` 时静默为 0。若把它当作
@@ -434,7 +460,21 @@ fn oldest_scanned_timestamp(created_values: impl Iterator<Item = i64>) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::oldest_scanned_timestamp;
+    use super::{oldest_scanned_timestamp, TAKEDOWN_INFERRED_NOTE, TAKEDOWN_INFERRED_STATE};
+
+    #[test]
+    fn inferred_takedown_keeps_its_own_explanation() {
+        // view 接口 state=-100 的确认下架由 paywall 落 state_deleted；
+        // 投稿列表缺席是弱信号，复用同一个记号会让用户看到归因错误的解释。
+        let confirmed = crate::services::monitor::pay_reason_to_state("state_deleted")
+            .expect("确认下架必须有映射");
+        assert_eq!(confirmed, ("removed", "state_deleted"));
+        assert_eq!(
+            TAKEDOWN_INFERRED_STATE, confirmed.0,
+            "终态沿用 removed，前端才能继续显示下架分组"
+        );
+        assert_ne!(TAKEDOWN_INFERRED_NOTE, confirmed.1);
+    }
 
     #[test]
     fn oldest_scanned_timestamp_ignores_missing_created() {

@@ -250,9 +250,13 @@ impl MonitorService {
             match self.bili_api.get_user_info(uid_i64, &cookies, true).await {
                 Ok(info) if info.fans > 0 => {
                     let uid = b.uid.clone();
-                    let mut model: blogger::ActiveModel = b.into();
-                    model.fans = Set(Some(info.fans));
-                    model.updated_at = Set(Some(Local::now()));
+                    // 只写 fans：抓取期间用户可能改过该博主的配置，整行回写会覆盖掉
+                    let model = blogger::ActiveModel {
+                        id: Set(b.id),
+                        fans: Set(Some(info.fans)),
+                        updated_at: Set(Some(Local::now())),
+                        ..Default::default()
+                    };
                     if let Err(e) = model.update(&self.db).await {
                         error!("补齐博主 {uid} 粉丝数失败: {e}");
                     } else {

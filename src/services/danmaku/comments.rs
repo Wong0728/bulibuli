@@ -4,7 +4,7 @@ use crate::services::wbi;
 use anyhow::{anyhow, Result};
 use futures::{stream, StreamExt};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -340,6 +340,9 @@ impl DanmakuService {
         remaining_budget: Arc<AtomicUsize>,
     ) -> Result<Vec<Value>> {
         let mut all = Vec::new();
+        // 翻页期间回复列表会漂移（新回复插入、排序重排），同一 rpid 可能在相邻两页
+        // 都出现：不按 rpid 去重的话重复条目会直接进结果，还白占二级回复预算。
+        let mut seen: HashSet<i64> = HashSet::new();
         let mut pn = 1u32;
         'pages: loop {
             let mut params = HashMap::new();
@@ -367,7 +370,12 @@ impl DanmakuService {
             if replies.is_empty() {
                 break;
             }
+            let mut added = 0usize;
             for r in &replies {
+                let parsed = self.parse_reply(r);
+                if !accept_new_reply(&mut seen, &parsed) {
+                    continue;
+                }
                 if remaining_budget
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
                         remaining.checked_sub(1)
@@ -377,7 +385,13 @@ impl DanmakuService {
                     warn!("[评论] 单任务二级回复达到 5000 条安全上限");
                     break 'pages;
                 }
-                all.push(self.parse_reply(r));
+                all.push(parsed);
+                added += 1;
+            }
+            if added == 0 {
+                // 整页都是已见过的 rpid：分页已停滞，继续翻只会重复消耗请求量
+                warn!("[评论] 回复翻页返回整页重复条目，停止展开 (root={root_rpid}, pn={pn})");
+                break;
             }
             let total = data["data"]["page"]["count"].as_i64().unwrap_or(0);
             if replies.len() < 20 || (all.len() as i64) >= total {
@@ -454,5 +468,44 @@ impl DanmakuService {
                 Some(c)
             })
             .collect()
+    }
+}
+
+/// 判断一条已解析回复是否首次出现，并把它的 rpid 记进 `seen`。
+///
+/// rpid 缺失或非法（0/负数/非数字）时无法判重，条目原样保留——宁可重复也不漏。
+fn accept_new_reply(seen: &mut HashSet<i64>, parsed: &Value) -> bool {
+    match parsed.get("rpid").and_then(Value::as_i64) {
+        Some(rpid) if rpid > 0 => seen.insert(rpid),
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::accept_new_reply;
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    #[test]
+    fn accept_new_reply_drops_repeated_rpid_across_pages() {
+        let mut seen = HashSet::new();
+        assert!(accept_new_reply(&mut seen, &json!({"rpid": 11})));
+        assert!(accept_new_reply(&mut seen, &json!({"rpid": 12})));
+        assert!(
+            !accept_new_reply(&mut seen, &json!({"rpid": 11})),
+            "翻页重叠回来的同一条回复不能重复入结果"
+        );
+        assert!(accept_new_reply(&mut seen, &json!({"rpid": 13})));
+    }
+
+    #[test]
+    fn accept_new_reply_keeps_entries_without_usable_rpid() {
+        let mut seen = HashSet::new();
+        assert!(accept_new_reply(&mut seen, &json!({})));
+        assert!(accept_new_reply(&mut seen, &json!({"rpid": null})));
+        assert!(accept_new_reply(&mut seen, &json!({"rpid": "abc"})));
+        assert!(accept_new_reply(&mut seen, &json!({"rpid": 0})));
+        assert!(seen.is_empty(), "无效 rpid 不应污染去重集合");
     }
 }
