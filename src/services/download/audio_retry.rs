@@ -95,6 +95,26 @@ impl DownloadManager {
             }
             Err(e) => {
                 warn!("[音频降级] {bvid} 纯视频 remux 失败: {e}");
+                // 持续性失败（输入损坏 / ffmpeg 缺失 / 路径不可写）若不落终态，
+                // 任务保持 failed && attempts>=3，每轮 check_audio_retry 都会
+                // 再拉起一次 remux，30 秒一轮无限循环。与成功路径同样收敛到
+                // cancelled 终态，错误留给任务行与日志。
+                let audio_query = download_task::Entity::find()
+                    .filter(download_task::Column::Bvid.eq(bvid))
+                    .filter(download_task::Column::TaskType.eq("audio"))
+                    .filter(download_task::Column::Cid.eq(cid));
+                if let Ok(Some(audio_task)) = audio_query.one(&self.db).await {
+                    let mut model: download_task::ActiveModel = audio_task.into();
+                    model.status = Set(DownloadStatus::Cancelled.to_string());
+                    model.attempts = Set(4);
+                    model.next_retry_at = Set(None);
+                    model.error = Set(Some(format!("纯视频降级失败: {e}")));
+                    if let Err(error) = model.update(&self.db).await {
+                        warn!("[音频自动重试] 持久化降级失败状态出错: {error}");
+                    }
+                }
+                self.log_bvid(bvid, None, &format!("音频重试耗尽且纯视频降级失败：{e}"), "error")
+                    .await;
             }
         }
     }
