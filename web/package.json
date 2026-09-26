@@ -22,7 +22,7 @@
     "@playwright/test": "^1.62.1",
     "@types/node": "^22.5.0",
     "@vitejs/plugin-vue": "^5.1.0",
-    "typescript": "^5.5.0",
+    "typescript": "^7.0.2",
     "vite": "^6.4.3",
     "vue-tsc": "^2.1.0"
   }
